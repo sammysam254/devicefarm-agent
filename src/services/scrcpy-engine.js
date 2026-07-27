@@ -1,6 +1,6 @@
 'use strict';
 
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execFile } = require('child_process');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
@@ -41,7 +41,7 @@ class ScrcpyEngine extends EventEmitter {
 
     try {
       // 1. Push scrcpy-server.jar to device /data/local/tmp
-      await this._execAdb(['push', `"${SCRCPY_JAR_PATH}"`, '/data/local/tmp/scrcpy-server.jar']);
+      await this._execAdb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
 
       // 2. Setup socket port forwards
       await this._execAdb(['forward', `tcp:${videoPort}`, 'localabstract:scrcpy']);
@@ -295,7 +295,7 @@ class ScrcpyEngine extends EventEmitter {
 
   _execAdb(args) {
     return new Promise((resolve, reject) => {
-      exec(`"${ADB_BIN}" -s ${this.serial} ${args.join(' ')}`, (err, stdout) => {
+      execFile(ADB_BIN, ['-s', this.serial, ...args], (err, stdout) => {
         if (err) reject(err);
         else resolve(stdout);
       });
