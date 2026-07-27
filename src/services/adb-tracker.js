@@ -82,9 +82,6 @@ async function handleDeviceAdd(device) {
       deviceModel = properties['ro.product.model'] || 'SM-A042F';
       deviceBrand = properties['ro.product.brand'] || 'samsung';
       logger.info(`Device properties for ${serial}`, { deviceModel, deviceBrand });
-      // ----- 1b. Stealth Hardening -----
-      const ADB_BIN = process.platform === 'win32' ? 'C:\\platform-tools\\adb.exe' : 'adb';
-      exec(`"${ADB_BIN}" -s ${serial} shell settings put global development_settings_enabled 0`, () => {});
     } catch (err) {
       logger.warn(`Could not read properties for ${serial}`, { error: err.message });
     }
