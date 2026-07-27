@@ -898,14 +898,14 @@ async function startStreamServer(serial, port) {
 </body>
 </html>`;
 
-    // ── Cached Payment Status (re-check every 60s instead of every frame) ──
+    // ── Cached Payment Status (smart dynamic TTL: 2s when unpaid, 15s when paid) ──
     let cachedRentalStatus = null;
     let lastPaymentCheckTime = 0;
-    const PAYMENT_CACHE_MS = 60000;
 
-    async function getCachedRentalStatus() {
+    async function getCachedRentalStatus(forceRefresh = false) {
       const now = Date.now();
-      if (cachedRentalStatus !== null && (now - lastPaymentCheckTime) < PAYMENT_CACHE_MS) {
+      const ttl = (cachedRentalStatus && cachedRentalStatus.isPaid) ? 15000 : 2000;
+      if (!forceRefresh && cachedRentalStatus !== null && (now - lastPaymentCheckTime) < ttl) {
         return cachedRentalStatus;
       }
       try {
@@ -931,9 +931,11 @@ async function startStreamServer(serial, port) {
         useScrcpy = true;
         logger.info(`[STEALTH SCRCPY] Active for ${serial}`);
       } catch (err) {
-        logger.warn(`[STEALTH SCRCPY] Scrcpy fallback to PNG capture engine for ${serial}: ${err.message}`);
-        captureEngine.start();
+        logger.warn(`[STEALTH SCRCPY] Scrcpy input fallback for ${serial}: ${err.message}`);
       }
+
+      // Always start captureEngine to provide image frames for HTML canvas rendering
+      captureEngine.start();
 
       const server = http.createServer(async (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
@@ -951,8 +953,9 @@ async function startStreamServer(serial, port) {
         const urlObj = new URL(req.url, `http://localhost:${port}`);
         const pathname = urlObj.pathname;
 
-        // Cached rental payment check (refreshed every 60s, not per-frame)
-        const rentalStatus = await getCachedRentalStatus();
+        // Cached rental payment check (smart TTL: 2s when unpaid, 15s when paid; force refresh on page visit)
+        const isMainPage = (pathname === '/' || pathname === '/index.html');
+        const rentalStatus = await getCachedRentalStatus(isMainPage);
 
         if (!rentalStatus.isPaid) {
           if (pathname === '/screen.jpg' || pathname === '/screen.png' || pathname === '/control' || pathname === '/upload') {
@@ -1090,12 +1093,8 @@ async function startStreamServer(serial, port) {
 
         logger.info(`WebSocket client connected to real-time stream for ${serial}`);
 
-        // Add to active engine for server-push frame delivery
-        if (useScrcpy) {
-          scrcpyEngine.addClient(ws);
-        } else {
-          captureEngine.addClient(ws);
-        }
+        // Add to capture engine for server-push image frame delivery to canvas
+        captureEngine.addClient(ws);
 
         // Periodic payment re-check (every 60s)
         const paymentInterval = setInterval(async () => {

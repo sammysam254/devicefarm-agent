@@ -12,6 +12,7 @@ const rentalPaymentService = require('./rental-payment-service');
 const bindingService = require('./binding-service');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 
 /**
  * Load config for port range.

@@ -101,7 +101,8 @@ async function checkDeviceRentalStatus(serialNumber) {
         const record = records[0];
         const expiresAt = record.expires_at ? new Date(record.expires_at) : null;
         const now = new Date();
-        const isActiveStatus = record.status === 'active' || record.status === 'paid';
+        const statusStr = (record.status || '').toLowerCase().trim();
+        const isActiveStatus = statusStr === 'active' || statusStr === 'paid';
         const isNotExpired = expiresAt ? expiresAt > now : true;
 
         const isPaid = isActiveStatus && isNotExpired;

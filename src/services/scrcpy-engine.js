@@ -55,7 +55,7 @@ class ScrcpyEngine extends EventEmitter {
         'app_process',
         '/',
         'com.genymobile.scrcpy.Server',
-        '2.1',
+        '2.4',
         'tunnel_forward=true',
         'max_size=1080',
         'video_bit_rate=4000000',
@@ -67,7 +67,6 @@ class ScrcpyEngine extends EventEmitter {
         'stay_awake=true',
         'power_off_on_close=false',
         'clipboard_autosync=false',
-        'downscale_on_error=true',
         'cleanup=true',
         'power_on=true',
         'audio=false'
@@ -77,6 +76,13 @@ class ScrcpyEngine extends EventEmitter {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
       });
+
+      if (this.serverProc.stderr) {
+        this.serverProc.stderr.on('data', (data) => {
+          const msg = data.toString().trim();
+          if (msg) logger.warn(`[ScrcpyEngine ${this.serial} stderr] ${msg}`);
+        });
+      }
 
       this.serverProc.on('error', (err) => {
         logger.error(`[ScrcpyEngine ${this.serial}] Server process error:`, err.message);
