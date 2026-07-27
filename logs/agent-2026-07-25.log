@@ -1,0 +1,51 @@
+{"level":"info","message":"[Rental Override] Device TEST_SERIAL_123 set to isPaid=true","service":"device-agent","timestamp":"2026-07-25 15:12:30.930"}
+{"level":"info","message":"[Binding Service] Generated new 8-digit machine binding code: 48209603","service":"device-agent","timestamp":"2026-07-25 15:54:58.529"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 15:54:59.846"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 15:58:43.182"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:01:37.584"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:02:31.075"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:03:46.314"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:04:53.548"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:05:18.868"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:07:25.367"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:07:44.113"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:10:48.077"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:12:47.720"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:13:54.355"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:15:15.620"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:17:34.303"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:19:03.393"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:21:18.110"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:24:46.011"}
+{"level":"warn","message":"[Binding Sync Warning] Failed to sync binding code to Supabase: Request failed with status code 404","service":"device-agent","timestamp":"2026-07-25 16:29:54.025"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 88643591 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 16:34:53.867"}
+{"level":"error","message":"[Supabase Rental] Failed to upsert device rental for R8YWA0A09JW:","service":"device-agent","timestamp":"2026-07-25 16:35:11.936"}
+{"level":"error","message":"[Supabase Rental] Failed to upsert device rental for R8YWA0A09JW:","service":"device-agent","timestamp":"2026-07-25 16:38:07.439"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 88643591 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 16:39:52.820"}
+{"level":"info","message":"[Supabase Rental] Device R8YWA0A09JW rental status updated to unpaid","service":"device-agent","timestamp":"2026-07-25 16:40:50.880"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 61162993 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 16:41:33.820"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 61162993 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 16:43:28.834"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 61162993 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 16:49:18.996"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 61162993 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 16:59:09.717"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 78405745 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:01:31.398"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 16934613 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:03:44.824"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 53361175 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:09:53.675"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 53361175 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:16:53.955"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 80668990 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:19:21.896"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 53707739 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:25:24.026"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 11321236 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:30:30.658"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 96035035 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:32:54.445"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 52900366 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:40:59.844"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 28435575 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:43:03.211"}
+{"brand":"samsung","level":"info","message":"Process manager: registered device R8YWA0A09JW","model":"SM-A042F","port":8100,"rentalPaid":false,"service":"device-agent","timestamp":"2026-07-25 17:44:04.419"}
+{"level":"info","message":"Dashboard server running at http://localhost:7400","service":"device-agent","timestamp":"2026-07-25 17:44:04.441"}
+{"level":"info","message":"[Supabase Rental] Device R8YWA0A09JW info updated cleanly","service":"device-agent","timestamp":"2026-07-25 17:46:55.030"}
+{"brand":"samsung","level":"info","message":"Process manager: registered device R8YWA0A09JW","model":"SM-A042F","port":8100,"rentalPaid":false,"service":"device-agent","timestamp":"2026-07-25 17:47:29.158"}
+{"level":"info","message":"Dashboard server running at http://localhost:7400","service":"device-agent","timestamp":"2026-07-25 17:47:29.180"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 90716715 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:48:49.255"}
+{"level":"info","message":"[Rental Override] Device R8YWA0A09JW set to isPaid=false","service":"device-agent","timestamp":"2026-07-25 17:48:59.107"}
+{"level":"info","message":"[Supabase Rental] Device R8YWA0A09JW info updated cleanly","service":"device-agent","timestamp":"2026-07-25 17:51:15.090"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 90716715 and 1 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 17:51:15.093"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 35593439 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 18:06:38.762"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 21554134 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 18:08:51.935"}
+{"level":"info","message":"[Binding Sync] Synced 8-digit code 77954533 and 0 devices to Supabase.","service":"device-agent","timestamp":"2026-07-25 18:10:48.853"}

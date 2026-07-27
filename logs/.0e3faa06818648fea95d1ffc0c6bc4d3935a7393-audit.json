@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "C:\\DEVICEFARM\\logs\\.0e3faa06818648fea95d1ffc0c6bc4d3935a7393-audit.json",
+    "files": [
+        {
+            "date": 1784929780257,
+            "name": "C:\\DEVICEFARM\\logs\\agent-2026-07-25.log",
+            "hash": "21186b3a2228e31b0d3e215e5ab56953810c061cde5960f5481de4c8598a9242"
+        }
+    ],
+    "hashType": "sha256"
+}

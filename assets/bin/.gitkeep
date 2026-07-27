@@ -1,0 +1,2 @@
+Place platform-specific binaries here (e.g., cloudflared.exe, adb.exe).
+These will be bundled into the packaged application via electron-builder extraResources.

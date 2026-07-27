@@ -1,0 +1,18 @@
+{
+  "centralApiUrl": "https://your-central-platform.com/api/devices/register",
+  "agentSecretKey": "YOUR_SECRET_API_KEY",
+  "heartbeatIntervalMs": 30000,
+  "portRangeStart": 8100,
+  "portRangeEnd": 8900,
+  "wsScrcpyPath": "",
+  "cloudflaredPath": "cloudflared",
+  "adbPath": "C:\\platform-tools\\adb.exe",
+  "supabaseUrl": "https://oazbcgshvwtngaknrtch.supabase.co",
+  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hemJjZ3Nodnd0bmdha25ydGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5NzI4MDUsImV4cCI6MjEwMDU0ODgwNX0.HLKBziJAscEdUANmPObshfRBRvf3puLayYFmLQHf4Jk",
+  "supabasePaymentPortalUrl": "https://devicepay.netlify.app",
+  "rentalUserId": "RENTAL_USER_DEFAULT",
+  "monthlyFeePerDeviceUsd": 30,
+  "defaultPaymentStatus": "unpaid",
+  "allowLocalStandalone": false,
+  "machineBindingCode": "77954533"
+}
