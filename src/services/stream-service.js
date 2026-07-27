@@ -165,23 +165,44 @@ const ADB_BIN = resolveAdbBin();
 /** Active Stream Servers map */
 const activeServers = new Map();
 
+/** Persistent interactive input shells per device serial for sub-millisecond touch dispatch */
+const inputShells = new Map();
+
+function getOrCreateInputShell(serial) {
+  if (inputShells.has(serial)) {
+    const proc = inputShells.get(serial);
+    if (proc && proc.stdin && !proc.stdin.destroyed) return proc;
+  }
+  const proc = spawn(ADB_BIN, ['-s', serial, 'shell'], {
+    windowsHide: true,
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  proc.on('error', () => inputShells.delete(serial));
+  proc.on('close', () => inputShells.delete(serial));
+  inputShells.set(serial, proc);
+  return proc;
+}
+
+function sendSubMsInput(serial, cmd) {
+  try {
+    const sh = getOrCreateInputShell(serial);
+    sh.stdin.write(cmd + '\n');
+  } catch (_) {
+    exec(`"${ADB_BIN}" -s ${serial} shell ${cmd}`);
+  }
+}
+
 /**
  * Real-time Frame Capture Engine.
  * Continuously captures device screen via `adb exec-out screencap -p` (device-side PNG encoding)
  * and broadcasts frames to all connected WebSocket clients via server-push.
- *
- * Key performance features:
- * - Zero JavaScript image encoding (device handles PNG compression)
- * - Server-push eliminates request-response round-trip latency
- * - Adaptive FPS: full speed when clients connected, idle when none
- * - Backpressure handling: skips frames for slow clients
- * - Double-buffer: latest frame cached for instant delivery on connect
  */
 class FrameCaptureEngine {
   constructor(serial) {
     this.serial = serial;
     this.latestFrame = null;
     this.isRunning = false;
+    this.isCapturing = false;
     this.wsClients = new Set();
     this._loopTimer = null;
   }
@@ -241,11 +262,12 @@ class FrameCaptureEngine {
 
     // Adaptive: slow poll when no clients connected to save resources
     if (this.wsClients.size === 0) {
-      this._loopTimer = setTimeout(() => this._runLoop(), 500);
+      this._loopTimer = setTimeout(() => this._runLoop(), 300);
       return;
     }
 
-    const startTime = Date.now();
+    if (this.isCapturing) return;
+    this.isCapturing = true;
 
     const proc = spawn(ADB_BIN, ['-s', this.serial, 'exec-out', 'screencap', '-p'], {
       windowsHide: true,
@@ -256,22 +278,21 @@ class FrameCaptureEngine {
     proc.stdout.on('data', c => chunks.push(c));
 
     proc.on('close', (code) => {
+      this.isCapturing = false;
       if (code === 0 && chunks.length > 0) {
         this.latestFrame = Buffer.concat(chunks);
         this._broadcast(this.latestFrame);
       }
 
-      // Target ~30 FPS, adapt based on actual capture time
-      const elapsed = Date.now() - startTime;
-      const delay = Math.max(1, 33 - elapsed);
       if (this.isRunning) {
-        this._loopTimer = setTimeout(() => this._runLoop(), delay);
+        setImmediate(() => this._runLoop());
       }
     });
 
     proc.on('error', () => {
+      this.isCapturing = false;
       if (this.isRunning) {
-        this._loopTimer = setTimeout(() => this._runLoop(), 100);
+        this._loopTimer = setTimeout(() => this._runLoop(), 50);
       }
     });
   }
@@ -1027,38 +1048,37 @@ async function startStreamServer(serial, port) {
           if (type === 'tap') {
             const x = parseFloat(urlObj.searchParams.get('x'));
             const y = parseFloat(urlObj.searchParams.get('y'));
-            if (useScrcpy) {
-              scrcpyEngine.sendTouchEvent(0, x, y, 1080, 2400);
-              setTimeout(() => scrcpyEngine.sendTouchEvent(1, x, y, 1080, 2400), 50);
+            const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, x, y, 1080, 2400);
+            if (sent) {
+              setTimeout(() => scrcpyEngine.sendTouchEvent(1, x, y, 1080, 2400), 30);
             } else {
-              sendSubMsInput(`input tap ${x} ${y}`);
+              sendSubMsInput(serial, `input tap ${Math.round(x)} ${Math.round(y)}`);
             }
           } else if (type === 'swipe') {
             const x1 = parseFloat(urlObj.searchParams.get('x1'));
             const y1 = parseFloat(urlObj.searchParams.get('y1'));
             const x2 = parseFloat(urlObj.searchParams.get('x2'));
             const y2 = parseFloat(urlObj.searchParams.get('y2'));
-            if (useScrcpy) {
-              scrcpyEngine.sendTouchEvent(0, x1, y1, 1080, 2400);
-              setTimeout(() => scrcpyEngine.sendTouchEvent(2, x2, y2, 1080, 2400), 50);
-              setTimeout(() => scrcpyEngine.sendTouchEvent(1, x2, y2, 1080, 2400), 100);
+            const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, x1, y1, 1080, 2400);
+            if (sent) {
+              setTimeout(() => scrcpyEngine.sendTouchEvent(2, x2, y2, 1080, 2400), 30);
+              setTimeout(() => scrcpyEngine.sendTouchEvent(1, x2, y2, 1080, 2400), 80);
             } else {
-              sendSubMsInput(`input swipe ${x1} ${y1} ${x2} ${y2} 100`);
+              sendSubMsInput(serial, `input swipe ${Math.round(x1)} ${Math.round(y1)} ${Math.round(x2)} ${Math.round(y2)} 100`);
             }
           } else if (type === 'key' || type === 'code') {
             const code = parseInt(urlObj.searchParams.get('code'), 10);
-            if (useScrcpy) {
-              scrcpyEngine.sendKeycode(0, code);
+            const sent = useScrcpy && scrcpyEngine.sendKeycode(0, code);
+            if (sent) {
               setTimeout(() => scrcpyEngine.sendKeycode(1, code), 20);
             } else {
-              sendSubMsInput(`input keyevent ${code}`);
+              sendSubMsInput(serial, `input keyevent ${code}`);
             }
           } else if (type === 'text') {
             const text = urlObj.searchParams.get('text');
-            if (useScrcpy) {
-              scrcpyEngine.sendText(text);
-            } else {
-              sendSubMsInput(`input text "${text.replace(/"/g, '\\"')}"`);
+            const sent = useScrcpy && scrcpyEngine.sendText(text);
+            if (!sent) {
+              sendSubMsInput(serial, `input text "${text.replace(/"/g, '\\"')}"`);
             }
           } else if (type === 'reboot') {
             exec(`"${ADB_BIN}" -s ${serial} reboot`);
@@ -1109,37 +1129,40 @@ async function startStreamServer(serial, port) {
         ws.on('message', (msg) => {
           try {
             const data = JSON.parse(msg.toString());
+            const width = data.width || 1080;
+            const height = data.height || 2400;
+
             if (data.type === 'touch') {
-              if (useScrcpy) {
-                scrcpyEngine.sendTouchEvent(data.action, data.x, data.y, data.width || 1080, data.height || 2400);
+              const sent = useScrcpy && scrcpyEngine.sendTouchEvent(data.action, data.x, data.y, width, height);
+              if (!sent && (data.action === 0 || data.action === 1)) {
+                sendSubMsInput(serial, `input tap ${Math.round(data.x)} ${Math.round(data.y)}`);
               }
             } else if (data.type === 'tap') {
-              if (useScrcpy) {
-                scrcpyEngine.sendTouchEvent(0, data.x, data.y, 1080, 2400);
-                setTimeout(() => scrcpyEngine.sendTouchEvent(1, data.x, data.y, 1080, 2400), 50);
+              const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, data.x, data.y, width, height);
+              if (sent) {
+                setTimeout(() => scrcpyEngine.sendTouchEvent(1, data.x, data.y, width, height), 30);
               } else {
-                sendSubMsInput(`input tap ${data.x} ${data.y}`);
+                sendSubMsInput(serial, `input tap ${Math.round(data.x)} ${Math.round(data.y)}`);
               }
             } else if (data.type === 'swipe') {
-              if (useScrcpy) {
-                scrcpyEngine.sendTouchEvent(0, data.x1, data.y1, 1080, 2400);
-                setTimeout(() => scrcpyEngine.sendTouchEvent(2, data.x2, data.y2, 1080, 2400), 50);
-                setTimeout(() => scrcpyEngine.sendTouchEvent(1, data.x2, data.y2, 1080, 2400), 100);
+              const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, data.x1, data.y1, width, height);
+              if (sent) {
+                setTimeout(() => scrcpyEngine.sendTouchEvent(2, data.x2, data.y2, width, height), 30);
+                setTimeout(() => scrcpyEngine.sendTouchEvent(1, data.x2, data.y2, width, height), 80);
               } else {
-                sendSubMsInput(`input swipe ${data.x1} ${data.y1} ${data.x2} ${data.y2} ${data.duration || 100}`);
+                sendSubMsInput(serial, `input swipe ${Math.round(data.x1)} ${Math.round(data.y1)} ${Math.round(data.x2)} ${Math.round(data.y2)} ${data.duration || 100}`);
               }
             } else if (data.type === 'key' || data.type === 'code') {
-              if (useScrcpy) {
-                scrcpyEngine.sendKeycode(0, data.code);
+              const sent = useScrcpy && scrcpyEngine.sendKeycode(0, data.code);
+              if (sent) {
                 setTimeout(() => scrcpyEngine.sendKeycode(1, data.code), 20);
               } else {
-                sendSubMsInput(`input keyevent ${data.code}`);
+                sendSubMsInput(serial, `input keyevent ${data.code}`);
               }
             } else if (data.type === 'text') {
-              if (useScrcpy) {
-                scrcpyEngine.sendText(data.text);
-              } else {
-                sendSubMsInput(`input text "${data.text.replace(/"/g, '\\"')}"`);
+              const sent = useScrcpy && scrcpyEngine.sendText(data.text);
+              if (!sent) {
+                sendSubMsInput(serial, `input text "${data.text.replace(/"/g, '\\"')}"`);
               }
             } else if (data.type === 'reboot') {
               exec(`"${ADB_BIN}" -s ${serial} reboot`);
