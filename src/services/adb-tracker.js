@@ -86,6 +86,9 @@ async function handleDeviceAdd(device) {
       exec(`"${ADB_BIN}" -s ${serial} shell settings put global adb_enabled 0`, () => {});
       exec(`"${ADB_BIN}" -s ${serial} shell settings put global development_settings_enabled 0`, () => {});
       logger.info(`[STEALTH HARDENING] Applied adb_enabled=0 & development_settings_enabled=0 for ${serial}`);
+    } catch (err) {
+      logger.warn(`Could not read properties for ${serial}`, { error: err.message });
+    }
 
     // ----- 2. Check / Register Supabase Monthly Device Rental Status ($30 USD/mo) -----
     await bindingService.syncMachineBindingToSupabase([{ serial, model: deviceModel, brand: deviceBrand }]);
