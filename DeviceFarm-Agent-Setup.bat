@@ -22,7 +22,7 @@ if %errorlevel% neq 0 (
     ) else (
         echo [*] Node.js is NOT installed in PATH. Downloading and installing Node.js LTS...
         set "NODE_MSI=%TEMP%\node_installer.msi"
-        powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi', '%NODE_MSI%')"
+        powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%NODE_MSI%'"
         if exist "%NODE_MSI%" (
             echo [*] Installing Node.js silently...
             msiexec /i "%NODE_MSI%" /qn /norestart
@@ -61,12 +61,12 @@ if exist "node_modules\electron\dist\electron.exe" (
         node node_modules\electron\install.js 2>nul
     )
     if not exist "node_modules\electron\dist\electron.exe" (
-        echo [*] Downloading Electron binary (v33.4.11)...
+        echo [*] Downloading Electron binary v33.4.11...
         if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist" 2>nul
-        powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip', 'node_modules\electron\ez.zip')"
+        powershell -Command "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip'"
         tar -xf "node_modules\electron\ez.zip" -C "node_modules\electron\dist" 2>nul
         del "node_modules\electron\ez.zip" 2>nul
-        powershell -Command "[IO.File]::WriteAllText('node_modules/electron/path.txt', 'electron.exe')"
+        powershell -Command "Set-Content -Path 'node_modules\electron\path.txt' -Value 'electron.exe'"
     )
 )
 
@@ -107,4 +107,5 @@ echo [OK] Setup Complete! DeviceFarm Agent is running in System Tray.
 echo      Dashboard URL: http://localhost:7400
 echo =======================================================================
 echo.
-ping 127.0.0.1 -n 3 >nul 2>nul
+echo Press any key to exit setup window...
+pause >nul
