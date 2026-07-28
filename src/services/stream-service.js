@@ -269,13 +269,19 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = null;
     }
     decoderConfigured = false;
+    pendingFrames = [];
     decoder = new VideoDecoder({
       output: (frame) => { queueDraw(frame); },
       error:  (e) => {
         console.warn('[Decoder] error:', e);
+        // Re-create the decoder and wait for next config packet
+        if (decoder) { try { decoder.close(); } catch(_){} decoder = null; }
         decoderConfigured = false;
-        // Reset and wait for the next config packet to re-configure
-        try { decoder.reset(); } catch (_) {}
+        waitingForConfig = true;
+        decoder = new VideoDecoder({
+          output: (frame) => { queueDraw(frame); },
+          error:  () => {}
+        });
       }
     });
     console.log('[Decoder] created — waiting for SPS/PPS config');
@@ -287,15 +293,22 @@ function buildPlayerHtml(serial, screenW, screenH) {
     // Parse the SPS to extract profile/constraints/level for the codec string
     const codecStr = parseSpsCodecString(configData) || 'avc1.42E01F';
     try {
-      decoder.configure({
-        codec: codecStr,
-        optimizeForLatency: true,
-        // latencyMode is a newer hint — use if available
-        ...(('latencyMode' in VideoDecoderConfig) ? { latencyMode: 'realtime' } : {}),
-      });
+      // Build config — latencyMode is a Chrome hint (not a constructor, no 'in' check needed)
+      const cfg = { codec: codecStr, optimizeForLatency: true };
+      try { cfg.latencyMode = 'realtime'; } catch(_) {}
+      decoder.configure(cfg);
       decoderConfigured = true;
       console.log('[Decoder] configured with', codecStr);
-      // Flush any frames that arrived before config
+
+      // Feed the SPS+PPS itself as a key chunk so the decoder sees the parameter sets.
+      // This is required when the device bundles SPS/PPS with the first IDR, or when
+      // the config packet arrives separately — either way we must decode it.
+      lastTs = Math.floor(performance.now() * 1000);
+      try {
+        decoder.decode(new EncodedVideoChunk({ type: 'key', timestamp: lastTs, data: configData }));
+      } catch (_) {}
+
+      // Flush any video frames that arrived before config
       const held = pendingFrames.splice(0);
       held.forEach(f => feedFrame(f.data, f.isKey));
     } catch (e) {
