@@ -132,8 +132,9 @@ class ScrcpyEngine extends EventEmitter {
       'control=true',
       'display_id=0',
       'max_size=720',
-      'video_bit_rate=4000000',
+      'video_bit_rate=2500000',
       'max_fps=60',
+      'i_frame_interval=1',
       'stay_awake=true',
       'power_on=true',
       'show_touches=false',
@@ -141,6 +142,7 @@ class ScrcpyEngine extends EventEmitter {
       'clipboard_autosync=false',
       'cleanup=true',
       'send_device_meta=true',
+      'send_codec_meta=true',
       'send_frame_meta=true',
       'send_dummy_byte=true',
     ];
@@ -245,7 +247,7 @@ class ScrcpyEngine extends EventEmitter {
   _readVideoHeader(socket) {
     return new Promise((resolve) => {
       let buf = Buffer.alloc(0);
-      const HEADER_LEN = 65; // 1 dummy + 64 device name
+      const HEADER_LEN = 77; // 1 dummy + 64 device name + 4 codec ID + 4 width + 4 height
 
       const onData = (chunk) => {
         buf = Buffer.concat([buf, chunk]);
@@ -253,7 +255,16 @@ class ScrcpyEngine extends EventEmitter {
           socket.removeListener('data', onData);
 
           const deviceName = buf.slice(1, 65).toString('utf8').replace(/\0/g, '');
-          logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}"`);
+          const codecId = buf.readUInt32BE(65);
+          const w = buf.readUInt32BE(69);
+          const h = buf.readUInt32BE(73);
+
+          if (w > 0 && h > 0) {
+            this.screenWidth = w;
+            this.screenHeight = h;
+          }
+
+          logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" codec=0x${codecId.toString(16)} resolution=${this.screenWidth}x${this.screenHeight}`);
 
           // Push back any bytes that belong to the video stream
           if (buf.length > HEADER_LEN) {
@@ -328,9 +339,20 @@ class ScrcpyEngine extends EventEmitter {
   _broadcastVideo(payload, isConfig) {
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
+
+      if (isConfig) {
+        ws._needsKeyframe = false;
+      } else if (ws._needsKeyframe) {
+        // Skip P-frames after backpressure drop until next keyframe/config
+        continue;
+      }
+
       // Drop non-config frames only when client is significantly behind (64KB).
-      // Config packets ALWAYS go through so the decoder never loses its SPS/PPS.
-      if (!isConfig && ws.bufferedAmount > 64 * 1024) continue;
+      if (!isConfig && ws.bufferedAmount > 64 * 1024) {
+        ws._needsKeyframe = true;
+        continue;
+      }
+
       try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
     }
   }
