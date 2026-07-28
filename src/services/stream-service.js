@@ -206,7 +206,6 @@ class FrameCaptureEngine {
   _startCapture() {
     if (!this.isRunning || this._captureActive) return;
     this._captureActive = true;
-    this._pendingChunks = [];
     this._spawnCaptureLoop();
   }
 
@@ -216,99 +215,61 @@ class FrameCaptureEngine {
       try { this._captureProc.kill(); } catch (_) {}
       this._captureProc = null;
     }
-    this._pendingChunks = [];
   }
 
   /**
-   * Spawn a persistent screencap loop on the device.
-   * We run a shell `while true; do screencap -p; done` so there's only ONE
-   * adb process alive for the entire session. Each screencap writes a PNG to
-   * stdout. We detect frame boundaries using the PNG magic bytes (8 bytes at
-   * start) and the PNG IEND chunk (12 bytes at end: 00 00 00 00 49 45 4E 44 AE 42 60 82).
+   * Fast single-shot screencap loop.
+   *
+   * Strategy: spawn one `adb exec-out screencap -p` process, collect all
+   * chunks, broadcast the complete PNG frame, then IMMEDIATELY re-spawn —
+   * no setTimeout, no setInterval. This gives maximum throughput limited
+   * only by how fast the device can produce frames (~5-15 fps over USB,
+   * ~2-8 fps over Wi-Fi — far better than the 1 fps seen with the shell loop).
+   *
+   * When no WS clients are connected we insert a 200ms idle pause to avoid
+   * burning CPU for nothing.
    */
   _spawnCaptureLoop() {
     if (!this.isRunning || !this._captureActive) return;
 
-    // Continuous screencap loop — one adb process, unlimited frames
-    const proc = spawn(ADB_BIN, [
-      '-s', this.serial,
-      'exec-out',
-      'while true; do screencap -p; done',
-    ], {
+    // Idle when no clients — avoids burning CPU
+    if (this.wsClients.size === 0) {
+      this._restartTimer = setTimeout(() => this._spawnCaptureLoop(), 200);
+      return;
+    }
+
+    const proc = spawn(ADB_BIN, ['-s', this.serial, 'exec-out', 'screencap -p'], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
 
     this._captureProc = proc;
+    const chunks = [];
 
-    // PNG IEND trailer — every PNG ends with these 12 bytes
-    const IEND = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
-    // PNG magic header (first 8 bytes of every PNG)
-    const PNG_HDR = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-
-    let buf = Buffer.alloc(0);
-
-    proc.stdout.on('data', (chunk) => {
-      // Pause capture loop if no clients — reduces CPU when idle
-      if (this.wsClients.size === 0) {
-        buf = Buffer.alloc(0); // discard
-        return;
-      }
-
-      buf = Buffer.concat([buf, chunk]);
-
-      // Slice complete PNG frames out of the stream buffer
-      let searchFrom = 0;
-      while (true) {
-        const iendIdx = buf.indexOf(IEND, searchFrom);
-        if (iendIdx === -1) break;
-
-        const frameEnd = iendIdx + IEND.length;
-        // Find PNG header — scan backwards from iendIdx for the magic bytes
-        // (first frame starts at 0, subsequent frames start right after prev IEND)
-        const frameStart = buf.lastIndexOf(PNG_HDR, iendIdx);
-        if (frameStart === -1) {
-          searchFrom = frameEnd;
-          continue;
-        }
-
-        const frame = buf.slice(frameStart, frameEnd);
-        buf = buf.slice(frameEnd); // discard consumed data
-        searchFrom = 0;
-
-        this.latestFrame = frame;
-        this.latestMime = 'image/png';
-        this._frameCount++;
-        this._broadcast(frame);
-      }
-
-      // Cap buffer size to 4MB to avoid unbounded growth if IEND is never found
-      if (buf.length > 4 * 1024 * 1024) {
-        buf = Buffer.alloc(0);
-      }
-    });
-
-    proc.on('error', (err) => {
-      logger.warn(`[CaptureEngine ${this.serial}] Capture error: ${err.message}`);
-      this._captureProc = null;
-      this._captureActive = false;
-      if (this.isRunning) {
-        this._restartTimer = setTimeout(() => {
-          this._captureActive = false;
-          this._startCapture();
-        }, 500);
-      }
-    });
+    proc.stdout.on('data', (c) => chunks.push(c));
 
     proc.on('close', (code) => {
       this._captureProc = null;
-      this._captureActive = false;
-      if (this.isRunning) {
-        // Restart quickly — the loop should never exit unless adb disconnects
-        this._restartTimer = setTimeout(() => {
-          this._captureActive = false;
-          this._startCapture();
-        }, code === 0 ? 100 : 500);
+      if (code === 0 && chunks.length > 0) {
+        const frame = Buffer.concat(chunks);
+        // Sanity: must start with PNG magic bytes
+        if (frame[0] === 0x89 && frame[1] === 0x50) {
+          this.latestFrame = frame;
+          this.latestMime = 'image/png';
+          this._frameCount++;
+          this._broadcast(frame);
+        }
+      }
+      // Re-spawn immediately — setImmediate yields to I/O but adds no timer delay
+      if (this.isRunning && this._captureActive) {
+        setImmediate(() => this._spawnCaptureLoop());
+      }
+    });
+
+    proc.on('error', () => {
+      this._captureProc = null;
+      if (this.isRunning && this._captureActive) {
+        this._restartTimer = setTimeout(() => this._spawnCaptureLoop(), 300);
       }
     });
   }
@@ -488,6 +449,7 @@ function buildPlayerHtml(serial) {
         clearTimeout(fallbackTimer);
         wsActive = true;
         modeBadge.innerHTML = '<span class="dot"></span> LIVE';
+        flushControlQueue();
       };
 
       ws.onmessage = (e) => {
@@ -516,11 +478,26 @@ function buildPlayerHtml(serial) {
     }
 
     // ── Control helpers ──────────────────────────────────────────────────────
+    // IMPORTANT: Never use fetch() for control — over a tunnel each HTTP
+    // request adds 200-500ms. All control messages go exclusively over the
+    // WebSocket. If not yet connected, queue and flush on reconnect.
+    const controlQueue = [];
+
+    function flushControlQueue() {
+      while (controlQueue.length > 0 && ws && ws.readyState === 1) {
+        ws.send(JSON.stringify(controlQueue.shift()));
+      }
+    }
+
     function sendControl(data) {
-      if (wsActive && ws && ws.readyState === 1) {
+      if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify(data));
       } else {
-        fetch('/control?' + new URLSearchParams(data));
+        // Drop MOVE events from queue to avoid stale swipe buildup
+        if (data.type === 'touch' && data.action === 2) return;
+        controlQueue.push(data);
+        // Limit queue size — only keep last 8 pending commands
+        if (controlQueue.length > 8) controlQueue.splice(0, controlQueue.length - 8);
       }
     }
 
