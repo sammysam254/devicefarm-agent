@@ -20,17 +20,10 @@ class ScrcpyEngine extends EventEmitter {
     super();
     this.serial = serial;
     this.serverProc = null;
-    this.videoSocket = null;
     this.controlSocket = null;
     this.isRunning = false;
     this.videoPort = null;
-    this.controlPort = null;
-    this.latestFrame = null; // Latest keyframe / screen dump buffer for HTTP
     this.wsClients = new Set();
-
-    // H.264 Header caches (SPS / PPS NAL units)
-    this.spsNalu = null;
-    this.ppsNalu = null;
   }
 
   async start(videoPort, controlPort) {
@@ -46,7 +39,7 @@ class ScrcpyEngine extends EventEmitter {
       // 2. Setup socket port forwards
       await this._execAdb(['forward', `tcp:${videoPort}`, 'localabstract:scrcpy']);
 
-      // 3. Launch scrcpy server on device
+      // 3. Launch scrcpy server on device — video=false: control-only, no PiP, no video socket
       const scrcpyArgs = [
         '-s',
         this.serial,
@@ -57,10 +50,8 @@ class ScrcpyEngine extends EventEmitter {
         'com.genymobile.scrcpy.Server',
         '2.4',
         'tunnel_forward=true',
-        'max_size=1080',
-        'video_bit_rate=4000000',
-        'max_fps=30',
-        'lock_video_orientation=-1',
+        'video=false',
+        'audio=false',
         'control=true',
         'display_id=0',
         'show_touches=false',
@@ -68,8 +59,7 @@ class ScrcpyEngine extends EventEmitter {
         'power_off_on_close=false',
         'clipboard_autosync=false',
         'cleanup=true',
-        'power_on=true',
-        'audio=false'
+        'power_on=true'
       ];
 
       this.serverProc = spawn(ADB_BIN, scrcpyArgs, {
@@ -107,11 +97,6 @@ class ScrcpyEngine extends EventEmitter {
   stop() {
     this.isRunning = false;
 
-    if (this.videoSocket) {
-      try { this.videoSocket.destroy(); } catch (_) {}
-      this.videoSocket = null;
-    }
-
     if (this.controlSocket) {
       try { this.controlSocket.destroy(); } catch (_) {}
       this.controlSocket = null;
@@ -122,7 +107,6 @@ class ScrcpyEngine extends EventEmitter {
       this.serverProc = null;
     }
 
-    // Clean ADB port forwards
     if (this.videoPort) {
       this._execAdb(['forward', '--remove', `tcp:${this.videoPort}`]).catch(() => {});
     }
@@ -133,12 +117,6 @@ class ScrcpyEngine extends EventEmitter {
 
   addClient(ws) {
     this.wsClients.add(ws);
-    // If SPS/PPS exist, send them immediately to initialize client video decoder
-    if (this.spsNalu && this.ppsNalu && ws.readyState === 1) {
-      try {
-        ws.send(Buffer.concat([this.spsNalu, this.ppsNalu]), { binary: true });
-      } catch (_) {}
-    }
   }
 
   removeClient(ws) {
@@ -212,85 +190,46 @@ class ScrcpyEngine extends EventEmitter {
     let retries = 30;
     while (retries > 0 && this.isRunning) {
       try {
-        await new Promise((resolve, reject) => {
-          const s = net.connect({ port: this.videoPort, host: '127.0.0.1' }, () => {
-            this.videoSocket = s;
-            this._handleVideoData();
-            resolve();
-          });
-          s.on('error', reject);
-        });
-
-        // Connect control socket (scrcpy tunnel_forward accepts video then control sequentially on same port)
+        // video=false: only one control socket is opened by scrcpy
         await new Promise((resolve, reject) => {
           const cs = net.connect({ port: this.videoPort, host: '127.0.0.1' }, () => {
             this.controlSocket = cs;
+            cs.on('close', () => {
+              logger.warn(`[ScrcpyEngine ${this.serial}] Control socket closed — reconnecting...`);
+              this.controlSocket = null;
+              if (this.isRunning) setTimeout(() => this._reconnectControl(), 500);
+            });
+            cs.on('error', () => { this.controlSocket = null; });
             resolve();
           });
           cs.on('error', reject);
         });
-
         return;
       } catch (err) {
         retries--;
         await new Promise((r) => setTimeout(r, 100));
       }
     }
-
-    if (retries === 0) {
-      throw new Error('Timeout connecting to scrcpy sockets');
-    }
+    throw new Error('Timeout connecting to scrcpy control socket');
   }
 
-  _handleVideoData() {
-    let rawBuffer = Buffer.alloc(0);
-    let headerParsed = false;
-    let deviceName = '';
-    let codecId = 0;
-    let width = 0;
-    let height = 0;
-
-    this.videoSocket.on('data', (chunk) => {
-      rawBuffer = Buffer.concat([rawBuffer, chunk]);
-
-      if (!headerParsed) {
-        if (rawBuffer.length < 76) return;
-        deviceName = rawBuffer.subarray(0, 64).toString('utf-8').replace(/\0/g, '');
-        codecId = rawBuffer.readUInt32BE(64);
-        width = rawBuffer.readUInt32BE(68);
-        height = rawBuffer.readUInt32BE(72);
-        rawBuffer = rawBuffer.subarray(76);
-        headerParsed = true;
-        logger.info(`[ScrcpyEngine ${this.serial}] Stream Header: ${deviceName} (${width}x${height})`);
-      }
-
-      if (rawBuffer.length > 0) {
-        this._broadcast(rawBuffer);
-        rawBuffer = Buffer.alloc(0);
-      }
-    });
-
-    this.videoSocket.on('close', () => {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
-    });
-
-    this.videoSocket.on('error', (err) => {
-      logger.error(`[ScrcpyEngine ${this.serial}] Video socket error:`, err.message);
-    });
-  }
-
-  _broadcast(data) {
-    for (const ws of this.wsClients) {
-      if (ws.readyState !== 1) {
-        this.wsClients.delete(ws);
-        continue;
-      }
-      if (ws.bufferedAmount > 524288) continue; // Backpressure limit 512KB
-      try {
-        ws.send(data, { binary: true });
-      } catch (_) {
-        this.wsClients.delete(ws);
-      }
+  async _reconnectControl() {
+    if (!this.isRunning) return;
+    try {
+      await new Promise((resolve, reject) => {
+        const cs = net.connect({ port: this.videoPort, host: '127.0.0.1' }, () => {
+          this.controlSocket = cs;
+          cs.on('close', () => {
+            this.controlSocket = null;
+            if (this.isRunning) setTimeout(() => this._reconnectControl(), 500);
+          });
+          cs.on('error', () => { this.controlSocket = null; });
+          resolve();
+        });
+        cs.on('error', reject);
+      });
+    } catch (_) {
+      if (this.isRunning) setTimeout(() => this._reconnectControl(), 1000);
     }
   }
 
