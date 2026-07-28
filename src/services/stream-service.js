@@ -956,19 +956,15 @@ async function startStreamServer(serial, port) {
     const captureEngine = new FrameCaptureEngine(serial);
     const scrcpyEngine = new ScrcpyEngine(serial);
 
-    let useScrcpy = false;
-
     return new Promise(async (resolve, reject) => {
       try {
         const scrcpyVideoPort = port + 1000;
         await scrcpyEngine.start(scrcpyVideoPort, scrcpyVideoPort);
-        useScrcpy = true;
-        logger.info(`[STEALTH SCRCPY] Active for ${serial}`);
+        logger.info(`[SCRCPY CONTROL] Active for ${serial} — input via native InputManager`);
       } catch (err) {
-        logger.warn(`[STEALTH SCRCPY] Scrcpy input fallback for ${serial}: ${err.message}`);
+        logger.warn(`[SCRCPY CONTROL] Fallback to ADB shell input for ${serial}: ${err.message}`);
       }
 
-      // Always start captureEngine to provide image frames for HTML canvas rendering
       captureEngine.start();
 
       const server = http.createServer(async (req, res) => {
@@ -1061,7 +1057,7 @@ async function startStreamServer(serial, port) {
           if (type === 'tap') {
             const x = parseFloat(urlObj.searchParams.get('x'));
             const y = parseFloat(urlObj.searchParams.get('y'));
-            const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, x, y, 1080, 2400);
+            const sent = scrcpyEngine.isReady && scrcpyEngine.sendTouchEvent(0, x, y, 1080, 2400);
             if (sent) {
               setTimeout(() => scrcpyEngine.sendTouchEvent(1, x, y, 1080, 2400), 30);
             } else {
@@ -1072,7 +1068,7 @@ async function startStreamServer(serial, port) {
             const y1 = parseFloat(urlObj.searchParams.get('y1'));
             const x2 = parseFloat(urlObj.searchParams.get('x2'));
             const y2 = parseFloat(urlObj.searchParams.get('y2'));
-            const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, x1, y1, 1080, 2400);
+            const sent = scrcpyEngine.isReady && scrcpyEngine.sendTouchEvent(0, x1, y1, 1080, 2400);
             if (sent) {
               setTimeout(() => scrcpyEngine.sendTouchEvent(2, x2, y2, 1080, 2400), 30);
               setTimeout(() => scrcpyEngine.sendTouchEvent(1, x2, y2, 1080, 2400), 80);
@@ -1081,7 +1077,7 @@ async function startStreamServer(serial, port) {
             }
           } else if (type === 'key' || type === 'code') {
             const code = parseInt(urlObj.searchParams.get('code'), 10);
-            const sent = useScrcpy && scrcpyEngine.sendKeycode(0, code);
+            const sent = scrcpyEngine.isReady && scrcpyEngine.sendKeycode(0, code);
             if (sent) {
               setTimeout(() => scrcpyEngine.sendKeycode(1, code), 20);
             } else {
@@ -1089,7 +1085,7 @@ async function startStreamServer(serial, port) {
             }
           } else if (type === 'text') {
             const text = urlObj.searchParams.get('text');
-            const sent = useScrcpy && scrcpyEngine.sendText(text);
+            const sent = scrcpyEngine.isReady && scrcpyEngine.sendText(text);
             if (!sent) {
               sendSubMsInput(serial, `input text "${text.replace(/"/g, '\\"')}"`);
             }
@@ -1146,22 +1142,21 @@ async function startStreamServer(serial, port) {
             const height = data.height || 2400;
 
             if (data.type === 'touch') {
-              const sent = useScrcpy && scrcpyEngine.sendTouchEvent(data.action, data.x, data.y, width, height);
+              const sent = scrcpyEngine.isReady && scrcpyEngine.sendTouchEvent(data.action, data.x, data.y, width, height);
               if (!sent) {
-                // Fallback to ADB shell only for DOWN and UP, skip MOVE to avoid shell overhead
                 if (data.action === 0 || data.action === 1) {
                   sendSubMsInput(serial, `input tap ${Math.round(data.x)} ${Math.round(data.y)}`);
                 }
               }
             } else if (data.type === 'tap') {
-              const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, data.x, data.y, width, height);
+              const sent = scrcpyEngine.isReady && scrcpyEngine.sendTouchEvent(0, data.x, data.y, width, height);
               if (sent) {
                 setTimeout(() => scrcpyEngine.sendTouchEvent(1, data.x, data.y, width, height), 30);
               } else {
                 sendSubMsInput(serial, `input tap ${Math.round(data.x)} ${Math.round(data.y)}`);
               }
             } else if (data.type === 'swipe') {
-              const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, data.x1, data.y1, width, height);
+              const sent = scrcpyEngine.isReady && scrcpyEngine.sendTouchEvent(0, data.x1, data.y1, width, height);
               if (sent) {
                 setTimeout(() => scrcpyEngine.sendTouchEvent(2, data.x2, data.y2, width, height), 30);
                 setTimeout(() => scrcpyEngine.sendTouchEvent(1, data.x2, data.y2, width, height), 80);
@@ -1169,14 +1164,14 @@ async function startStreamServer(serial, port) {
                 sendSubMsInput(serial, `input swipe ${Math.round(data.x1)} ${Math.round(data.y1)} ${Math.round(data.x2)} ${Math.round(data.y2)} ${data.duration || 100}`);
               }
             } else if (data.type === 'key' || data.type === 'code') {
-              const sent = useScrcpy && scrcpyEngine.sendKeycode(0, data.code);
+              const sent = scrcpyEngine.isReady && scrcpyEngine.sendKeycode(0, data.code);
               if (sent) {
                 setTimeout(() => scrcpyEngine.sendKeycode(1, data.code), 20);
               } else {
                 sendSubMsInput(serial, `input keyevent ${data.code}`);
               }
             } else if (data.type === 'text') {
-              const sent = useScrcpy && scrcpyEngine.sendText(data.text);
+              const sent = scrcpyEngine.isReady && scrcpyEngine.sendText(data.text);
               if (!sent) {
                 sendSubMsInput(serial, `input text "${data.text.replace(/"/g, '\\"')}"`);
               }
@@ -1187,14 +1182,12 @@ async function startStreamServer(serial, port) {
         });
 
         ws.on('close', () => {
-          if (useScrcpy) scrcpyEngine.removeClient(ws);
-          else captureEngine.removeClient(ws);
+          captureEngine.removeClient(ws);
           clearInterval(paymentInterval);
         });
 
         ws.on('error', () => {
-          if (useScrcpy) scrcpyEngine.removeClient(ws);
-          else captureEngine.removeClient(ws);
+          captureEngine.removeClient(ws);
           clearInterval(paymentInterval);
         });
       });

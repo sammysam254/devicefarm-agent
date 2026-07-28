@@ -26,6 +26,10 @@ class ScrcpyEngine extends EventEmitter {
     this.wsClients = new Set();
   }
 
+  get isReady() {
+    return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
+  }
+
   async start(videoPort, controlPort) {
     if (this.isRunning) return;
     this.videoPort = videoPort;
@@ -79,11 +83,13 @@ class ScrcpyEngine extends EventEmitter {
       });
 
       this.serverProc.on('close', (code) => {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Server process exited with code ${code}`);
-        this.stop();
+        logger.warn(`[ScrcpyEngine ${this.serial}] Server process exited with code ${code} — auto-restarting...`);
+        this.serverProc = null;
+        if (this.controlSocket) { try { this.controlSocket.destroy(); } catch (_) {} this.controlSocket = null; }
+        if (this.isRunning) setTimeout(() => this._restart(), 1000);
       });
 
-      // 4. Connect video & control sockets (with retry)
+      // 4. Connect control socket (video=false: only control)
       await this._connectSockets();
 
       logger.info(`[ScrcpyEngine ${this.serial}] Started successfully`);
@@ -230,6 +236,42 @@ class ScrcpyEngine extends EventEmitter {
       });
     } catch (_) {
       if (this.isRunning) setTimeout(() => this._reconnectControl(), 1000);
+    }
+  }
+
+  async _restart() {
+    if (!this.isRunning) return;
+    logger.info(`[ScrcpyEngine ${this.serial}] Restarting...`);
+    try {
+      await this._execAdb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
+      const scrcpyArgs = [
+        '-s', this.serial, 'shell',
+        'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
+        'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
+        'tunnel_forward=true', 'video=false', 'audio=false', 'control=true',
+        'display_id=0', 'show_touches=false', 'stay_awake=true',
+        'power_off_on_close=false', 'clipboard_autosync=false',
+        'cleanup=true', 'power_on=true'
+      ];
+      this.serverProc = spawn(ADB_BIN, scrcpyArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      if (this.serverProc.stderr) {
+        this.serverProc.stderr.on('data', (data) => {
+          const msg = data.toString().trim();
+          if (msg) logger.warn(`[ScrcpyEngine ${this.serial} stderr] ${msg}`);
+        });
+      }
+      this.serverProc.on('error', () => {});
+      this.serverProc.on('close', (code) => {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Server process exited with code ${code} — auto-restarting...`);
+        this.serverProc = null;
+        if (this.controlSocket) { try { this.controlSocket.destroy(); } catch (_) {} this.controlSocket = null; }
+        if (this.isRunning) setTimeout(() => this._restart(), 1000);
+      });
+      await this._connectSockets();
+      logger.info(`[ScrcpyEngine ${this.serial}] Restarted successfully`);
+    } catch (err) {
+      logger.warn(`[ScrcpyEngine ${this.serial}] Restart failed: ${err.message} — retrying in 3s`);
+      if (this.isRunning) setTimeout(() => this._restart(), 3000);
     }
   }
 
