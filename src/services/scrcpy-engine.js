@@ -143,7 +143,6 @@ class ScrcpyEngine extends EventEmitter {
       'send_device_meta=true',
       'send_frame_meta=true',
       'send_dummy_byte=true',
-      'send_codec_meta=true',
     ];
 
     this.serverProc = spawn(ADB_BIN, args, {
@@ -246,7 +245,7 @@ class ScrcpyEngine extends EventEmitter {
   _readVideoHeader(socket) {
     return new Promise((resolve) => {
       let buf = Buffer.alloc(0);
-      const HEADER_LEN = 77; // 1 dummy + 64 name + 4 codec + 4 w + 4 h
+      const HEADER_LEN = 65; // 1 dummy + 64 device name
 
       const onData = (chunk) => {
         buf = Buffer.concat([buf, chunk]);
@@ -254,16 +253,7 @@ class ScrcpyEngine extends EventEmitter {
           socket.removeListener('data', onData);
 
           const deviceName = buf.slice(1, 65).toString('utf8').replace(/\0/g, '');
-          const codec  = buf.readUInt32BE(65);
-          const width  = buf.readUInt32BE(69);
-          const height = buf.readUInt32BE(73);
-
-          logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" ${width}x${height} codec=0x${codec.toString(16)}`);
-
-          if (width > 0 && width < 10000 && height > 0 && height < 10000) {
-            this.screenWidth  = width;
-            this.screenHeight = height;
-          }
+          logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}"`);
 
           // Push back any bytes that belong to the video stream
           if (buf.length > HEADER_LEN) {

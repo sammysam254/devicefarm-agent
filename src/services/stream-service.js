@@ -404,7 +404,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/ws');
+    ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
@@ -460,7 +460,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       // Stop as soon as WS is alive and WebCodecs is available
       if (wsOk && typeof VideoDecoder !== 'undefined') { fbRunning = false; return; }
       if (!fbRunning) return; // stopped externally (WS connected)
-      fetch('/screen.jpg?t=' + Date.now())
+      const q = location.search ? location.search + '&t=' + Date.now() : '?t=' + Date.now();
+      fetch('/screen.jpg' + q)
         .then(r => r.blob()).then(b => createImageBitmap(b))
         .then(bmp => { queueDraw(bmp); requestAnimationFrame(pull); })
         .catch(() => setTimeout(pull, 200));
@@ -557,7 +558,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function key(code) { send({ type:'code', code }); }
 
   function screenshot() {
-    fetch('/screen.jpg?t='+Date.now()).then(r=>r.blob()).then(b=>{
+    const q = location.search ? location.search + '&t=' + Date.now() : '?t=' + Date.now();
+    fetch('/screen.jpg' + q).then(r=>r.blob()).then(b=>{
       const a = document.createElement('a');
       a.href = URL.createObjectURL(b);
       a.download = 'shot-${serial}-'+Date.now()+'.jpg';
