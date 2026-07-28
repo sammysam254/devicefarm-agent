@@ -57,9 +57,13 @@ if exist "node_modules\electron\dist\electron.exe" (
     echo [*] Installing package dependencies...
     call npm install --no-audit --no-fund
     if not exist "node_modules\electron\dist\electron.exe" (
-        echo [*] Electron binary missing. Downloading Electron executable directly...
+        echo [*] Running Electron installer script...
+        node node_modules\electron\install.js 2>nul
+    )
+    if not exist "node_modules\electron\dist\electron.exe" (
+        echo [*] Downloading Electron binary (v33.4.11)...
         if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist" 2>nul
-        curl -L -s -o "node_modules\electron\ez.zip" "https://github.com/electron/electron/releases/download/v33.2.1/electron-v33.2.1-win32-x64.zip"
+        powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip', 'node_modules\electron\ez.zip')"
         tar -xf "node_modules\electron\ez.zip" -C "node_modules\electron\dist" 2>nul
         del "node_modules\electron\ez.zip" 2>nul
         powershell -Command "[IO.File]::WriteAllText('node_modules/electron/path.txt', 'electron.exe')"
