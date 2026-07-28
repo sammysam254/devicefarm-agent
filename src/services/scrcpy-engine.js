@@ -9,8 +9,8 @@ const logger = require('../utils/logger');
 
 const ADB_BIN = (() => {
   const candidates = [
-    'C:\\platform-tools\\adb.exe',
     path.join(process.cwd(), 'assets', 'bin', 'adb.exe'),
+    'C:\\platform-tools\\adb.exe',
   ];
   for (const p of candidates) if (fs.existsSync(p)) return p;
   return 'adb';
@@ -23,49 +23,51 @@ const SCRCPY_JAR_PATH = path.join(process.cwd(), 'scrcpy-server.jar');
  *
  * VIDEO MODE: scrcpy streams H264 over the video socket. We relay raw
  * H264 NAL units directly to WebSocket clients. The browser decodes
- * them using the WebCodecs VideoDecoder API — no screencap, no PNG,
- * no JPEG. Typical throughput: 15-30 fps over USB, 8-15 fps over WiFi.
+ * them using the WebCodecs VideoDecoder API.
  *
- * CONTROL MODE: touch/key events injected via the control socket using
- * the scrcpy binary control protocol.
- *
- * Socket connection order (tunnel_forward=true):
- *   1. video socket  (first connection accepted by device)
- *   2. control socket (second connection)
- * The device sends a 69-byte device metadata header on the video socket
- * before streaming begins.
+ * Zero-latency design:
+ *  - max_fps=60, max_size=720, bit_rate=4Mbps
+ *  - send_frame_meta=true so we can strip the 12-byte header cleanly
+ *  - SPS/PPS config packet sent immediately to every new client
+ *  - Backpressure threshold lowered to 64KB (was 512KB) to avoid jitter
  */
 class ScrcpyEngine extends EventEmitter {
   constructor(serial) {
     super();
-    this.serial       = serial;
-    this.serverProc   = null;
-    this.videoSocket  = null;
+    this.serial        = serial;
+    this.serverProc    = null;
+    this.videoSocket   = null;
     this.controlSocket = null;
-    this.isRunning    = false;
-    this.videoPort    = null;
-    this.controlPort  = null;
+    this.isRunning     = false;
+    this.videoPort     = null;
 
-    // Real device dimensions fetched via adb shell wm size
+    // Real device dimensions
     this.screenWidth  = 720;
     this.screenHeight = 1600;
 
     // Connected WS clients receiving H264 stream
     this.wsClients = new Set();
 
-    // SPS/PPS config accumulated from first keyframe — sent to new clients
-    this._spsBuffer = null;
+    // Last SPS/PPS config packet — sent immediately to new clients so
+    // the decoder can initialise before any keyframe arrives
+    this._configPacket = null;
+
+    // Whether the scrcpy server has been pushed to the device already
+    this._jarPushed = false;
   }
 
   get isReady() {
     return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
   }
 
+  /**
+   * Register a WS client. We immediately flush the cached SPS/PPS config
+   * so the WebCodecs decoder is initialised before the next keyframe.
+   */
   addClient(ws) {
     this.wsClients.add(ws);
-    // Send cached SPS/PPS so the decoder can initialise immediately
-    if (this._spsBuffer && ws.readyState === 1) {
-      try { ws.send(this._spsBuffer, { binary: true }); } catch (_) {}
+    if (this._configPacket && ws.readyState === 1) {
+      try { ws.send(this._configPacket, { binary: true }); } catch (_) {}
     }
   }
 
@@ -73,14 +75,13 @@ class ScrcpyEngine extends EventEmitter {
     this.wsClients.delete(ws);
   }
 
-  async start(videoPort, controlPort) {
+  async start(videoPort) {
     if (this.isRunning) return;
-    this.videoPort   = videoPort;
-    this.controlPort = controlPort;
-    this.isRunning   = true;
+    this.videoPort = videoPort;
+    this.isRunning = true;
 
     try {
-      // 1. Real screen dimensions
+      // 1. Fetch real screen dimensions
       try {
         const out = await this._adb(['shell', 'wm', 'size']);
         const m = out.match(/Physical size:\s*(\d+)x(\d+)/);
@@ -91,63 +92,78 @@ class ScrcpyEngine extends EventEmitter {
       } catch (_) {}
       logger.info(`[ScrcpyEngine ${this.serial}] Screen: ${this.screenWidth}x${this.screenHeight}`);
 
-      // 2. Push server jar
-      await this._adb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
+      // 2. Push server jar (once per device session)
+      if (!this._jarPushed) {
+        await this._adb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
+        this._jarPushed = true;
+      }
 
-      // 3. Forward ports — video on videoPort, control reuses same port via scrcpy's
-      //    two-connection handshake (tunnel_forward opens both on same abstract socket)
+      // 3. Remove any stale forward, then add fresh one
+      try { await this._adb(['forward', '--remove', `tcp:${videoPort}`]); } catch (_) {}
       await this._adb(['forward', `tcp:${videoPort}`, 'localabstract:scrcpy']);
 
-      // 4. Start scrcpy server with VIDEO enabled, max_size=720 to keep bandwidth low
-      const args = [
-        '-s', this.serial, 'shell',
-        'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
-        'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
-        'tunnel_forward=true',
-        'video=true',
-        'audio=false',
-        'control=true',
-        'display_id=0',
-        'max_size=720',
-        'video_bit_rate=2000000',
-        'max_fps=30',
-        'stay_awake=true',
-        'power_on=true',
-        'show_touches=false',
-        'power_off_on_close=false',
-        'clipboard_autosync=false',
-        'cleanup=true',
-        'send_device_meta=true',
-        'send_frame_meta=true',
-        'send_dummy_byte=true',
-      ];
+      // 4. Start scrcpy server
+      //    - max_fps=60 for near-zero latency
+      //    - max_size=720 keeps bandwidth and decode cost low
+      //    - video_bit_rate=4Mbps for good quality at 60fps
+      //    - send_frame_meta=true so we can strip the 12-byte meta header
+      //    - send_dummy_byte=true required for tunnel_forward
+      this._spawnServer();
 
-      this.serverProc = spawn(ADB_BIN, args, {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      this.serverProc.stderr.on('data', (d) => {
-        const msg = d.toString().trim();
-        if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] ${msg}`);
-      });
-
-      this.serverProc.on('error', (e) => logger.error(`[ScrcpyEngine ${this.serial}] proc error: ${e.message}`));
-      this.serverProc.on('close', (code) => {
-        logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (${code}) — restarting in 2s`);
-        this._cleanup();
-        if (this.isRunning) setTimeout(() => this._restart(), 2000);
-      });
-
-      // 5. Connect sockets — scrcpy tunnel_forward: first connect = video, second = control
+      // 5. Connect sockets (video + control)
       await this._connectSockets();
-      logger.info(`[ScrcpyEngine ${this.serial}] Video + control sockets ready`);
+      logger.info(`[ScrcpyEngine ${this.serial}] Ready — video+control sockets connected`);
 
     } catch (err) {
       logger.error(`[ScrcpyEngine ${this.serial}] Start failed: ${err.message}`);
       this.stop();
       throw err;
     }
+  }
+
+  _spawnServer() {
+    const args = [
+      '-s', this.serial, 'shell',
+      'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
+      'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
+      'tunnel_forward=true',
+      'video=true',
+      'audio=false',
+      'control=true',
+      'display_id=0',
+      'max_size=720',
+      'video_bit_rate=4000000',
+      'max_fps=60',
+      'stay_awake=true',
+      'power_on=true',
+      'show_touches=false',
+      'power_off_on_close=false',
+      'clipboard_autosync=false',
+      'cleanup=true',
+      'send_device_meta=true',
+      'send_frame_meta=true',
+      'send_dummy_byte=true',
+    ];
+
+    this.serverProc = spawn(ADB_BIN, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    this.serverProc.stderr.on('data', (d) => {
+      const msg = d.toString().trim();
+      if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
+    });
+
+    this.serverProc.on('error', (e) => {
+      logger.error(`[ScrcpyEngine ${this.serial}] proc error: ${e.message}`);
+    });
+
+    this.serverProc.on('close', (code) => {
+      logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (${code}) — restarting in 1.5s`);
+      this._cleanup();
+      if (this.isRunning) setTimeout(() => this._restart(), 1500);
+    });
   }
 
   stop() {
@@ -166,39 +182,39 @@ class ScrcpyEngine extends EventEmitter {
     if (this.serverProc)    { try { this.serverProc.kill();       } catch (_) {} this.serverProc    = null; }
   }
 
-  // ── Socket connection ───────────────────────────────────────────────────────
+  // ── Socket connection ─────────────────────────────────────────────────────
 
   async _connectSockets() {
-    // Wait for scrcpy server to start listening
-    await new Promise(r => setTimeout(r, 500));
+    // Give scrcpy server ~800ms to open the abstract socket
+    await new Promise(r => setTimeout(r, 800));
 
-    // First connection → video socket
+    // tunnel_forward: first connect = video socket, second connect = control socket
     this.videoSocket = await this._connectOne(this.videoPort);
     this.videoSocket.setNoDelay(true);
 
-    // Second connection → control socket
     this.controlSocket = await this._connectOne(this.videoPort);
     this.controlSocket.setNoDelay(true);
     this.controlSocket.setKeepAlive(true, 1000);
 
-    // Read and discard the dummy byte + device metadata header (69 bytes) on video socket
+    // Read and discard the handshake header on the video socket
     await this._readVideoHeader(this.videoSocket);
 
-    // Start relaying H264 NAL units to WS clients
+    // Start the H264 relay pipeline
     this._pipeVideoToClients(this.videoSocket);
 
     this.controlSocket.on('close', () => {
       this.controlSocket = null;
-      if (this.isRunning) setTimeout(() => this._reconnectControl(), 500);
+      if (this.isRunning) setTimeout(() => this._reconnectControl(), 300);
     });
     this.controlSocket.on('error', () => { this.controlSocket = null; });
   }
 
-  _connectOne(port, retries = 40) {
+  _connectOne(port, retries = 50) {
     return new Promise((resolve, reject) => {
       const attempt = (n) => {
         const s = net.connect({ port, host: '127.0.0.1' }, () => resolve(s));
         s.on('error', (e) => {
+          s.destroy();
           if (n <= 0) return reject(new Error(`Timeout connecting to port ${port}: ${e.message}`));
           setTimeout(() => attempt(n - 1), 150);
         });
@@ -208,35 +224,36 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Read and discard the scrcpy handshake header from the video socket.
-   * With tunnel_forward + send_dummy_byte=true:
-   *   - 1 dummy byte
-   *   - 64-byte device name string
-   *   - 4-byte codec id (e.g. "h264" = 0x68323634)
-   *   - 4-byte initial width
-   *   - 4-byte initial height
-   * Total: 1 + 64 + 4 + 4 + 4 = 77 bytes
+   * Read the scrcpy handshake header from the video socket.
+   *
+   * With tunnel_forward + send_dummy_byte=true + send_device_meta=true:
+   *   1 dummy byte  +  64-byte device name  +  4-byte codec id
+   *   +  4-byte initial width  +  4-byte initial height
+   *   = 77 bytes total
    */
   _readVideoHeader(socket) {
     return new Promise((resolve) => {
       let buf = Buffer.alloc(0);
-      const HEADER_LEN = 77; // 1 dummy + 64 device name + 4 codec + 4 w + 4 h
+      const HEADER_LEN = 77;
 
       const onData = (chunk) => {
         buf = Buffer.concat([buf, chunk]);
         if (buf.length >= HEADER_LEN) {
           socket.removeListener('data', onData);
-          // Parse device name and initial dimensions
+
           const deviceName = buf.slice(1, 65).toString('utf8').replace(/\0/g, '');
           const codec  = buf.readUInt32BE(65);
           const width  = buf.readUInt32BE(69);
           const height = buf.readUInt32BE(73);
-          logger.info(`[ScrcpyEngine ${this.serial}] Stream Header: ${deviceName} (${width}x${height}) codec=0x${codec.toString(16)}`);
+
+          logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" ${width}x${height} codec=0x${codec.toString(16)}`);
+
           if (width > 0 && height > 0) {
             this.screenWidth  = width;
             this.screenHeight = height;
           }
-          // Push back any bytes beyond the header for the video pipeline
+
+          // Push back any bytes that belong to the video stream
           if (buf.length > HEADER_LEN) {
             socket.unshift(buf.slice(HEADER_LEN));
           }
@@ -245,48 +262,54 @@ class ScrcpyEngine extends EventEmitter {
       };
 
       socket.on('data', onData);
-      socket.on('error', resolve);
-      socket.on('close', resolve);
+      socket.once('error', resolve);
+      socket.once('close', resolve);
     });
   }
 
   /**
-   * Relay raw H264 data from the video socket to all WS clients.
+   * Relay raw H264 NAL units from the video socket to all WS clients.
    *
-   * scrcpy wraps each H264 packet with a 12-byte frame meta header:
-   *   [0-7]  PTS (u64 BE) with flags in top 3 bits
-   *   [8-11] packet size (u32 BE)
+   * scrcpy frame meta (12 bytes per packet):
+   *   [0-7]  PTS u64BE — top bit set = config (SPS/PPS) packet
+   *   [8-11] payload size u32BE
    *
-   * We strip the meta header and forward raw NAL unit payloads so the
-   * browser WebCodecs decoder gets a clean Annex-B H264 stream.
+   * We strip the meta header and send the raw Annex-B payload to clients.
+   * Config packets are cached and re-sent to each new client connection.
    */
   _pipeVideoToClients(socket) {
     let buf = Buffer.alloc(0);
-    const META = 12; // frame meta header size
+    const META = 12;
 
     socket.on('data', (chunk) => {
+      // Append incoming chunk
       buf = Buffer.concat([buf, chunk]);
 
+      // Process as many complete packets as possible
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
-        if (buf.length < META + pktSize) break; // wait for full packet
+        if (buf.length < META + pktSize) break; // need more data
 
-        const pts   = buf.readBigUInt64BE(0);
-        const isConfig = Boolean(pts & 0x8000000000000000n); // top bit = config packet
+        const ptsHigh  = buf.readUInt32BE(0);
+        const isConfig = (ptsHigh & 0x80000000) !== 0; // top bit
 
         const payload = buf.slice(META, META + pktSize);
         buf = buf.slice(META + pktSize);
 
-        // Cache SPS/PPS config packet — sent to new clients on connect
+        // Cache config (SPS/PPS) — sent to every new client on join
         if (isConfig) {
-          this._spsBuffer = Buffer.from(payload);
+          this._configPacket = Buffer.from(payload);
+          logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
         }
 
         this._broadcastVideo(payload, isConfig);
       }
 
-      // Safety: cap buffer at 2MB
-      if (buf.length > 2 * 1024 * 1024) buf = Buffer.alloc(0);
+      // Safety: prevent unbounded growth (>1MB means something is badly wrong)
+      if (buf.length > 1024 * 1024) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow — resetting`);
+        buf = Buffer.alloc(0);
+      }
     });
 
     socket.on('close', () => {
@@ -303,25 +326,26 @@ class ScrcpyEngine extends EventEmitter {
   _broadcastVideo(payload, isConfig) {
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
-      // Backpressure: drop non-config frames if client is behind
-      if (!isConfig && ws.bufferedAmount > 512 * 1024) continue;
+      // Drop non-config frames only when client is significantly behind (64KB).
+      // Config packets ALWAYS go through so the decoder never loses its SPS/PPS.
+      if (!isConfig && ws.bufferedAmount > 64 * 1024) continue;
       try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
     }
   }
 
-  // ── Control protocol ────────────────────────────────────────────────────────
+  // ── Control protocol ──────────────────────────────────────────────────────
 
   /**
-   * INJECT_TOUCH_EVENT — 32 bytes (scrcpy 2.x protocol, verified against unit tests)
-   *   [0]     type=2
-   *   [1]     action  0=DOWN 1=UP 2=MOVE
-   *   [2-9]   pointer_id i64BE = -1 (POINTER_ID_VIRTUAL)
+   * INJECT_TOUCH_EVENT (32 bytes, scrcpy 2.x)
+   *   [0]     msg type = 2
+   *   [1]     action: 0=DOWN 1=UP 2=MOVE
+   *   [2-9]   pointer id i64BE (-1 = virtual)
    *   [10-13] x i32BE
    *   [14-17] y i32BE
    *   [18-19] screen width u16BE
    *   [20-21] screen height u16BE
-   *   [22-23] pressure u16BE (0xFFFF=1.0)
-   *   [24-27] action_button i32BE (1=PRIMARY on DOWN, 0 otherwise)
+   *   [22-23] pressure u16BE (0xFFFF = 1.0)
+   *   [24-27] action_button i32BE (1=PRIMARY on DOWN)
    *   [28-31] buttons i32BE (1 on DOWN/MOVE, 0 on UP)
    */
   sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
@@ -344,8 +368,8 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * INJECT_KEYCODE — 14 bytes
-   *   [0]     type=0
+   * INJECT_KEYCODE (14 bytes)
+   *   [0]     msg type = 0
    *   [1]     action 0=DOWN 1=UP
    *   [2-5]   keycode i32BE
    *   [6-9]   repeat i32BE
@@ -364,8 +388,8 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * INJECT_TEXT — variable
-   *   [0]     type=1
+   * INJECT_TEXT (variable)
+   *   [0]     msg type = 1
    *   [1-4]   text length i32BE
    *   [5...]  UTF-8 text
    */
@@ -380,7 +404,7 @@ class ScrcpyEngine extends EventEmitter {
     catch (_) { return false; }
   }
 
-  // ── Reconnect / restart ─────────────────────────────────────────────────────
+  // ── Reconnect / restart ───────────────────────────────────────────────────
 
   async _reconnectControl() {
     if (!this.isRunning) return;
@@ -389,7 +413,10 @@ class ScrcpyEngine extends EventEmitter {
       cs.setNoDelay(true);
       cs.setKeepAlive(true, 1000);
       this.controlSocket = cs;
-      cs.on('close', () => { this.controlSocket = null; if (this.isRunning) setTimeout(() => this._reconnectControl(), 500); });
+      cs.on('close', () => {
+        this.controlSocket = null;
+        if (this.isRunning) setTimeout(() => this._reconnectControl(), 300);
+      });
       cs.on('error', () => { this.controlSocket = null; });
     } catch (_) {
       if (this.isRunning) setTimeout(() => this._reconnectControl(), 1000);
@@ -400,27 +427,11 @@ class ScrcpyEngine extends EventEmitter {
     if (!this.isRunning) return;
     logger.info(`[ScrcpyEngine ${this.serial}] Restarting...`);
     try {
+      try { await this._adb(['forward', '--remove', `tcp:${this.videoPort}`]); } catch (_) {}
       await this._adb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
-      const args = [
-        '-s', this.serial, 'shell',
-        'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
-        'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
-        'tunnel_forward=true', 'video=true', 'audio=false', 'control=true',
-        'display_id=0', 'max_size=720', 'video_bit_rate=2000000', 'max_fps=30',
-        'stay_awake=true', 'power_on=true', 'show_touches=false',
-        'power_off_on_close=false', 'clipboard_autosync=false', 'cleanup=true',
-        'send_device_meta=true', 'send_frame_meta=true', 'send_dummy_byte=true',
-      ];
-      this.serverProc = spawn(ADB_BIN, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      this.serverProc.stderr.on('data', (d) => { const m = d.toString().trim(); if (m) logger.warn(`[ScrcpyEngine ${this.serial}] ${m}`); });
-      this.serverProc.on('error', () => {});
-      this.serverProc.on('close', (code) => {
-        logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (${code}) — restarting in 2s`);
-        this._cleanup();
-        if (this.isRunning) setTimeout(() => this._restart(), 2000);
-      });
+      this._spawnServer();
       await this._connectSockets();
-      logger.info(`[ScrcpyEngine ${this.serial}] Restarted`);
+      logger.info(`[ScrcpyEngine ${this.serial}] Restarted successfully`);
     } catch (err) {
       logger.warn(`[ScrcpyEngine ${this.serial}] Restart failed: ${err.message} — retry in 3s`);
       if (this.isRunning) setTimeout(() => this._restart(), 3000);
@@ -429,8 +440,8 @@ class ScrcpyEngine extends EventEmitter {
 
   _adb(args) {
     return new Promise((resolve, reject) => {
-      execFile(ADB_BIN, ['-s', this.serial, ...args], (err, stdout) => {
-        if (err) reject(err); else resolve(stdout);
+      execFile(ADB_BIN, ['-s', this.serial, ...args], { timeout: 10000 }, (err, stdout) => {
+        if (err) reject(err); else resolve(stdout || '');
       });
     });
   }

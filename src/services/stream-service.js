@@ -250,66 +250,137 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   // ── WebCodecs H264 decoder ───────────────────────────────────────────────
+  // Zero-latency design:
+  //   • latencyMode:'realtime' disables internal frame reordering buffers
+  //   • optimizeForLatency:true is the older Chrome hint — kept for compat
+  //   • We wait for a real SPS/PPS config packet before configuring so the
+  //     codec string (avc1.PPCCLL) reflects the actual stream profile/level.
+  //   • On every new config packet we re-configure without closing so Chrome
+  //     handles resolution changes seamlessly.
+
   let decoder = null;
-  let decoderReady = false;
-  let spsNal = null, ppsNal = null;
+  let decoderConfigured = false;
+  let pendingFrames = []; // frames held until decoder is configured
+  let lastTs = 0;
 
   function initDecoder() {
-    if (decoder) { try { decoder.close(); } catch(_){} }
+    if (decoder) {
+      try { decoder.close(); } catch (_) {}
+      decoder = null;
+    }
+    decoderConfigured = false;
     decoder = new VideoDecoder({
       output: (frame) => { queueDraw(frame); },
-      error:  (e) => { console.warn('Decoder error:', e); decoderReady = false; setTimeout(initDecoder, 500); }
+      error:  (e) => {
+        console.warn('[Decoder] error:', e);
+        decoderConfigured = false;
+        // Reset and wait for the next config packet to re-configure
+        try { decoder.reset(); } catch (_) {}
+      }
     });
-    decoder.configure({ codec: 'avc1.42E01F', optimizeForLatency: true });
-    decoderReady = true;
-    // Re-feed SPS/PPS if we have them
-    if (spsNal && ppsNal) feedConfig(spsNal, ppsNal);
+    console.log('[Decoder] created — waiting for SPS/PPS config');
   }
 
-  function feedConfig(sps, pps) {
-    if (!decoderReady || !decoder) return;
-    // Build Annex-B: 00 00 00 01 + SPS + 00 00 00 01 + PPS
-    const startCode = new Uint8Array([0,0,0,1]);
-    const combined = new Uint8Array(startCode.length + sps.length + startCode.length + pps.length);
-    let off = 0;
-    combined.set(startCode, off); off += startCode.length;
-    combined.set(sps, off);      off += sps.length;
-    combined.set(startCode, off); off += startCode.length;
-    combined.set(pps, off);
-    const chunk = new EncodedVideoChunk({ type: 'key', timestamp: 0, data: combined });
-    try { decoder.decode(chunk); } catch(_) {}
+  // Called with the raw config payload from scrcpy (Annex-B SPS+PPS)
+  function configureDecoder(configData) {
+    if (!decoder) return;
+    // Parse the SPS to extract profile/constraints/level for the codec string
+    const codecStr = parseSpsCodecString(configData) || 'avc1.42E01F';
+    try {
+      decoder.configure({
+        codec: codecStr,
+        optimizeForLatency: true,
+        // latencyMode is a newer hint — use if available
+        ...(('latencyMode' in VideoDecoderConfig) ? { latencyMode: 'realtime' } : {}),
+      });
+      decoderConfigured = true;
+      console.log('[Decoder] configured with', codecStr);
+      // Flush any frames that arrived before config
+      const held = pendingFrames.splice(0);
+      held.forEach(f => feedFrame(f.data, f.isKey));
+    } catch (e) {
+      console.warn('[Decoder] configure failed:', e);
+      decoderConfigured = false;
+    }
   }
 
-  function isKeyFrame(nal) {
-    // NAL unit type in lower 5 bits of first byte after start code
-    // IDR = 5, SPS = 7, PPS = 8
-    for (let i = 0; i < nal.length - 4; i++) {
-      if (nal[i]===0 && nal[i+1]===0 && nal[i+2]===0 && nal[i+3]===1) {
-        const t = nal[i+4] & 0x1f;
-        if (t === 5) return true;
-        if (t === 7 || t === 8) return true;
+  // Extract avc1.PPCCLL string from Annex-B SPS NAL
+  function parseSpsCodecString(data) {
+    try {
+      const u8 = new Uint8Array(data);
+      for (let i = 0; i < u8.length - 4; i++) {
+        if (u8[i]===0 && u8[i+1]===0 && u8[i+2]===0 && u8[i+3]===1) {
+          const nalType = u8[i+4] & 0x1f;
+          if (nalType === 7 && i + 7 < u8.length) {
+            // SPS: profile_idc, constraint_flags, level_idc
+            const p  = u8[i+5].toString(16).padStart(2,'0');
+            const c  = u8[i+6].toString(16).padStart(2,'0');
+            const l  = u8[i+7].toString(16).padStart(2,'0');
+            return \`avc1.\${p}\${c}\${l}\`;
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function feedFrame(data, isKey) {
+    if (!decoder || decoder.state === 'closed') return;
+    if (!decoderConfigured) {
+      // Hold onto it but cap the queue so we don't explode memory
+      if (isKey) pendingFrames = [{ data, isKey }]; // only keep latest keyframe
+      return;
+    }
+    // Use monotonically increasing timestamps (microseconds)
+    const ts = Math.max(lastTs + 1, Math.floor(performance.now() * 1000));
+    lastTs = ts;
+    try {
+      decoder.decode(new EncodedVideoChunk({ type: isKey ? 'key' : 'delta', timestamp: ts, data }));
+    } catch (e) {
+      console.warn('[Decoder] decode error:', e);
+    }
+  }
+
+  // Scan a NAL buffer to determine if it contains a keyframe (IDR)
+  function isKeyFrame(buf) {
+    const u8 = new Uint8Array(buf);
+    for (let i = 0; i < u8.length - 4; i++) {
+      if (u8[i]===0 && u8[i+1]===0 && u8[i+2]===0 && u8[i+3]===1) {
+        const t = u8[i+4] & 0x1f;
+        if (t === 5 || t === 7) return true; // IDR or SPS-prefixed keyframe
       }
     }
     return false;
   }
 
-  function parseAndFeedNal(data) {
-    if (!decoderReady || !decoder) return;
-    const nal = new Uint8Array(data);
+  // Called for every binary WS message.
+  // The server sends either:
+  //   • config packet (SPS+PPS, top bit of PTS was set) — use to configure decoder
+  //   • video packet  (raw Annex-B H264 NAL units)     — feed to decoder
+  // We detect config vs video by scanning for SPS (type 7) at the start.
+  let waitingForConfig = true;
 
-    // Detect SPS (type 7) and PPS (type 8) — these are the config packets
-    for (let i = 0; i < nal.length - 4; i++) {
-      if (nal[i]===0 && nal[i+1]===0 && nal[i+2]===0 && nal[i+3]===1) {
-        const t = nal[i+4] & 0x1f;
-        if (t === 7) spsNal = nal.slice(i+4); // strip start code
-        if (t === 8) ppsNal = nal.slice(i+4);
+  function parseAndFeedNal(data) {
+    const u8 = new Uint8Array(data);
+
+    // Check if this packet starts with / contains SPS (NAL type 7)
+    let hasSpsPps = false;
+    for (let i = 0; i < Math.min(u8.length - 4, 64); i++) {
+      if (u8[i]===0 && u8[i+1]===0 && u8[i+2]===0 && u8[i+3]===1) {
+        const t = u8[i+4] & 0x1f;
+        if (t === 7) { hasSpsPps = true; break; }
       }
     }
 
-    const kf = isKeyFrame(nal);
-    const ts  = performance.now() * 1000; // microseconds
-    const chunk = new EncodedVideoChunk({ type: kf ? 'key' : 'delta', timestamp: ts, data: nal });
-    try { decoder.decode(chunk); } catch(_) {}
+    if (hasSpsPps) {
+      waitingForConfig = false;
+      configureDecoder(data);
+      return; // config packet — do not decode as video frame
+    }
+
+    if (waitingForConfig) return; // drop frames until we have a config
+
+    feedFrame(data, isKeyFrame(u8));
   }
 
   // ── WebSocket connection ─────────────────────────────────────────────────
@@ -326,8 +397,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
       clearTimeout(fallback);
       wsOk = true;
       modeText.textContent = 'H264 LIVE';
-      // Init decoder only once WebCodecs is confirmed available
       if (typeof VideoDecoder !== 'undefined') {
+        // Reset state for fresh connection
+        waitingForConfig = true;
+        pendingFrames = [];
+        lastTs = 0;
         initDecoder();
       } else {
         modeText.textContent = 'LIVE (compat)';
@@ -342,7 +416,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
 
     ws.onerror = () => { clearTimeout(fallback); if (!wsOk) startFallback(); };
-    ws.onclose = () => { wsOk = false; decoderReady = false; setTimeout(connectWS, 1000); };
+    ws.onclose = () => { wsOk = false; decoderConfigured = false; waitingForConfig = true; setTimeout(connectWS, 1000); };
   }
 
   // ── PNG/JPEG screencap fallback (for browsers without WebCodecs) ──────────
@@ -397,7 +471,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   // ── Pointer events ───────────────────────────────────────────────────────
-  let down = false, lastMove = 0;
+  let down = false;
 
   canvas.addEventListener('mousedown',  onDown);
   canvas.addEventListener('mousemove',  onMove);
@@ -414,7 +488,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
   function onMove(e) {
     if (!down) return; e.preventDefault();
-    const now = Date.now(); if (now - lastMove < 8) return; lastMove = now;
     const c = coords(e);
     send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH });
   }
@@ -498,11 +571,11 @@ async function startStreamServer(serial, port) {
     return cachedStatus;
   }
 
-  // Start scrcpy engine (video + control)
+  // Start scrcpy engine (video + control share same ADB-forwarded port)
   const engine = new ScrcpyEngine(serial);
   const videoPort = port + 1000;
   try {
-    await engine.start(videoPort, videoPort);
+    await engine.start(videoPort);
     logger.info(`[StreamServer] ScrcpyEngine ready for ${serial}`);
   } catch (err) {
     logger.warn(`[StreamServer] ScrcpyEngine failed for ${serial}: ${err.message} — screencap fallback active`);
