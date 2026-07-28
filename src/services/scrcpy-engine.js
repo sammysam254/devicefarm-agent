@@ -143,6 +143,7 @@ class ScrcpyEngine extends EventEmitter {
       'send_device_meta=true',
       'send_frame_meta=true',
       'send_dummy_byte=true',
+      'send_codec_meta=true',
     ];
 
     this.serverProc = spawn(ADB_BIN, args, {
@@ -224,17 +225,28 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Read the scrcpy handshake header from the video socket.
+   * Read the scrcpy v2.x handshake header from the video socket.
    *
-   * With tunnel_forward + send_dummy_byte=true + send_device_meta=true:
-   *   1 dummy byte  +  64-byte device name  +  4-byte codec id
-   *   +  4-byte initial width  +  4-byte initial height
-   *   = 77 bytes total
+   * With tunnel_forward + send_dummy_byte=true:
+   *   Byte 0       : dummy byte (always 0)
+   *
+   * With send_device_meta=true (v2.x):
+   *   Bytes 1-64   : device name (64 bytes, null-padded)
+   *
+   * With send_codec_meta=true (v2.x):
+   *   Bytes 65-68  : codec id u32BE  (e.g. 0x68323634 = "h264")
+   *   Bytes 69-72  : initial width  u32BE
+   *   Bytes 73-76  : initial height u32BE
+   *
+   * Total with both: 1 + 64 + 4 + 4 + 4 = 77 bytes
+   *
+   * NOTE: send_device_meta alone only sends name (65 bytes total).
+   *       We set BOTH flags so we always get the full 77-byte header.
    */
   _readVideoHeader(socket) {
     return new Promise((resolve) => {
       let buf = Buffer.alloc(0);
-      const HEADER_LEN = 77;
+      const HEADER_LEN = 77; // 1 dummy + 64 name + 4 codec + 4 w + 4 h
 
       const onData = (chunk) => {
         buf = Buffer.concat([buf, chunk]);
@@ -248,7 +260,7 @@ class ScrcpyEngine extends EventEmitter {
 
           logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" ${width}x${height} codec=0x${codec.toString(16)}`);
 
-          if (width > 0 && height > 0) {
+          if (width > 0 && width < 10000 && height > 0 && height < 10000) {
             this.screenWidth  = width;
             this.screenHeight = height;
           }

@@ -398,20 +398,22 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   // ── WebSocket connection ─────────────────────────────────────────────────
   let ws = null, wsOk = false;
+  let wsFailCount = 0;       // number of consecutive WS failures
+  let wsRetryTimer = null;
 
   function connectWS() {
+    if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws');
     ws.binaryType = 'arraybuffer';
 
-    const fallback = setTimeout(() => { if (!wsOk) startFallback(); }, 3000);
-
     ws.onopen = () => {
-      clearTimeout(fallback);
       wsOk = true;
+      wsFailCount = 0;
       modeText.textContent = 'H264 LIVE';
+      // Stop any running screencap fallback immediately
+      fbRunning = false;
       if (typeof VideoDecoder !== 'undefined') {
-        // Reset state for fresh connection
         waitingForConfig = true;
         pendingFrames = [];
         lastTs = 0;
@@ -428,8 +430,24 @@ function buildPlayerHtml(serial, screenW, screenH) {
       parseAndFeedNal(e.data);
     };
 
-    ws.onerror = () => { clearTimeout(fallback); if (!wsOk) startFallback(); };
-    ws.onclose = () => { wsOk = false; decoderConfigured = false; waitingForConfig = true; setTimeout(connectWS, 1000); };
+    // On error: just retry — don't start screencap fallback yet.
+    // Cloudflare tunnels return 530/503 during startup for 10-30s.
+    ws.onerror = () => {};
+
+    ws.onclose = () => {
+      wsOk = false;
+      decoderConfigured = false;
+      waitingForConfig = true;
+      wsFailCount++;
+      // Only fall back to screencap after 10 consecutive WS failures (~10s)
+      // This covers the Cloudflare tunnel startup window.
+      if (wsFailCount >= 10 && typeof VideoDecoder === 'undefined') {
+        startFallback();
+      }
+      // Retry: fast at first (500ms), then every 1s once tunnel is up
+      const delay = wsFailCount < 5 ? 500 : 1000;
+      wsRetryTimer = setTimeout(connectWS, delay);
+    };
   }
 
   // ── PNG/JPEG screencap fallback (for browsers without WebCodecs) ──────────
@@ -439,7 +457,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
     fbRunning = true;
     modeText.textContent = 'SCREENCAP';
     (function pull() {
+      // Stop as soon as WS is alive and WebCodecs is available
       if (wsOk && typeof VideoDecoder !== 'undefined') { fbRunning = false; return; }
+      if (!fbRunning) return; // stopped externally (WS connected)
       fetch('/screen.jpg?t=' + Date.now())
         .then(r => r.blob()).then(b => createImageBitmap(b))
         .then(bmp => { queueDraw(bmp); requestAnimationFrame(pull); })
