@@ -31,6 +31,9 @@ class ScrcpyEngine extends EventEmitter {
     this.controlSocket = null;
     this.isRunning = false;
     this.videoPort = null;
+    // Real device screen dimensions — fetched once on start, used for touch scaling
+    this.screenWidth  = 1080;
+    this.screenHeight = 2400;
   }
 
   get isReady() {
@@ -43,6 +46,17 @@ class ScrcpyEngine extends EventEmitter {
     this.isRunning = true;
 
     try {
+      // Fetch real screen dimensions first — avoids "different device size" warnings
+      try {
+        const sizeOut = await this._execAdb(['shell', 'wm', 'size']);
+        const m = sizeOut.match(/Physical size:\s*(\d+)x(\d+)/);
+        if (m) {
+          this.screenWidth  = parseInt(m[1], 10);
+          this.screenHeight = parseInt(m[2], 10);
+          logger.info(`[ScrcpyEngine ${this.serial}] Screen size: ${this.screenWidth}x${this.screenHeight}`);
+        }
+      } catch (_) { /* keep defaults */ }
+
       await this._execAdb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
       await this._execAdb(['forward', `tcp:${videoPort}`, 'localabstract:scrcpy']);
 
@@ -117,21 +131,43 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Inject touch event via Scrcpy Control Protocol.
+   * Inject touch event via Scrcpy Control Protocol (v2.4).
    * action: 0=DOWN, 1=UP, 2=MOVE
+   *
+   * Correct 32-byte layout per scrcpy unit tests:
+   *   [0]     type           = 2 (INJECT_TOUCH_EVENT)
+   *   [1]     action         = 0/1/2
+   *   [2-9]   pointer_id     = i64 BE  (use -1 = POINTER_ID_VIRTUAL)
+   *   [10-13] x              = i32 BE
+   *   [14-17] y              = i32 BE
+   *   [18-19] screen width   = u16 BE  (must match real device width)
+   *   [20-21] screen height  = u16 BE  (must match real device height)
+   *   [22-23] pressure       = u16 BE  (0xFFFF = 1.0)
+   *   [24-27] action_button  = i32 BE  (1 = PRIMARY, 0 for MOVE/UP)
+   *   [28-31] buttons        = i32 BE  (1 = PRIMARY held)
    */
-  sendTouchEvent(action, x, y, width, height, pointerId = 0n, pressure = 1.0) {
+  sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-    const buf = Buffer.allocUnsafe(28);
+
+    const W = (width  && width  > 100) ? width  : this.screenWidth;
+    const H = (height && height > 100) ? height : this.screenHeight;
+
+    // action_button: 1 (PRIMARY) on DOWN, 0 on MOVE/UP
+    // buttons: 1 (PRIMARY held) on DOWN/MOVE, 0 on UP
+    const actionButton = (action === 0) ? 1 : 0;
+    const buttons      = (action === 1) ? 0 : 1;
+
+    const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                              // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);
-    buf.writeBigInt64BE(BigInt(pointerId), 2);
+    buf.writeBigInt64BE(-1n, 2);                       // POINTER_ID_VIRTUAL
     buf.writeInt32BE(Math.round(x), 10);
     buf.writeInt32BE(Math.round(y), 14);
-    buf.writeUInt16BE(Math.round(width), 18);
-    buf.writeUInt16BE(Math.round(height), 20);
+    buf.writeUInt16BE(W, 18);
+    buf.writeUInt16BE(H, 20);
     buf.writeUInt16BE(Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(0, 24);                           // buttons
+    buf.writeInt32BE(actionButton, 24);                // action_button
+    buf.writeInt32BE(buttons, 28);                     // buttons
     try {
       this.controlSocket.write(buf);
       return true;
