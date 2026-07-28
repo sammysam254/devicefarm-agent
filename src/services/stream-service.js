@@ -257,6 +257,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
+    lastDecodedFrameTime = Date.now();
     countFrame();
   }
 
@@ -306,6 +307,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
     return types;
   }
 
+  let lastDecodedFrameTime = 0;
+  setInterval(() => {
+    if (lastDecodedFrameTime > 0 && Date.now() - lastDecodedFrameTime > 1500 && !fbRunning) {
+      console.warn('[Watchdog] No H264 frames rendered in 1.5s — enabling screencap fallback');
+      startFallback();
+    }
+  }, 1000);
+
   function parseSpsCodecString(data) {
     try {
       const u8 = new Uint8Array(data);
@@ -315,9 +324,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
           if (offset > 0 && i + offset < u8.length) {
             const nalType = u8[i + offset] & 0x1f;
             if (nalType === 7 && i + offset + 3 < u8.length) {
-              const p = u8[i + offset + 1].toString(16).padStart(2, '0');
-              const c = u8[i + offset + 2].toString(16).padStart(2, '0');
-              const l = u8[i + offset + 3].toString(16).padStart(2, '0');
+              const p = u8[i + offset + 1].toString(16).padStart(2, '0').toUpperCase();
+              const c = u8[i + offset + 2].toString(16).padStart(2, '0').toUpperCase();
+              const l = u8[i + offset + 3].toString(16).padStart(2, '0').toUpperCase();
               return 'avc1.' + p + c + l;
             }
           }
@@ -406,6 +415,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       wsOk = true;
       wsFailCount = 0;
       modeText.textContent = 'H264 LIVE';
+      lastDecodedFrameTime = Date.now();
       // Stop any running screencap fallback immediately
       fbRunning = false;
       if (typeof VideoDecoder !== 'undefined') {
