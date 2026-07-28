@@ -108,7 +108,11 @@ class ScrcpyEngine extends EventEmitter {
 
       // 2. Push server jar (once per device session)
       if (!this._jarPushed) {
-        await this._adb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
+        try {
+          await this._adb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
+        } catch (e) {
+          logger.warn(`[ScrcpyEngine ${this.serial}] Push warning: ${e.message}`);
+        }
         this._jarPushed = true;
       }
 
