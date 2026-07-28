@@ -1,19 +1,27 @@
 'use strict';
 
-const { spawn, exec, execFile } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const EventEmitter = require('events');
 const logger = require('../utils/logger');
 
-const ADB_BIN = process.platform === 'win32' ? 'C:\\platform-tools\\adb.exe' : 'adb';
+const ADB_BIN = (() => {
+  const candidates = [
+    'C:\\platform-tools\\adb.exe',
+    path.join(process.cwd(), 'assets', 'bin', 'adb.exe'),
+  ];
+  for (const p of candidates) if (fs.existsSync(p)) return p;
+  return 'adb';
+})();
+
 const SCRCPY_JAR_PATH = path.join(process.cwd(), 'scrcpy-server.jar');
 
 /**
  * Scrcpy Engine for a single device.
- * Pushes scrcpy-server.jar, starts device server, connects to video & control sockets,
- * parses H.264 video streams, and injects touchscreen input events natively via InputManager.
+ * Connects only a control socket (video=false) for ultra-low-latency input injection.
+ * Screen capture is handled separately by FrameCaptureEngine.
  */
 class ScrcpyEngine extends EventEmitter {
   constructor(serial) {
@@ -23,36 +31,27 @@ class ScrcpyEngine extends EventEmitter {
     this.controlSocket = null;
     this.isRunning = false;
     this.videoPort = null;
-    this.wsClients = new Set();
   }
 
   get isReady() {
     return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
   }
 
-  async start(videoPort, controlPort) {
+  async start(videoPort) {
     if (this.isRunning) return;
     this.videoPort = videoPort;
-    this.controlPort = controlPort;
     this.isRunning = true;
 
     try {
-      // 1. Push scrcpy-server.jar to device /data/local/tmp
       await this._execAdb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
-
-      // 2. Setup socket port forwards
       await this._execAdb(['forward', `tcp:${videoPort}`, 'localabstract:scrcpy']);
 
-      // 3. Launch scrcpy server on device — video=false: control-only, no PiP, no video socket
       const scrcpyArgs = [
-        '-s',
-        this.serial,
+        '-s', this.serial,
         'shell',
         'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
-        'app_process',
-        '/',
-        'com.genymobile.scrcpy.Server',
-        '2.4',
+        'app_process', '/',
+        'com.genymobile.scrcpy.Server', '2.4',
         'tunnel_forward=true',
         'video=false',
         'audio=false',
@@ -63,38 +62,39 @@ class ScrcpyEngine extends EventEmitter {
         'power_off_on_close=false',
         'clipboard_autosync=false',
         'cleanup=true',
-        'power_on=true'
+        'power_on=true',
       ];
 
       this.serverProc = spawn(ADB_BIN, scrcpyArgs, {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       if (this.serverProc.stderr) {
-        this.serverProc.stderr.on('data', (data) => {
-          const msg = data.toString().trim();
-          if (msg) logger.warn(`[ScrcpyEngine ${this.serial} stderr] ${msg}`);
+        this.serverProc.stderr.on('data', (d) => {
+          const msg = d.toString().trim();
+          if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] ${msg}`);
         });
       }
 
       this.serverProc.on('error', (err) => {
-        logger.error(`[ScrcpyEngine ${this.serial}] Server process error:`, err.message);
+        logger.error(`[ScrcpyEngine ${this.serial}] Process error: ${err.message}`);
       });
 
       this.serverProc.on('close', (code) => {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Server process exited with code ${code} — auto-restarting...`);
+        logger.warn(`[ScrcpyEngine ${this.serial}] Process exited (${code}) — restarting in 1s`);
         this.serverProc = null;
-        if (this.controlSocket) { try { this.controlSocket.destroy(); } catch (_) {} this.controlSocket = null; }
+        if (this.controlSocket) {
+          try { this.controlSocket.destroy(); } catch (_) {}
+          this.controlSocket = null;
+        }
         if (this.isRunning) setTimeout(() => this._restart(), 1000);
       });
 
-      // 4. Connect control socket (video=false: only control)
-      await this._connectSockets();
-
-      logger.info(`[ScrcpyEngine ${this.serial}] Started successfully`);
+      await this._connectControl();
+      logger.info(`[ScrcpyEngine ${this.serial}] Control socket ready`);
     } catch (err) {
-      logger.error(`[ScrcpyEngine ${this.serial}] Failed to start:`, err.message);
+      logger.error(`[ScrcpyEngine ${this.serial}] Failed to start: ${err.message}`);
       this.stop();
       throw err;
     }
@@ -102,43 +102,28 @@ class ScrcpyEngine extends EventEmitter {
 
   stop() {
     this.isRunning = false;
-
     if (this.controlSocket) {
       try { this.controlSocket.destroy(); } catch (_) {}
       this.controlSocket = null;
     }
-
     if (this.serverProc) {
       try { this.serverProc.kill(); } catch (_) {}
       this.serverProc = null;
     }
-
     if (this.videoPort) {
       this._execAdb(['forward', '--remove', `tcp:${this.videoPort}`]).catch(() => {});
     }
-
-    this.wsClients.clear();
     this.emit('stopped');
   }
 
-  addClient(ws) {
-    this.wsClients.add(ws);
-  }
-
-  removeClient(ws) {
-    this.wsClients.delete(ws);
-  }
-
   /**
-   * Inject touch event directly via Scrcpy Control Protocol.
-   * Action: 0 = AMOTION_EVENT_ACTION_DOWN, 1 = UP, 2 = MOVE
-   * Injected natively as SOURCE_TOUCHSCREEN via Android InputManager.
+   * Inject touch event via Scrcpy Control Protocol.
+   * action: 0=DOWN, 1=UP, 2=MOVE
    */
   sendTouchEvent(action, x, y, width, height, pointerId = 0n, pressure = 1.0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-
-    const buf = Buffer.alloc(28);
-    buf.writeUInt8(2, 0); // INJECT_TOUCH_EVENT
+    const buf = Buffer.allocUnsafe(28);
+    buf.writeUInt8(2, 0);                              // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);
     buf.writeBigInt64BE(BigInt(pointerId), 2);
     buf.writeInt32BE(Math.round(x), 10);
@@ -146,31 +131,28 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(Math.round(width), 18);
     buf.writeUInt16BE(Math.round(height), 20);
     buf.writeUInt16BE(Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(0, 24); // buttons
-
+    buf.writeInt32BE(0, 24);                           // buttons
     try {
       this.controlSocket.write(buf);
       return true;
     } catch (err) {
-      logger.error(`[ScrcpyEngine ${this.serial}] Touch write error:`, err.message);
+      logger.error(`[ScrcpyEngine ${this.serial}] Touch write error: ${err.message}`);
       return false;
     }
   }
 
   /**
-   * Inject Keycode via Scrcpy Control Protocol.
-   * Action: 0 = ACTION_DOWN, 1 = ACTION_UP
+   * Inject keycode via Scrcpy Control Protocol.
+   * action: 0=DOWN, 1=UP
    */
   sendKeycode(action, keycode, repeat = 0, metastate = 0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-
-    const buf = Buffer.alloc(14);
-    buf.writeUInt8(0, 0); // INJECT_KEYCODE
+    const buf = Buffer.allocUnsafe(14);
+    buf.writeUInt8(0, 0);           // INJECT_KEYCODE
     buf.writeUInt8(action, 1);
     buf.writeInt32BE(keycode, 2);
     buf.writeInt32BE(repeat, 6);
     buf.writeInt32BE(metastate, 10);
-
     try {
       this.controlSocket.write(buf);
       return true;
@@ -179,29 +161,28 @@ class ScrcpyEngine extends EventEmitter {
 
   sendText(text) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-
     const textBuf = Buffer.from(text, 'utf-8');
-    const buf = Buffer.alloc(5 + textBuf.length);
-    buf.writeUInt8(1, 0); // INJECT_TEXT
+    const buf = Buffer.allocUnsafe(5 + textBuf.length);
+    buf.writeUInt8(1, 0);           // INJECT_TEXT
     buf.writeInt32BE(textBuf.length, 1);
     textBuf.copy(buf, 5);
-
     try {
       this.controlSocket.write(buf);
       return true;
     } catch (_) { return false; }
   }
 
-  async _connectSockets() {
+  async _connectControl() {
     let retries = 30;
-    while (retries > 0 && this.isRunning) {
+    while (retries-- > 0 && this.isRunning) {
       try {
-        // video=false: only one control socket is opened by scrcpy
         await new Promise((resolve, reject) => {
           const cs = net.connect({ port: this.videoPort, host: '127.0.0.1' }, () => {
+            // Disable Nagle — send control messages immediately
+            cs.setNoDelay(true);
+            cs.setKeepAlive(true, 1000);
             this.controlSocket = cs;
             cs.on('close', () => {
-              logger.warn(`[ScrcpyEngine ${this.serial}] Control socket closed — reconnecting...`);
               this.controlSocket = null;
               if (this.isRunning) setTimeout(() => this._reconnectControl(), 500);
             });
@@ -211,8 +192,7 @@ class ScrcpyEngine extends EventEmitter {
           cs.on('error', reject);
         });
         return;
-      } catch (err) {
-        retries--;
+      } catch (_) {
         await new Promise((r) => setTimeout(r, 100));
       }
     }
@@ -224,6 +204,8 @@ class ScrcpyEngine extends EventEmitter {
     try {
       await new Promise((resolve, reject) => {
         const cs = net.connect({ port: this.videoPort, host: '127.0.0.1' }, () => {
+          cs.setNoDelay(true);
+          cs.setKeepAlive(true, 1000);
           this.controlSocket = cs;
           cs.on('close', () => {
             this.controlSocket = null;
@@ -250,24 +232,26 @@ class ScrcpyEngine extends EventEmitter {
         'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
         'tunnel_forward=true', 'video=false', 'audio=false', 'control=true',
         'display_id=0', 'show_touches=false', 'stay_awake=true',
-        'power_off_on_close=false', 'clipboard_autosync=false',
-        'cleanup=true', 'power_on=true'
+        'power_off_on_close=false', 'clipboard_autosync=false', 'cleanup=true', 'power_on=true',
       ];
-      this.serverProc = spawn(ADB_BIN, scrcpyArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      this.serverProc = spawn(ADB_BIN, scrcpyArgs, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       if (this.serverProc.stderr) {
-        this.serverProc.stderr.on('data', (data) => {
-          const msg = data.toString().trim();
-          if (msg) logger.warn(`[ScrcpyEngine ${this.serial} stderr] ${msg}`);
+        this.serverProc.stderr.on('data', (d) => {
+          const msg = d.toString().trim();
+          if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] ${msg}`);
         });
       }
       this.serverProc.on('error', () => {});
       this.serverProc.on('close', (code) => {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Server process exited with code ${code} — auto-restarting...`);
+        logger.warn(`[ScrcpyEngine ${this.serial}] Process exited (${code}) — restarting in 1s`);
         this.serverProc = null;
         if (this.controlSocket) { try { this.controlSocket.destroy(); } catch (_) {} this.controlSocket = null; }
         if (this.isRunning) setTimeout(() => this._restart(), 1000);
       });
-      await this._connectSockets();
+      await this._connectControl();
       logger.info(`[ScrcpyEngine ${this.serial}] Restarted successfully`);
     } catch (err) {
       logger.warn(`[ScrcpyEngine ${this.serial}] Restart failed: ${err.message} — retrying in 3s`);
@@ -278,8 +262,7 @@ class ScrcpyEngine extends EventEmitter {
   _execAdb(args) {
     return new Promise((resolve, reject) => {
       execFile(ADB_BIN, ['-s', this.serial, ...args], (err, stdout) => {
-        if (err) reject(err);
-        else resolve(stdout);
+        if (err) reject(err); else resolve(stdout);
       });
     });
   }
