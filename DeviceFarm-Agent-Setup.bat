@@ -87,6 +87,7 @@ echo =======================================================================
 echo.
 
 taskkill /F /IM electron.exe /T >nul 2>nul
+taskkill /F /IM node.exe /T >nul 2>nul
 
 set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
 if exist "%ELECTRON_BIN%" (

@@ -145,23 +145,9 @@ class ScrcpyEngine extends EventEmitter {
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
-      'video=true',
       'audio=false',
       'control=true',
-      'display_id=0',
-      'max_size=720',
-      'video_bit_rate=2500000',
-      'max_fps=60',
-      'i_frame_interval=1',
-      'stay_awake=true',
-      'power_on=true',
-      'show_touches=false',
-      'power_off_on_close=false',
-      'clipboard_autosync=false',
       'cleanup=true',
-      'send_device_meta=true',
-      'send_codec_meta=true',
-      'send_frame_meta=true',
       'send_dummy_byte=true',
     ];
 
@@ -208,16 +194,19 @@ class ScrcpyEngine extends EventEmitter {
     // Give scrcpy server ~800ms to open the abstract socket
     await new Promise(r => setTimeout(r, 800));
 
-    // tunnel_forward: first connect = video socket, second connect = control socket
+    // tunnel_forward: 1st connect = video socket, 2nd connect = control socket
     this.videoSocket = await this._connectOne(this.videoPort);
     this.videoSocket.setNoDelay(true);
+
+    // Start video relay pipeline immediately so dummy/header bytes are consumed
+    this._pipeVideoToClients(this.videoSocket);
+
+    // Wait 250ms for scrcpy encoder initialization before connecting control socket
+    await new Promise(r => setTimeout(r, 250));
 
     this.controlSocket = await this._connectOne(this.videoPort);
     this.controlSocket.setNoDelay(true);
     this.controlSocket.setKeepAlive(true, 1000);
-
-    // Start single continuous video relay pipeline (header + frame stream)
-    this._pipeVideoToClients(this.videoSocket);
 
     this.controlSocket.on('close', () => {
       this.controlSocket = null;
@@ -250,28 +239,26 @@ class ScrcpyEngine extends EventEmitter {
     let buf = Buffer.alloc(0);
     let headerDone = false;
     const META = 12;
-    const HEADER_LEN = 77;
+    const HEADER_LEN = 65;
 
     socket.on('data', (chunk) => {
       buf = Buffer.concat([buf, chunk]);
 
-      // 1. Read scrcpy header in single continuous stream
+      // 1. Auto-align stream header (1 dummy byte vs 65-byte device meta)
       if (!headerDone) {
-        if (buf.length < HEADER_LEN) return;
+        if (buf.length < 13) return; // Need at least 1 dummy + 12-byte META header
 
-        const deviceName = buf.slice(1, 65).toString('utf8').replace(/\0/g, '');
-        const codecId = buf.readUInt32BE(65);
-        const w = buf.readUInt32BE(69);
-        const h = buf.readUInt32BE(73);
-
-        if (w > 0 && h > 0) {
-          this.screenWidth = w;
-          this.screenHeight = h;
+        let headerLen = 1; // Default 1 dummy byte
+        if (buf.length >= 77) {
+          const sizeAt65 = buf.readUInt32BE(65 + 8);
+          if (sizeAt65 > 0 && sizeAt65 < 1000000) {
+            headerLen = 65;
+          }
         }
 
-        logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" codec=0x${codecId.toString(16)} resolution=${this.screenWidth}x${this.screenHeight}`);
+        logger.info(`[ScrcpyEngine ${this.serial}] Stream Header aligned: headerLen=${headerLen}B (totalInitialBuf=${buf.length}B)`);
         headerDone = true;
-        buf = buf.slice(HEADER_LEN);
+        buf = buf.slice(headerLen);
       }
 
       // 2. Process video frame packets

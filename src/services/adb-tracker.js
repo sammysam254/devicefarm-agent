@@ -172,7 +172,7 @@ async function handleDeviceRemove(device) {
   recentRemovals.set(serial, Date.now());
 
   processManager.killDeviceProcesses(serial);
-  await apiClient.deregisterDevice(serial);
+  try { await apiClient.deregisterDevice(serial); } catch (_) {}
   logger.info(`Device ${serial} cleanup complete`);
 }
 

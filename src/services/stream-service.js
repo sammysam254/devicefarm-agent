@@ -655,21 +655,23 @@ async function startStreamServer(serial, port) {
   // ── WebSocket — relay H264 from scrcpy engine to browser ─────────────────
   const wss = new WebSocket.Server({ server, path: '/ws' });
 
-  wss.on('connection', async (ws) => {
-    const status = await getRentalStatus();
-    if (!status.isPaid) {
-      try { ws.send(JSON.stringify({type:'error',error:'Payment required'})); ws.close(4002,'Unpaid'); } catch (_) {}
-      return;
-    }
-
+  wss.on('connection', (ws) => {
     logger.info(`[StreamServer] WS connected for ${serial}`);
 
-    // Register client with scrcpy engine — engine will push H264 NALs
+    // Register client with scrcpy engine immediately for zero-latency frame delivery
     engine.addClient(ws);
+
+    // Perform rental payment check asynchronously without blocking stream delivery
+    getRentalStatus().then(status => {
+      if (!status || !status.isPaid) {
+        try { ws.send(JSON.stringify({type:'error',error:'Payment required'})); ws.close(4002,'Unpaid'); } catch (_) {}
+        engine.removeClient(ws);
+      }
+    }).catch(() => {});
 
     const payCheck = setInterval(async () => {
       const s = await getRentalStatus();
-      if (!s.isPaid) ws.close(4002, 'Unpaid');
+      if (!s.isPaid) { engine.removeClient(ws); ws.close(4002, 'Unpaid'); }
     }, 60000);
 
     ws.on('message', (msg) => {
