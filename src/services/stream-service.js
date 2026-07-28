@@ -459,14 +459,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
     fbRunning = true;
     modeText.textContent = 'SCREENCAP';
     (function pull() {
-      // Stop as soon as WS is alive and WebCodecs is available
-      if (wsOk && typeof VideoDecoder !== 'undefined') { fbRunning = false; return; }
-      if (!fbRunning) return; // stopped externally (WS connected)
+      if (!fbRunning) return; // stopped externally
       const q = location.search ? location.search + '&t=' + Date.now() : '?t=' + Date.now();
       fetch('/screen.jpg' + q)
         .then(r => r.blob()).then(b => createImageBitmap(b))
         .then(bmp => { queueDraw(bmp); requestAnimationFrame(pull); })
-        .catch(() => setTimeout(pull, 200));
+        .catch(() => setTimeout(pull, 250));
     })();
   }
 
