@@ -18,6 +18,20 @@ const ADB_BIN = (() => {
 
 const SCRCPY_JAR_PATH = path.join(process.cwd(), 'scrcpy-server.jar');
 
+function hasSpsNal(buf) {
+  if (!buf || buf.length < 4) return false;
+  for (let i = 0; i < Math.min(buf.length - 4, 128); i++) {
+    if (buf[i] === 0 && buf[i+1] === 0) {
+      if (buf[i+2] === 1 && i + 3 < buf.length) {
+        if ((buf[i+3] & 0x1f) === 7) return true;
+      } else if (buf[i+2] === 0 && buf[i+3] === 1 && i + 4 < buf.length) {
+        if ((buf[i+4] & 0x1f) === 7) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * ScrcpyEngine — manages a scrcpy server session for one device.
  *
@@ -198,10 +212,7 @@ class ScrcpyEngine extends EventEmitter {
     this.controlSocket.setNoDelay(true);
     this.controlSocket.setKeepAlive(true, 1000);
 
-    // Read and discard the handshake header on the video socket
-    await this._readVideoHeader(this.videoSocket);
-
-    // Start the H264 relay pipeline
+    // Start single continuous video relay pipeline (header + frame stream)
     this._pipeVideoToClients(this.videoSocket);
 
     this.controlSocket.on('close', () => {
@@ -226,91 +237,53 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Read the scrcpy v2.x handshake header from the video socket.
-   *
-   * With tunnel_forward + send_dummy_byte=true:
-   *   Byte 0       : dummy byte (always 0)
-   *
-   * With send_device_meta=true (v2.x):
-   *   Bytes 1-64   : device name (64 bytes, null-padded)
-   *
-   * With send_codec_meta=true (v2.x):
-   *   Bytes 65-68  : codec id u32BE  (e.g. 0x68323634 = "h264")
-   *   Bytes 69-72  : initial width  u32BE
-   *   Bytes 73-76  : initial height u32BE
-   *
-   * Total with both: 1 + 64 + 4 + 4 + 4 = 77 bytes
-   *
-   * NOTE: send_device_meta alone only sends name (65 bytes total).
-   *       We set BOTH flags so we always get the full 77-byte header.
-   */
-  _readVideoHeader(socket) {
-    return new Promise((resolve) => {
-      let buf = Buffer.alloc(0);
-      const HEADER_LEN = 77; // 1 dummy + 64 device name + 4 codec ID + 4 width + 4 height
-
-      const onData = (chunk) => {
-        buf = Buffer.concat([buf, chunk]);
-        if (buf.length >= HEADER_LEN) {
-          socket.removeListener('data', onData);
-
-          const deviceName = buf.slice(1, 65).toString('utf8').replace(/\0/g, '');
-          const codecId = buf.readUInt32BE(65);
-          const w = buf.readUInt32BE(69);
-          const h = buf.readUInt32BE(73);
-
-          if (w > 0 && h > 0) {
-            this.screenWidth = w;
-            this.screenHeight = h;
-          }
-
-          logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" codec=0x${codecId.toString(16)} resolution=${this.screenWidth}x${this.screenHeight}`);
-
-          // Push back any bytes that belong to the video stream
-          if (buf.length > HEADER_LEN) {
-            socket.unshift(buf.slice(HEADER_LEN));
-          }
-          resolve();
-        }
-      };
-
-      socket.on('data', onData);
-      socket.once('error', resolve);
-      socket.once('close', resolve);
-    });
-  }
-
-  /**
    * Relay raw H264 NAL units from the video socket to all WS clients.
    *
-   * scrcpy frame meta (12 bytes per packet):
-   *   [0-7]  PTS u64BE — top bit set = config (SPS/PPS) packet
-   *   [8-11] payload size u32BE
-   *
-   * We strip the meta header and send the raw Annex-B payload to clients.
-   * Config packets are cached and re-sent to each new client connection.
+   * Header: 77 bytes (1 dummy + 64 device name + 4 codec ID + 4 width + 4 height)
+   * Meta per packet: 12 bytes (8-byte PTS + 4-byte payload size)
    */
   _pipeVideoToClients(socket) {
     let buf = Buffer.alloc(0);
+    let headerDone = false;
     const META = 12;
+    const HEADER_LEN = 77;
 
     socket.on('data', (chunk) => {
-      // Append incoming chunk
       buf = Buffer.concat([buf, chunk]);
 
-      // Process as many complete packets as possible
+      // 1. Read scrcpy header in single continuous stream
+      if (!headerDone) {
+        if (buf.length < HEADER_LEN) return;
+
+        const deviceName = buf.slice(1, 65).toString('utf8').replace(/\0/g, '');
+        const codecId = buf.readUInt32BE(65);
+        const w = buf.readUInt32BE(69);
+        const h = buf.readUInt32BE(73);
+
+        if (w > 0 && h > 0) {
+          this.screenWidth = w;
+          this.screenHeight = h;
+        }
+
+        logger.info(`[ScrcpyEngine ${this.serial}] Header: "${deviceName}" codec=0x${codecId.toString(16)} resolution=${this.screenWidth}x${this.screenHeight}`);
+        headerDone = true;
+        buf = buf.slice(HEADER_LEN);
+      }
+
+      // 2. Process video frame packets
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
         if (buf.length < META + pktSize) break; // need more data
 
         const ptsHigh  = buf.readUInt32BE(0);
-        const isConfig = (ptsHigh & 0x80000000) !== 0; // top bit
-
-        const payload = buf.slice(META, META + pktSize);
+        const payload  = buf.slice(META, META + pktSize);
         buf = buf.slice(META + pktSize);
 
-        // Cache config (SPS/PPS) — sent to every new client on join
-        if (isConfig) {
+        const isSps = hasSpsNal(payload);
+        const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
+
+        // Cache config packet (SPS/PPS) — sent to every new client on join
+        if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
           logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
         }
@@ -318,7 +291,7 @@ class ScrcpyEngine extends EventEmitter {
         this._broadcastVideo(payload, isConfig);
       }
 
-      // Safety: prevent unbounded growth (>1MB means something is badly wrong)
+      // Safety: prevent unbounded growth
       if (buf.length > 1024 * 1024) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow — resetting`);
         buf = Buffer.alloc(0);
