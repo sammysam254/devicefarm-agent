@@ -177,6 +177,7 @@ function getOrCreateInputShell(serial) {
     windowsHide: true,
     stdio: ['pipe', 'ignore', 'ignore'],
   });
+  if (proc.stdin) try { proc.stdin.setNoDelay(true); } catch (_) {}
   proc.on('error', () => inputShells.delete(serial));
   proc.on('close', () => inputShells.delete(serial));
   inputShells.set(serial, proc);
@@ -768,6 +769,7 @@ async function startStreamServer(serial, port) {
     let isMouseDown = false;
     let startX = 0, startY = 0;
     let startTime = 0;
+    let lastMoveTime = 0;
 
     function getNativeCoords(e) {
       const rect = canvas.getBoundingClientRect();
@@ -793,14 +795,27 @@ async function startStreamServer(serial, port) {
       startTime = Date.now();
       showTouchRipple(c.clientX, c.clientY);
 
-      // Sub-1ms Tap Dispatch
-      sendControl({ type: 'tap', x: startX, y: startY });
+      // Send ACTION_DOWN (0) immediately for instant response
+      sendControl({ type: 'touch', action: 0, x: startX, y: startY, width: nativeWidth, height: nativeHeight });
+    }
+
+    function handleMove(e) {
+      if (!isMouseDown) return;
+      e.preventDefault();
+      const now = Date.now();
+      if (now - lastMoveTime < 16) return;
+      lastMoveTime = now;
+      const c = getNativeCoords(e);
+
+      // Send ACTION_MOVE (2) continuously for real-time cursor tracking
+      sendControl({ type: 'touch', action: 2, x: c.x, y: c.y, width: nativeWidth, height: nativeHeight });
     }
 
     function handleEnd(e) {
       if (!isMouseDown) return;
+      e.preventDefault();
       isMouseDown = false;
-      const duration = Date.now() - startTime;
+
       const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
       const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
       const rect = canvas.getBoundingClientRect();
@@ -809,12 +824,8 @@ async function startStreamServer(serial, port) {
       const endX = Math.round((clientX - rect.left) * scaleX);
       const endY = Math.round((clientY - rect.top) * scaleY);
 
-      const dx = Math.abs(endX - startX);
-      const dy = Math.abs(endY - startY);
-
-      if (dx >= 15 || dy >= 15) {
-        sendControl({ type: 'swipe', x1: startX, y1: startY, x2: endX, y2: endY, duration: Math.max(duration, 100) });
-      }
+      // Send ACTION_UP (1) to complete the gesture
+      sendControl({ type: 'touch', action: 1, x: endX, y: endY, width: nativeWidth, height: nativeHeight });
     }
 
     // ── Mouse Wheel Scroll Support ──
@@ -839,8 +850,10 @@ async function startStreamServer(serial, port) {
     }, { passive: false });
 
     wrapper.addEventListener('mousedown', handleStart);
+    wrapper.addEventListener('mousemove', handleMove);
     wrapper.addEventListener('mouseup', handleEnd);
     wrapper.addEventListener('touchstart', handleStart, { passive: false });
+    wrapper.addEventListener('touchmove', handleMove, { passive: false });
     wrapper.addEventListener('touchend', handleEnd);
 
     function sendKey(code) {
@@ -1134,8 +1147,11 @@ async function startStreamServer(serial, port) {
 
             if (data.type === 'touch') {
               const sent = useScrcpy && scrcpyEngine.sendTouchEvent(data.action, data.x, data.y, width, height);
-              if (!sent && (data.action === 0 || data.action === 1)) {
-                sendSubMsInput(serial, `input tap ${Math.round(data.x)} ${Math.round(data.y)}`);
+              if (!sent) {
+                // Fallback to ADB shell only for DOWN and UP, skip MOVE to avoid shell overhead
+                if (data.action === 0 || data.action === 1) {
+                  sendSubMsInput(serial, `input tap ${Math.round(data.x)} ${Math.round(data.y)}`);
+                }
               }
             } else if (data.type === 'tap') {
               const sent = useScrcpy && scrcpyEngine.sendTouchEvent(0, data.x, data.y, width, height);

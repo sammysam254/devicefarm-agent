@@ -151,7 +151,7 @@ class ScrcpyEngine extends EventEmitter {
    * Injected natively as SOURCE_TOUCHSCREEN via Android InputManager.
    */
   sendTouchEvent(action, x, y, width, height, pointerId = 0n, pressure = 1.0) {
-    if (!this.controlSocket || this.controlSocket.destroyed) return;
+    if (!this.controlSocket || this.controlSocket.destroyed) return false;
 
     const buf = Buffer.alloc(28);
     buf.writeUInt8(2, 0); // INJECT_TOUCH_EVENT
@@ -166,8 +166,10 @@ class ScrcpyEngine extends EventEmitter {
 
     try {
       this.controlSocket.write(buf);
+      return true;
     } catch (err) {
       logger.error(`[ScrcpyEngine ${this.serial}] Touch write error:`, err.message);
+      return false;
     }
   }
 
@@ -176,7 +178,7 @@ class ScrcpyEngine extends EventEmitter {
    * Action: 0 = ACTION_DOWN, 1 = ACTION_UP
    */
   sendKeycode(action, keycode, repeat = 0, metastate = 0) {
-    if (!this.controlSocket || this.controlSocket.destroyed) return;
+    if (!this.controlSocket || this.controlSocket.destroyed) return false;
 
     const buf = Buffer.alloc(14);
     buf.writeUInt8(0, 0); // INJECT_KEYCODE
@@ -187,14 +189,12 @@ class ScrcpyEngine extends EventEmitter {
 
     try {
       this.controlSocket.write(buf);
-    } catch (_) {}
+      return true;
+    } catch (_) { return false; }
   }
 
-  /**
-   * Inject Text via Scrcpy Control Protocol.
-   */
   sendText(text) {
-    if (!this.controlSocket || this.controlSocket.destroyed) return;
+    if (!this.controlSocket || this.controlSocket.destroyed) return false;
 
     const textBuf = Buffer.from(text, 'utf-8');
     const buf = Buffer.alloc(5 + textBuf.length);
@@ -204,7 +204,8 @@ class ScrcpyEngine extends EventEmitter {
 
     try {
       this.controlSocket.write(buf);
-    } catch (_) {}
+      return true;
+    } catch (_) { return false; }
   }
 
   async _connectSockets() {
@@ -220,7 +221,7 @@ class ScrcpyEngine extends EventEmitter {
           s.on('error', reject);
         });
 
-        // Connect control socket
+        // Connect control socket (scrcpy tunnel_forward accepts video then control sequentially on same port)
         await new Promise((resolve, reject) => {
           const cs = net.connect({ port: this.videoPort, host: '127.0.0.1' }, () => {
             this.controlSocket = cs;
