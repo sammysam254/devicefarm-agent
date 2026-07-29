@@ -14,25 +14,39 @@ cd /d "%~dp0"
 echo [*] Application Directory: %CD%
 
 :: 2. Check Node.js Environment
+set "NODE_BIN="
 where node >nul 2>nul
-if %errorlevel% neq 0 (
-    if exist "%ProgramFiles%\nodejs\node.exe" (
-        set "PATH=%ProgramFiles%\nodejs;%PATH%"
-        echo [OK] Added Node.js to PATH.
-    ) else (
-        echo [*] Node.js is NOT installed in PATH. Downloading and installing Node.js LTS...
-        set "NODE_MSI=%TEMP%\node_installer.msi"
-        powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%NODE_MSI%'"
-        if exist "%NODE_MSI%" (
-            echo [*] Installing Node.js silently...
-            msiexec /i "%NODE_MSI%" /qn /norestart
-            del "%NODE_MSI%" >nul 2>nul
-            set "PATH=%ProgramFiles%\nodejs;%PATH%"
-            echo [OK] Node.js installed successfully.
-        )
-    )
+if %errorlevel% equ 0 (
+    echo [OK] Node.js detected in PATH.
+    set "NODE_BIN=node"
+) else if exist "%ProgramFiles%\nodejs\node.exe" (
+    set "PATH=%ProgramFiles%\nodejs;%PATH%"
+    set "NODE_BIN=%ProgramFiles%\nodejs\node.exe"
+    echo [OK] Added Node.js to PATH from Program Files.
+) else if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" (
+    set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
+    set "NODE_BIN=%LOCALAPPDATA%\Programs\nodejs\node.exe"
+    echo [OK] Added Node.js to PATH from local Programs.
 ) else (
-    echo [OK] Node.js environment detected.
+    echo [*] Node.js is NOT installed. Downloading and installing Node.js LTS...
+    set "NODE_MSI=%TEMP%\node_installer.msi"
+    powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%TEMP%\node_installer.msi' -UseBasicParsing"
+    if exist "%TEMP%\node_installer.msi" (
+        echo [*] Installing Node.js silently — please wait...
+        :: /w makes start wait for the process to finish before continuing
+        start /w "" msiexec /i "%TEMP%\node_installer.msi" /qn /norestart ADDLOCAL=ALL
+        del "%TEMP%\node_installer.msi" >nul 2>nul
+        :: Refresh PATH from registry so npm/node are available immediately
+        for /f "tokens=2*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SYS_PATH=%%B"
+        for /f "tokens=2*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USR_PATH=%%B"
+        set "PATH=%ProgramFiles%\nodejs;!SYS_PATH!;!USR_PATH!"
+        set "NODE_BIN=%ProgramFiles%\nodejs\node.exe"
+        echo [OK] Node.js installed and PATH refreshed.
+    ) else (
+        echo [ERROR] Failed to download Node.js installer. Check your internet connection.
+        pause
+        exit /b 1
+    )
 )
 
 :: 3. Check ADB Binary Environment
@@ -54,8 +68,21 @@ if exist "C:\platform-tools\adb.exe" (
 if exist "node_modules\electron\dist\electron.exe" (
     echo [OK] Required packages and Electron binary detected.
 ) else (
+    :: Verify node/npm are reachable before attempting install
+    where node >nul 2>nul
+    if %errorlevel% neq 0 (
+        echo [ERROR] node.exe is still not in PATH after setup. Cannot install dependencies.
+        echo         Please install Node.js from https://nodejs.org and re-run this script.
+        pause
+        exit /b 1
+    )
     echo [*] Installing package dependencies...
     call npm install --no-audit --no-fund
+    if %errorlevel% neq 0 (
+        echo [ERROR] npm install failed. Check the errors above.
+        pause
+        exit /b 1
+    )
     if not exist "node_modules\electron\dist\electron.exe" (
         echo [*] Running Electron installer script...
         node node_modules\electron\install.js 2>nul
@@ -63,7 +90,7 @@ if exist "node_modules\electron\dist\electron.exe" (
     if not exist "node_modules\electron\dist\electron.exe" (
         echo [*] Downloading Electron binary v33.4.11...
         if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist" 2>nul
-        powershell -Command "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip'"
+        powershell -Command "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip' -UseBasicParsing"
         tar -xf "node_modules\electron\ez.zip" -C "node_modules\electron\dist" 2>nul
         del "node_modules\electron\ez.zip" 2>nul
         powershell -Command "Set-Content -Path 'node_modules\electron\path.txt' -Value 'electron.exe'"
