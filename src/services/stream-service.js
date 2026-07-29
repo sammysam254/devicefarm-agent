@@ -308,9 +308,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   let lastDecodedFrameTime = 0;
+  // Start the watchdog only after the first frame arrives — don't seed it on WS open
+  // to avoid suppressing the fallback when the decoder never produces output.
   setInterval(() => {
-    if (lastDecodedFrameTime > 0 && Date.now() - lastDecodedFrameTime > 1500 && !fbRunning) {
-      console.warn('[Watchdog] No H264 frames rendered in 1.5s — enabling screencap fallback');
+    // Only trigger if we've actually received at least one frame before
+    // (lastDecodedFrameTime > 0) OR the WS has been open for >3s without any frame.
+    const wsOpenTooLong = wsOk && wsConnectedAt > 0 && (Date.now() - wsConnectedAt) > 3000;
+    const frameStalled  = lastDecodedFrameTime > 0 && (Date.now() - lastDecodedFrameTime) > 1500;
+    if ((frameStalled || wsOpenTooLong) && !fbRunning) {
+      console.warn('[Watchdog] No H264 frames rendered — enabling screencap fallback');
       startFallback();
     }
   }, 1000);
@@ -385,13 +391,20 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const hasIdr = types.includes(5);
 
     if (hasSps) {
+      // Configure (or re-configure) decoder with the new SPS/PPS data.
+      // Do NOT return early — the same buffer may also contain an IDR frame.
       configureDecoder(data);
+      // If this packet is purely a config packet with no IDR, we're done.
       if (!hasIdr) return;
     }
 
+    // If we still have no decoder config but have a cached SPS, configure now.
     if (!decoderConfigured && cachedSpsPps) {
       configureDecoder(cachedSpsPps);
     }
+
+    // Don't feed frames if the decoder still isn't ready.
+    if (!decoderConfigured) return;
 
     if (hasIdr) {
       feedFrame(data, true);
@@ -404,6 +417,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let ws = null, wsOk = false;
   let wsFailCount = 0;       // number of consecutive WS failures
   let wsRetryTimer = null;
+  let wsConnectedAt = 0;     // timestamp when WS last connected (0 = never)
 
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
@@ -414,9 +428,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
     ws.onopen = () => {
       wsOk = true;
       wsFailCount = 0;
+      wsConnectedAt = Date.now();
+      // Do NOT seed lastDecodedFrameTime here — let the watchdog detect a stall
+      // if no actual decoded frames arrive within 3s.
       modeText.textContent = 'H264 LIVE';
-      lastDecodedFrameTime = Date.now();
-      // Stop any running screencap fallback immediately
+      // Stop screencap fallback so H264 gets a chance
       fbRunning = false;
       if (typeof VideoDecoder !== 'undefined') {
         lastTs = 0;
@@ -677,16 +693,20 @@ async function startStreamServer(serial, port) {
   wss.on('connection', (ws) => {
     logger.info(`[StreamServer] WS connected for ${serial}`);
 
-    // Register client with scrcpy engine immediately for zero-latency frame delivery
-    engine.addClient(ws);
-
-    // Perform rental payment check asynchronously without blocking stream delivery
+    // Check payment BEFORE registering the client so no frames are delivered
+    // to unpaid sessions. Only add to the engine after the check passes.
     getRentalStatus().then(status => {
       if (!status || !status.isPaid) {
         try { ws.send(JSON.stringify({type:'error',error:'Payment required'})); ws.close(4002,'Unpaid'); } catch (_) {}
-        engine.removeClient(ws);
+        return; // do NOT add to engine
       }
-    }).catch(() => {});
+      // Payment confirmed — register client and flush cached SPS/PPS immediately
+      engine.addClient(ws);
+    }).catch(() => {
+      // On error default to adding the client (fail open) so a transient
+      // payment service outage doesn't black-screen paying users.
+      engine.addClient(ws);
+    });
 
     const payCheck = setInterval(async () => {
       const s = await getRentalStatus();

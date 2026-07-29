@@ -149,6 +149,12 @@ class ScrcpyEngine extends EventEmitter {
       'control=true',
       'cleanup=true',
       'send_dummy_byte=true',
+      // Required for a visible, correctly framed H264 stream:
+      'video_source=display',      // explicitly capture the display (not camera)
+      'max_size=720',              // cap resolution — keeps bitrate and decode cost manageable
+      'video_bit_rate=4000000',    // 4 Mbps — good quality at up to 60fps
+      'max_fps=30',                // 30fps is plenty for remote control; reduces load
+      'send_frame_meta=true',      // MUST be true — enables the 12-byte PTS+size header we parse
     ];
 
     this.serverProc = spawn(ADB_BIN, args, {
@@ -232,33 +238,53 @@ class ScrcpyEngine extends EventEmitter {
   /**
    * Relay raw H264 NAL units from the video socket to all WS clients.
    *
-   * Header: 77 bytes (1 dummy + 64 device name + 4 codec ID + 4 width + 4 height)
-   * Meta per packet: 12 bytes (8-byte PTS + 4-byte payload size)
+   * scrcpy 2.x tunnel_forward stream layout (send_frame_meta=true):
+   *   - 1 byte:  dummy byte (required by tunnel_forward, value = 0)
+   *   - 64 bytes: device name (null-padded)
+   *   - 4 bytes:  codec ID (0x68323634 = "h264")
+   *   - 4 bytes:  initial width  (u32BE)
+   *   - 4 bytes:  initial height (u32BE)
+   *   Total device-info header = 77 bytes (1 dummy + 68 device info + 8 resolution)
+   *
+   * Then for every video packet:
+   *   - 8 bytes: PTS (u64BE, high bit set on config/key frames)
+   *   - 4 bytes: payload size (u32BE)
+   *   - N bytes: raw H264 NAL unit(s)
    */
   _pipeVideoToClients(socket) {
     let buf = Buffer.alloc(0);
     let headerDone = false;
-    const META = 12;
-    const HEADER_LEN = 65;
+    // scrcpy 2.x device-info header: 1 dummy + 64 name + 4 codec + 4 W + 4 H = 77 bytes
+    const DEVICE_HEADER_LEN = 77;
+    const META = 12; // 8-byte PTS + 4-byte size
 
     socket.on('data', (chunk) => {
       buf = Buffer.concat([buf, chunk]);
 
-      // 1. Auto-align stream header (1 dummy byte vs 65-byte device meta)
+      // 1. Skip the device-info header exactly once
       if (!headerDone) {
-        if (buf.length < 13) return; // Need at least 1 dummy + 12-byte META header
+        if (buf.length < DEVICE_HEADER_LEN) return; // wait for the full header
 
-        let headerLen = 1; // Default 1 dummy byte
-        if (buf.length >= 77) {
-          const sizeAt65 = buf.readUInt32BE(65 + 8);
-          if (sizeAt65 > 0 && sizeAt65 < 1000000) {
-            headerLen = 65;
+        // Sanity-check: bytes [69..72] should be a plausible frame payload size
+        // (after 1 dummy + 64 name + 4 codec ID = 69 bytes of prefix, then 8-byte PTS at 69, size at 77)
+        // Actually the first META starts at DEVICE_HEADER_LEN, so read the size there:
+        // If we have enough bytes, verify the size field looks reasonable.
+        if (buf.length >= DEVICE_HEADER_LEN + META) {
+          const firstPktSize = buf.readUInt32BE(DEVICE_HEADER_LEN + 8);
+          // A sane first-packet size is > 0 and less than 2MB
+          if (firstPktSize === 0 || firstPktSize > 2 * 1024 * 1024) {
+            // Header length mismatch — fall back to 1-byte dummy-only mode
+            logger.warn(`[ScrcpyEngine ${this.serial}] Unexpected first packet size ${firstPktSize} — trying 1-byte header`);
+            buf = buf.slice(1);
+          } else {
+            buf = buf.slice(DEVICE_HEADER_LEN);
           }
+        } else {
+          buf = buf.slice(DEVICE_HEADER_LEN);
         }
 
-        logger.info(`[ScrcpyEngine ${this.serial}] Stream Header aligned: headerLen=${headerLen}B (totalInitialBuf=${buf.length}B)`);
+        logger.info(`[ScrcpyEngine ${this.serial}] Device-info header consumed, stream parsing started`);
         headerDone = true;
-        buf = buf.slice(headerLen);
       }
 
       // 2. Process video frame packets
