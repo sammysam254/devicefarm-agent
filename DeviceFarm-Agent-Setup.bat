@@ -151,7 +151,8 @@ if exist "%INSTALL_DIR%\.git" (
     )
 ) else (
     echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
-    "%GIT%" clone "%REPO_URL%" "%INSTALL_DIR%"
+    echo [*] Using shallow clone for faster download...
+    "%GIT%" clone --depth 1 --single-branch --branch main "%REPO_URL%" "%INSTALL_DIR%"
     if %errorlevel% neq 0 (
         echo [ERROR] git clone failed. Check your internet connection.
         pause & exit /b 1
@@ -169,7 +170,7 @@ echo [*] Patching config.json with local binary paths...
 echo [OK] config.json updated.
 
 :: ════════════════════════════════════════════════════════════════════════════
-:: STEP 5 — npm install + Electron binary
+:: STEP 5 — npm install + Electron binary + scrcpy-server.jar
 :: ════════════════════════════════════════════════════════════════════════════
 echo.
 echo [5/6] Installing dependencies...
@@ -178,23 +179,20 @@ if exist "node_modules\electron\dist\electron.exe" (
     echo [OK] Dependencies already installed.
 ) else (
     echo [*] Running npm install — this may take a few minutes...
-    call "%NPM%" install --no-audit --no-fund
-    if %errorlevel% neq 0 (
-        echo [ERROR] npm install failed. See errors above.
-        pause & exit /b 1
+    
+    :: Run npm install in background for parallel download
+    start /B "" cmd /c "call ""%NPM%"" install --no-audit --no-fund >nul 2>&1"
+    
+    :: While npm installs, download scrcpy-server.jar + Electron binary in parallel
+    echo [*] Downloading scrcpy-server.jar in parallel...
+    if not exist "scrcpy-server.jar" (
+        "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+            "Invoke-WebRequest -Uri 'https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4' -OutFile 'scrcpy-server.jar' -UseBasicParsing"
     )
-    echo [OK] npm packages installed.
-
-    :: Try Electron's own postinstall script
+    
+    echo [*] Downloading Electron v33.4.11 in parallel...
+    if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist" >nul 2>nul
     if not exist "node_modules\electron\dist\electron.exe" (
-        echo [*] Running Electron postinstall...
-        "%NODE%" "node_modules\electron\install.js" 2>nul
-    )
-
-    :: Manual fallback — download the zip directly
-    if not exist "node_modules\electron\dist\electron.exe" (
-        echo [*] Downloading Electron v33.4.11 binary...
-        if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist"
         "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
             "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip' -UseBasicParsing"
         if exist "node_modules\electron\ez.zip" (
@@ -203,6 +201,22 @@ if exist "node_modules\electron\dist\electron.exe" (
             del "node_modules\electron\ez.zip" >nul 2>nul
             echo electron.exe> "node_modules\electron\path.txt"
         )
+    )
+    
+    :: Wait for npm install to complete
+    echo [*] Waiting for npm install to complete...
+    :waitnpm
+    tasklist /FI "IMAGENAME eq npm.cmd" 2>nul | find /I "npm.cmd" >nul
+    if %errorlevel% equ 0 (
+        ping 127.0.0.1 -n 2 >nul
+        goto waitnpm
+    )
+    echo [OK] npm packages installed.
+    
+    if exist "scrcpy-server.jar" (
+        echo [OK] scrcpy-server.jar ready.
+    ) else (
+        echo [WARN] scrcpy-server.jar missing — streaming may fail!
     )
 
     if exist "node_modules\electron\dist\electron.exe" (
