@@ -1,94 +1,125 @@
 @echo off
 setlocal enabledelayedexpansion
 
-title DeviceFarm Agent Setup Starter
+title DeviceFarm Agent — Setup
+
+:: ═══════════════════════════════════════════════════════════════════════════
+::  DEVICEFARM AGENT — ONE-CLICK INSTALLER
+::  This script is all the customer needs.
+::  It will:
+::    1. Install Git (if missing)
+::    2. Install Node.js LTS (if missing)
+::    3. Install ADB platform-tools (if missing)
+::    4. Clone / update the agent from GitHub
+::    5. Install npm dependencies
+::    6. Download Electron binary
+::    7. Run payment verification
+::    8. Launch the agent
+:: ═══════════════════════════════════════════════════════════════════════════
 
 echo.
-echo =======================================================================
-echo              DEVICEFARM DESKTOP AGENT SETUP AND STARTER
-echo =======================================================================
+echo  ================================================================
+echo   DEVICEFARM DESKTOP AGENT  ^|  One-Click Setup
+echo  ================================================================
 echo.
 
-:: 1. Set working directory to the folder containing this script
-cd /d "%~dp0"
-echo [*] Application Directory: %CD%
+:: ── Where to install the agent ─────────────────────────────────────────────
+set "INSTALL_DIR=C:\DeviceFarmAgent"
+set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
 
-:: ─── Resolve powershell.exe (always use full path to avoid "not recognized") ──
+:: ── Full path to PowerShell (never rely on PATH for this) ──────────────────
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if not exist "%PS%" set "PS=%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
 
-:: ─────────────────────────────────────────────────────────────────────────────
-:: 2. Resolve Node.js — find it or install it, then set NODE and NPM to full paths
-:: ─────────────────────────────────────────────────────────────────────────────
+echo [*] Install directory : %INSTALL_DIR%
+echo [*] Source repository : %REPO_URL%
+echo.
+
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 1 — Git
+:: ════════════════════════════════════════════════════════════════════════════
+echo [1/6] Checking Git...
+set "GIT="
+for /f "delims=" %%I in ('where git 2^>nul') do if not defined GIT set "GIT=%%I"
+if not defined GIT if exist "%ProgramFiles%\Git\cmd\git.exe"       set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+if not defined GIT if exist "%ProgramFiles(x86)%\Git\cmd\git.exe"  set "GIT=%ProgramFiles(x86)%\Git\cmd\git.exe"
+if not defined GIT if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "GIT=%LOCALAPPDATA%\Programs\Git\cmd\git.exe"
+
+if defined GIT (
+    echo [OK] Git found: %GIT%
+) else (
+    echo [*] Git not found. Downloading Git for Windows...
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe' -OutFile '%TEMP%\git_installer.exe' -UseBasicParsing"
+    if not exist "%TEMP%\git_installer.exe" (
+        echo [ERROR] Could not download Git. Check your internet connection.
+        pause & exit /b 1
+    )
+    echo [*] Installing Git silently — please wait...
+    start /wait "" "%TEMP%\git_installer.exe" /VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"
+    del "%TEMP%\git_installer.exe" >nul 2>nul
+    set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+    if not exist "!GIT!" (
+        echo [ERROR] Git installation failed. Please install from https://git-scm.com
+        pause & exit /b 1
+    )
+    echo [OK] Git installed: !GIT!
+)
+
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 2 — Node.js
+:: ════════════════════════════════════════════════════════════════════════════
+echo.
+echo [2/6] Checking Node.js...
 set "NODE="
 set "NPM="
 
-:: Check common install locations first (handles fresh installs in same session)
-if exist "%ProgramFiles%\nodejs\node.exe"             set "NODE=%ProgramFiles%\nodejs\node.exe"
-if exist "%ProgramFiles%\nodejs\npm.cmd"              set "NPM=%ProgramFiles%\nodejs\npm.cmd"
-if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe"    set "NODE=%LOCALAPPDATA%\Programs\nodejs\node.exe"
-if exist "%LOCALAPPDATA%\Programs\nodejs\npm.cmd"     set "NPM=%LOCALAPPDATA%\Programs\nodejs\npm.cmd"
-
-:: Also try PATH
-if not defined NODE (
-    for /f "delims=" %%I in ('where node 2^>nul') do (
-        if not defined NODE set "NODE=%%I"
-    )
-)
-if not defined NPM (
-    for /f "delims=" %%I in ('where npm 2^>nul') do (
-        if not defined NPM set "NPM=%%I"
-    )
-)
-if not defined NPM (
-    for /f "delims=" %%I in ('where npm.cmd 2^>nul') do (
-        if not defined NPM set "NPM=%%I"
-    )
-)
+if exist "%ProgramFiles%\nodejs\node.exe"          set "NODE=%ProgramFiles%\nodejs\node.exe"
+if exist "%ProgramFiles%\nodejs\npm.cmd"           set "NPM=%ProgramFiles%\nodejs\npm.cmd"
+if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "NODE=%LOCALAPPDATA%\Programs\nodejs\node.exe"
+if exist "%LOCALAPPDATA%\Programs\nodejs\npm.cmd"  set "NPM=%LOCALAPPDATA%\Programs\nodejs\npm.cmd"
+if not defined NODE for /f "delims=" %%I in ('where node 2^>nul') do if not defined NODE set "NODE=%%I"
+if not defined NPM  for /f "delims=" %%I in ('where npm.cmd 2^>nul') do if not defined NPM  set "NPM=%%I"
+if not defined NPM  for /f "delims=" %%I in ('where npm 2^>nul')     do if not defined NPM  set "NPM=%%I"
 
 if defined NODE (
     echo [OK] Node.js found: %NODE%
 ) else (
-    echo [*] Node.js not found. Downloading installer...
-    set "NODE_MSI=%TEMP%\node_lts_installer.msi"
+    echo [*] Node.js not found. Downloading LTS installer...
     "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%TEMP%\node_lts_installer.msi' -UseBasicParsing"
-    if not exist "%TEMP%\node_lts_installer.msi" (
-        echo [ERROR] Download failed. Check your internet connection and try again.
+        "Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%TEMP%\node_installer.msi' -UseBasicParsing"
+    if not exist "%TEMP%\node_installer.msi" (
+        echo [ERROR] Node.js download failed. Check your internet connection.
         pause & exit /b 1
     )
-    echo [*] Installing Node.js — please wait, this may take a minute...
-    start /wait msiexec /i "%TEMP%\node_lts_installer.msi" /qn /norestart ADDLOCAL=ALL
-    del "%TEMP%\node_lts_installer.msi" >nul 2>nul
-    :: After MSI completes, the exe is always here
+    echo [*] Installing Node.js — please wait...
+    start /wait msiexec /i "%TEMP%\node_installer.msi" /qn /norestart ADDLOCAL=ALL
+    del "%TEMP%\node_installer.msi" >nul 2>nul
     set "NODE=%ProgramFiles%\nodejs\node.exe"
     set "NPM=%ProgramFiles%\nodejs\npm.cmd"
     if not exist "!NODE!" (
-        echo [ERROR] Node.js install failed. Please install manually from https://nodejs.org
+        echo [ERROR] Node.js installation failed. Install from https://nodejs.org
         pause & exit /b 1
     )
     echo [OK] Node.js installed: !NODE!
 )
+if not defined NPM for %%I in ("%NODE%") do set "NPM=%%~dpInpm.cmd"
+echo [OK] npm  : %NPM%
 
-:: Derive npm from node location if still not set
-if not defined NPM (
-    for %%I in ("%NODE%") do set "NPM=%%~dpInpm.cmd"
-)
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 3 — ADB platform-tools
+:: ════════════════════════════════════════════════════════════════════════════
+echo.
+echo [3/6] Checking ADB...
+set "ADB="
+if exist "%INSTALL_DIR%\assets\bin\adb.exe"  set "ADB=%INSTALL_DIR%\assets\bin\adb.exe"
+if not defined ADB if exist "C:\platform-tools\adb.exe" set "ADB=C:\platform-tools\adb.exe"
+if not defined ADB for /f "delims=" %%I in ('where adb 2^>nul') do if not defined ADB set "ADB=%%I"
 
-echo [OK] npm: %NPM%
-
-:: ─────────────────────────────────────────────────────────────────────────────
-:: 3. ADB platform-tools
-:: ─────────────────────────────────────────────────────────────────────────────
-set "ADB=adb"
-if exist "assets\bin\adb.exe" (
-    set "ADB=%CD%\assets\bin\adb.exe"
-    echo [OK] Bundled ADB found: %ADB%
-) else if exist "C:\platform-tools\adb.exe" (
-    set "ADB=C:\platform-tools\adb.exe"
-    echo [OK] ADB found at C:\platform-tools\adb.exe
+if defined ADB (
+    echo [OK] ADB found: %ADB%
 ) else (
-    echo [*] ADB missing. Downloading Android SDK platform-tools...
+    echo [*] ADB not found. Downloading Android SDK platform-tools...
     "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
         "Invoke-WebRequest -Uri 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip' -OutFile '%TEMP%\pt.zip' -UseBasicParsing"
     if exist "%TEMP%\pt.zip" (
@@ -98,35 +129,66 @@ if exist "assets\bin\adb.exe" (
     )
     if exist "C:\platform-tools\adb.exe" (
         set "ADB=C:\platform-tools\adb.exe"
-        echo [OK] ADB installed to C:\platform-tools
+        echo [OK] ADB installed: C:\platform-tools\adb.exe
     ) else (
-        echo [WARN] ADB download failed — device detection may not work.
+        echo [WARN] ADB install failed — device detection may not work until ADB is available.
     )
 )
 
-:: ─────────────────────────────────────────────────────────────────────────────
-:: 4. npm install dependencies
-:: ─────────────────────────────────────────────────────────────────────────────
-if exist "node_modules\electron\dist\electron.exe" (
-    echo [OK] node_modules and Electron binary already present.
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 4 — Clone or update the agent repo
+:: ════════════════════════════════════════════════════════════════════════════
+echo.
+echo [4/6] Setting up agent files...
+
+if exist "%INSTALL_DIR%\.git" (
+    echo [*] Agent directory exists — pulling latest updates...
+    "%GIT%" -C "%INSTALL_DIR%" pull --ff-only
+    if %errorlevel% neq 0 (
+        echo [WARN] git pull failed — continuing with existing files.
+    ) else (
+        echo [OK] Agent updated to latest version.
+    )
 ) else (
-    echo [*] Installing npm dependencies — please wait...
+    echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
+    "%GIT%" clone "%REPO_URL%" "%INSTALL_DIR%"
+    if %errorlevel% neq 0 (
+        echo [ERROR] git clone failed. Check your internet connection.
+        pause & exit /b 1
+    )
+    echo [OK] Agent cloned successfully.
+)
+
+:: Switch working directory to the install dir for all remaining steps
+cd /d "%INSTALL_DIR%"
+echo [OK] Working directory: %CD%
+
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 5 — npm install + Electron binary
+:: ════════════════════════════════════════════════════════════════════════════
+echo.
+echo [5/6] Installing dependencies...
+
+if exist "node_modules\electron\dist\electron.exe" (
+    echo [OK] Dependencies already installed.
+) else (
+    echo [*] Running npm install — this may take a few minutes...
     call "%NPM%" install --no-audit --no-fund
     if %errorlevel% neq 0 (
         echo [ERROR] npm install failed. See errors above.
         pause & exit /b 1
     )
-    echo [OK] Dependencies installed.
+    echo [OK] npm packages installed.
 
-    :: Try the built-in Electron postinstall script first
+    :: Try Electron's own postinstall script
     if not exist "node_modules\electron\dist\electron.exe" (
-        echo [*] Running Electron postinstall script...
+        echo [*] Running Electron postinstall...
         "%NODE%" "node_modules\electron\install.js" 2>nul
     )
 
     :: Manual fallback — download the zip directly
     if not exist "node_modules\electron\dist\electron.exe" (
-        echo [*] Downloading Electron v33.4.11 binary directly...
+        echo [*] Downloading Electron v33.4.11 binary...
         if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist"
         "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
             "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip' -UseBasicParsing"
@@ -141,29 +203,26 @@ if exist "node_modules\electron\dist\electron.exe" (
     if exist "node_modules\electron\dist\electron.exe" (
         echo [OK] Electron binary ready.
     ) else (
-        echo [WARN] Electron binary not found after all attempts. Launch may fail.
+        echo [WARN] Electron binary not found — launch may fail.
     )
 )
 
-:: ─────────────────────────────────────────────────────────────────────────────
-:: 5. Payment verification
-:: ─────────────────────────────────────────────────────────────────────────────
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 6 — Payment verification + Launch
+:: ════════════════════════════════════════════════════════════════════════════
 echo.
-echo =======================================================================
-echo     STEP 1: PRE-INSTALLATION PAYMENT SYSTEM VERIFICATION ($30/MO)
-echo =======================================================================
+echo  ================================================================
+echo   STEP 1: PAYMENT SYSTEM VERIFICATION  ($30 / month)
+echo  ================================================================
 echo.
 echo [*] Generating Machine Binding Code...
-"%NODE%" -e "const fs=require('fs'),path=require('path'),c=path.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
+"%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
 "%NODE%" "src\services\verify-payment.js"
 
-:: ─────────────────────────────────────────────────────────────────────────────
-:: 6. Launch the agent
-:: ─────────────────────────────────────────────────────────────────────────────
 echo.
-echo =======================================================================
-echo         STEP 2: STARTING DEVICEFARM DESKTOP AGENT SERVICE
-echo =======================================================================
+echo  ================================================================
+echo   STEP 2: LAUNCHING DEVICEFARM AGENT
+echo  ================================================================
 echo.
 
 taskkill /F /IM electron.exe /T >nul 2>nul
@@ -172,21 +231,23 @@ taskkill /F /IM node.exe /T >nul 2>nul
 set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
 if exist "%ELECTRON_BIN%" (
     echo [*] Launching DeviceFarm Agent...
-    start "" "%ELECTRON_BIN%" "src\main\index.js"
+    start "" "%CD%\%ELECTRON_BIN%" "%CD%\src\main\index.js"
 ) else (
-    echo [*] Electron binary not found — attempting launch via npm exec...
-    start "" "%NPM%" exec -- electron .
+    echo [*] Falling back to npm exec electron...
+    start "" "%NPM%" exec -- electron "%CD%"
 )
 
-echo [*] Waiting for Dashboard service on http://localhost:7400 ...
+echo [*] Waiting for Dashboard...
 ping 127.0.0.1 -n 5 >nul 2>nul
 start "" "http://localhost:7400"
 
 echo.
-echo =======================================================================
-echo [OK] Setup Complete! DeviceFarm Agent is running in System Tray.
-echo      Dashboard URL: http://localhost:7400
-echo =======================================================================
+echo  ================================================================
+echo  [OK] DeviceFarm Agent is running!
+echo       Dashboard : http://localhost:7400
+echo       Install   : %INSTALL_DIR%
+echo  ================================================================
 echo.
-echo Press any key to exit setup window...
+echo  You can close this window. The agent runs in the system tray.
+echo.
 pause >nul
