@@ -362,6 +362,14 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload, isConfig) {
+    // Add logging to track frame source
+    const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
+    const source = this._fallbackActive ? 'fallback' : 'scrcpy';
+    
+    if (isConfig || nalType === 5) {
+      logger.info(`[ScrcpyEngine ${this.serial}] Broadcasting ${isConfig ? 'config' : 'IDR'} frame from ${source} (${payload.length} bytes, NAL type: ${nalType})`);
+    }
+
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
 
@@ -438,11 +446,11 @@ class ScrcpyEngine extends EventEmitter {
             if (nalType === 7) {
               // SPS
               spsNal = Buffer.from(nal);
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback SPS captured (${nal.length} bytes)`);
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback SPS captured (${nal.length} bytes), NAL type: ${nalType}`);
             } else if (nalType === 8) {
               // PPS
               ppsNal = Buffer.from(nal);
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback PPS captured (${nal.length} bytes)`);
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback PPS captured (${nal.length} bytes), NAL type: ${nalType}`);
             }
 
             // Once we have both SPS and PPS, send config packet
@@ -450,17 +458,18 @@ class ScrcpyEngine extends EventEmitter {
               this._configPacket = Buffer.concat([spsNal, ppsNal]);
               this._broadcastVideo(this._configPacket, true);
               configSent = true;
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback config sent (${this._configPacket.length} bytes)`);
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback config sent (${this._configPacket.length} bytes) - SPS+PPS combined`);
             }
 
-            // Send IDR/P frames after config is sent
-            if (configSent) {
-              const isIdr = nalType === 5;
-              const isPFrame = nalType === 1;
-              
-              if (isIdr || isPFrame) {
-                this._broadcastVideo(nal, isIdr);
-              }
+            // Send IDR frames ONLY after config is sent (drop all P-frames until first IDR)
+            if (configSent && nalType === 5) {
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback sending IDR frame (${nal.length} bytes)`);
+              this._broadcastVideo(nal, true);
+            } else if (configSent && nalType === 1) {
+              // Only send P-frames after we've sent at least one IDR
+              this._broadcastVideo(nal, false);
+            } else if (!configSent) {
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback dropping NAL type ${nalType} - waiting for SPS+PPS`);
             }
           }
         }
