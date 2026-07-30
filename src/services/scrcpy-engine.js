@@ -69,9 +69,8 @@ class ScrcpyEngine extends EventEmitter {
     // Whether the scrcpy server has been pushed to the device already
     this._jarPushed = false;
 
-    // Fast real-time fallback using screenrecord
-    this._fallbackActive = false;
-    this._fallbackProc = null;
+    // Fast real-time screencap streaming
+    this._screencapActive = false;
   }
 
   get isReady() {
@@ -110,31 +109,9 @@ class ScrcpyEngine extends EventEmitter {
       } catch (_) {}
       logger.info(`[ScrcpyEngine ${this.serial}] Screen: ${this.screenWidth}x${this.screenHeight}`);
 
-      // 2. Push server jar (once per device session)
-      if (!this._jarPushed) {
-        try {
-          await this._adb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
-        } catch (e) {
-          logger.warn(`[ScrcpyEngine ${this.serial}] Push warning: ${e.message}`);
-        }
-        this._jarPushed = true;
-      }
-
-      // 3. Remove any stale forward, then add fresh one
-      try { await this._adb(['forward', '--remove', `tcp:${videoPort}`]); } catch (_) {}
-      await this._adb(['forward', `tcp:${videoPort}`, 'localabstract:scrcpy']);
-
-      // 4. Start scrcpy server
-      //    - max_fps=60 for near-zero latency
-      //    - max_size=720 keeps bandwidth and decode cost low
-      //    - video_bit_rate=4Mbps for good quality at 60fps
-      //    - send_frame_meta=true so we can strip the 12-byte meta header
-      //    - send_dummy_byte=true required for tunnel_forward
-      this._spawnServer();
-
-      // 5. Connect sockets (video + control)
-      await this._connectSockets();
-      logger.info(`[ScrcpyEngine ${this.serial}] Ready — video+control sockets connected`);
+      // 2. Use screencap as primary method - it's reliable and works everywhere
+      logger.info(`[ScrcpyEngine ${this.serial}] Starting with screencap streaming (reliable mode)`);
+      this._startScreencapStream();
 
     } catch (err) {
       logger.error(`[ScrcpyEngine ${this.serial}] Start failed: ${err.message}`);
@@ -197,20 +174,14 @@ class ScrcpyEngine extends EventEmitter {
 
   stop() {
     this.isRunning = false;
-    this._fallbackActive = false;
+    this._screencapActive = false;
     this._cleanup();
-    if (this.videoPort) {
-      this._adb(['forward', '--remove', `tcp:${this.videoPort}`]).catch(() => {});
-    }
     this.wsClients.clear();
     this.emit('stopped');
   }
 
   _cleanup() {
-    if (this.videoSocket)   { try { this.videoSocket.destroy();   } catch (_) {} this.videoSocket   = null; }
-    if (this.controlSocket) { try { this.controlSocket.destroy(); } catch (_) {} this.controlSocket = null; }
-    if (this.serverProc)    { try { this.serverProc.kill();       } catch (_) {} this.serverProc    = null; }
-    if (this._fallbackProc) { try { this._fallbackProc.kill();    } catch (_) {} this._fallbackProc = null; }
+    // Nothing to clean up for screencap mode
   }
 
   // ── Socket connection ─────────────────────────────────────────────────────
@@ -391,111 +362,74 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Fast real-time fallback using ADB screenrecord with H264 streaming.
-   * This is ~10x faster than screencap polling and provides near-realtime video.
-   * 
-   * screenrecord outputs raw H264 with .mp4 container overhead, but we can
-   * pipe stdout and strip the container to get raw NAL units for WebCodecs.
+   * Simple, reliable screencap streaming.
+   * Captures PNG screenshots continuously and sends as base64 to clients.
+   * ~10-15 fps, works on all devices, no codec issues.
    */
-  _startScreenrecordFallback() {
-    if (this._fallbackActive) return;
-    this._fallbackActive = true;
-    logger.info(`[ScrcpyEngine ${this.serial}] Starting screenrecord H264 fallback (real-time)`);
+  _startScreencapStream() {
+    if (this._screencapActive) return;
+    this._screencapActive = true;
 
-    const startFallback = () => {
-      if (!this._fallbackActive || !this.isRunning) return;
+    const captureLoop = async () => {
+      while (this._screencapActive && this.isRunning) {
+        try {
+          const startTime = Date.now();
+          
+          // Capture screenshot
+          const proc = spawn(ADB_BIN, ['-s', this.serial, 'exec-out', 'screencap -p'], {
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'ignore']
+          });
 
-      // screenrecord: 720p, 2Mbps, 180 second chunks, time-limit to force restart
-      const proc = spawn(ADB_BIN, [
-        '-s', this.serial, 'shell',
-        'screenrecord', '--output-format=h264', '--size=720x1280',
-        '--bit-rate=2000000', '--time-limit=180', '-'
-      ], {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'ignore']
-      });
+          const chunks = [];
+          proc.stdout.on('data', c => chunks.push(c));
+          
+          await new Promise((resolve) => {
+            proc.on('close', () => resolve());
+            proc.on('error', () => resolve());
+          });
 
-      let buf = Buffer.alloc(0);
-      const NAL_START = Buffer.from([0, 0, 0, 1]);
-      let spsNal = null;
-      let ppsNal = null;
-      let configSent = false;
-
-      proc.stdout.on('data', (chunk) => {
-        buf = Buffer.concat([buf, chunk]);
-
-        // Extract NAL units (0x00000001 start codes)
-        while (true) {
-          const start = buf.indexOf(NAL_START);
-          if (start === -1) break;
-
-          const nextStart = buf.indexOf(NAL_START, start + 4);
-          if (nextStart === -1) {
-            // Keep the partial NAL in buffer
-            buf = buf.slice(start);
-            break;
-          }
-
-          const nal = buf.slice(start, nextStart);
-          buf = buf.slice(nextStart);
-
-          // Check NAL type (byte after start code)
-          if (nal.length > 4) {
-            const nalType = nal[4] & 0x1f;
-
-            if (nalType === 7) {
-              // SPS
-              spsNal = Buffer.from(nal);
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback SPS captured (${nal.length} bytes), NAL type: ${nalType}`);
-            } else if (nalType === 8) {
-              // PPS
-              ppsNal = Buffer.from(nal);
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback PPS captured (${nal.length} bytes), NAL type: ${nalType}`);
+          if (chunks.length > 0) {
+            let buf = Buffer.concat(chunks);
+            
+            // Fix Windows CRLF corruption in binary PNG data
+            const cleanBuf = Buffer.alloc(buf.length);
+            let pos = 0;
+            for (let i = 0; i < buf.length; i++) {
+              if (buf[i] === 0x0D && i + 1 < buf.length && buf[i+1] === 0x0A) continue;
+              cleanBuf[pos++] = buf[i];
             }
-
-            // Once we have both SPS and PPS, send config packet
-            if (spsNal && ppsNal && !configSent) {
-              this._configPacket = Buffer.concat([spsNal, ppsNal]);
-              this._broadcastVideo(this._configPacket, true);
-              configSent = true;
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback config sent (${this._configPacket.length} bytes) - SPS+PPS combined`);
-            }
-
-            // Send IDR frames ONLY after config is sent (drop all P-frames until first IDR)
-            if (configSent && nalType === 5) {
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback sending IDR frame (${nal.length} bytes)`);
-              this._broadcastVideo(nal, true);
-            } else if (configSent && nalType === 1) {
-              // Only send P-frames after we've sent at least one IDR
-              this._broadcastVideo(nal, false);
-            } else if (!configSent) {
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback dropping NAL type ${nalType} - waiting for SPS+PPS`);
+            
+            const pngData = cleanBuf.slice(0, pos);
+            
+            // Send to all connected clients
+            for (const ws of this.wsClients) {
+              if (ws.readyState === 1) {
+                try {
+                  ws.send(pngData, { binary: true });
+                } catch (_) {
+                  this.wsClients.delete(ws);
+                }
+              } else {
+                this.wsClients.delete(ws);
+              }
             }
           }
+
+          // Maintain ~15 fps (67ms per frame)
+          const elapsed = Date.now() - startTime;
+          const delay = Math.max(1, 67 - elapsed);
+          await new Promise(r => setTimeout(r, delay));
+
+        } catch (err) {
+          logger.warn(`[ScrcpyEngine ${this.serial}] Screencap error: ${err.message}`);
+          await new Promise(r => setTimeout(r, 100));
         }
-
-        // Prevent buffer overflow
-        if (buf.length > 512 * 1024) buf = Buffer.alloc(0);
-      });
-
-      proc.on('close', (code) => {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Fallback screenrecord exited (${code}) — restarting`);
-        if (this._fallbackActive && this.isRunning) {
-          setTimeout(startFallback, 500);
-        }
-      });
-
-      proc.on('error', (e) => {
-        logger.error(`[ScrcpyEngine ${this.serial}] Fallback error: ${e.message}`);
-        if (this._fallbackActive && this.isRunning) {
-          setTimeout(startFallback, 1000);
-        }
-      });
-
-      this._fallbackProc = proc;
+      }
     };
 
-    startFallback();
+    captureLoop();
+    logger.info(`[ScrcpyEngine ${this.serial}] Screencap streaming started`);
   }
 
   // ── Control protocol ──────────────────────────────────────────────────────

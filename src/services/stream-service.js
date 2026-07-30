@@ -441,24 +441,20 @@ function buildPlayerHtml(serial, screenW, screenH) {
       wsOk = true;
       wsFailCount = 0;
       wsConnectedAt = Date.now();
-      // Do NOT seed lastDecodedFrameTime here — let the watchdog detect a stall
-      // if no actual decoded frames arrive within 3s.
-      modeText.textContent = 'H264 LIVE';
-      // Stop screencap fallback so H264 gets a chance
-      fbRunning = false;
-      if (typeof VideoDecoder !== 'undefined') {
-        lastTs = 0;
-        initDecoder();
-      } else {
-        modeText.textContent = 'LIVE (compat)';
-        startFallback();
-      }
+      modeText.textContent = 'LIVE';
       flushQueue();
     };
 
     ws.onmessage = (e) => {
       if (!(e.data instanceof ArrayBuffer)) return;
-      parseAndFeedNal(e.data);
+      
+      // Received PNG image - display it
+      const blob = new Blob([e.data], { type: 'image/png' });
+      createImageBitmap(blob).then(bmp => {
+        queueDraw(bmp);
+      }).catch(err => {
+        console.warn('[Stream] Failed to decode image:', err);
+      });
     };
 
     // On error: just retry — don't start screencap fallback yet.
