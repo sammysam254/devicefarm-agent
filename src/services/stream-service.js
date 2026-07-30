@@ -391,7 +391,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const hasIdr = types.includes(5);
     const hasPps = types.includes(8);
 
-    console.log('[NAL] Received:', types.map(t => `type=${t}`).join(', '), `(${data.byteLength} bytes)`);
+    console.log('[NAL] Received:', types.map(function(t) { return 'type=' + t; }).join(', '), '(' + data.byteLength + ' bytes)');
 
     if (hasSps) {
       // Configure (or re-configure) decoder with the new SPS/PPS data.
