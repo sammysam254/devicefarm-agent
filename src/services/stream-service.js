@@ -73,15 +73,8 @@ function captureOneFrame(serial) {
     p.stdout.on('data', c => chunks.push(c));
     p.on('close', code => {
       if (code !== 0 || !chunks.length) return resolve(null);
-      let buf = Buffer.concat(chunks);
-      // Fix Windows stdout CRLF line ending corruption in binary PNG data
-      let cleanBuf = Buffer.alloc(buf.length);
-      let pos = 0;
-      for (let i = 0; i < buf.length; i++) {
-        if (buf[i] === 0x0D && i + 1 < buf.length && buf[i+1] === 0x0A) continue;
-        cleanBuf[pos++] = buf[i];
-      }
-      resolve(cleanBuf.slice(0, pos));
+      // exec-out via spawn stdio:pipe delivers clean binary — no CRLF stripping needed
+      resolve(Buffer.concat(chunks));
     });
     p.on('error', () => resolve(null));
   });

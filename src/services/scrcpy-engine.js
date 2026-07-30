@@ -390,17 +390,8 @@ class ScrcpyEngine extends EventEmitter {
           });
 
           if (chunks.length > 0) {
-            let buf = Buffer.concat(chunks);
-            
-            // Fix Windows CRLF corruption in binary PNG data
-            const cleanBuf = Buffer.alloc(buf.length);
-            let pos = 0;
-            for (let i = 0; i < buf.length; i++) {
-              if (buf[i] === 0x0D && i + 1 < buf.length && buf[i+1] === 0x0A) continue;
-              cleanBuf[pos++] = buf[i];
-            }
-            
-            const pngData = cleanBuf.slice(0, pos);
+            // exec-out via spawn stdio:pipe delivers clean binary — no CRLF stripping needed
+            const pngData = Buffer.concat(chunks);
             
             // Send to all connected clients
             for (const ws of this.wsClients) {
