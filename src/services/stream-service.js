@@ -389,24 +389,36 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const types = getNalTypes(data);
     const hasSps = types.includes(7);
     const hasIdr = types.includes(5);
+    const hasPps = types.includes(8);
+
+    console.log('[NAL] Received:', types.map(t => `type=${t}`).join(', '), `(${data.byteLength} bytes)`);
 
     if (hasSps) {
       // Configure (or re-configure) decoder with the new SPS/PPS data.
       // Do NOT return early — the same buffer may also contain an IDR frame.
+      console.log('[NAL] Configuring decoder with SPS/PPS');
       configureDecoder(data);
       // If this packet is purely a config packet with no IDR, we're done.
-      if (!hasIdr) return;
+      if (!hasIdr) {
+        console.log('[NAL] Config-only packet, waiting for IDR');
+        return;
+      }
     }
 
     // If we still have no decoder config but have a cached SPS, configure now.
     if (!decoderConfigured && cachedSpsPps) {
+      console.log('[NAL] Using cached SPS/PPS to configure');
       configureDecoder(cachedSpsPps);
     }
 
     // Don't feed frames if the decoder still isn't ready.
-    if (!decoderConfigured) return;
+    if (!decoderConfigured) {
+      console.warn('[NAL] Decoder not configured yet, dropping frame');
+      return;
+    }
 
     if (hasIdr) {
+      console.log('[NAL] Feeding IDR frame');
       feedFrame(data, true);
     } else if (types.includes(1)) {
       feedFrame(data, false);

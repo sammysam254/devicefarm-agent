@@ -409,6 +409,9 @@ class ScrcpyEngine extends EventEmitter {
 
       let buf = Buffer.alloc(0);
       const NAL_START = Buffer.from([0, 0, 0, 1]);
+      let spsNal = null;
+      let ppsNal = null;
+      let configSent = false;
 
       proc.stdout.on('data', (chunk) => {
         buf = Buffer.concat([buf, chunk]);
@@ -431,17 +434,34 @@ class ScrcpyEngine extends EventEmitter {
           // Check NAL type (byte after start code)
           if (nal.length > 4) {
             const nalType = nal[4] & 0x1f;
-            const isSps = nalType === 7;
-            const isIdr = nalType === 5;
 
-            // Cache SPS/PPS for new clients
-            if (isSps && !this._configPacket) {
-              this._configPacket = Buffer.from(nal);
-              logger.info(`[ScrcpyEngine ${this.serial}] Fallback SPS cached (${nal.length} bytes)`);
+            if (nalType === 7) {
+              // SPS
+              spsNal = Buffer.from(nal);
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback SPS captured (${nal.length} bytes)`);
+            } else if (nalType === 8) {
+              // PPS
+              ppsNal = Buffer.from(nal);
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback PPS captured (${nal.length} bytes)`);
             }
 
-            // Broadcast NAL unit to all clients
-            this._broadcastVideo(nal, isSps || isIdr);
+            // Once we have both SPS and PPS, send config packet
+            if (spsNal && ppsNal && !configSent) {
+              this._configPacket = Buffer.concat([spsNal, ppsNal]);
+              this._broadcastVideo(this._configPacket, true);
+              configSent = true;
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback config sent (${this._configPacket.length} bytes)`);
+            }
+
+            // Send IDR/P frames after config is sent
+            if (configSent) {
+              const isIdr = nalType === 5;
+              const isPFrame = nalType === 1;
+              
+              if (isIdr || isPFrame) {
+                this._broadcastVideo(nal, isIdr);
+              }
+            }
           }
         }
 
