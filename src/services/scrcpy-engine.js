@@ -68,6 +68,10 @@ class ScrcpyEngine extends EventEmitter {
 
     // Whether the scrcpy server has been pushed to the device already
     this._jarPushed = false;
+
+    // Fast real-time fallback using screenrecord
+    this._fallbackActive = false;
+    this._fallbackProc = null;
   }
 
   get isReady() {
@@ -193,6 +197,7 @@ class ScrcpyEngine extends EventEmitter {
 
   stop() {
     this.isRunning = false;
+    this._fallbackActive = false;
     this._cleanup();
     if (this.videoPort) {
       this._adb(['forward', '--remove', `tcp:${this.videoPort}`]).catch(() => {});
@@ -205,6 +210,7 @@ class ScrcpyEngine extends EventEmitter {
     if (this.videoSocket)   { try { this.videoSocket.destroy();   } catch (_) {} this.videoSocket   = null; }
     if (this.controlSocket) { try { this.controlSocket.destroy(); } catch (_) {} this.controlSocket = null; }
     if (this.serverProc)    { try { this.serverProc.kill();       } catch (_) {} this.serverProc    = null; }
+    if (this._fallbackProc) { try { this._fallbackProc.kill();    } catch (_) {} this._fallbackProc = null; }
   }
 
   // ── Socket connection ─────────────────────────────────────────────────────
@@ -267,11 +273,21 @@ class ScrcpyEngine extends EventEmitter {
   _pipeVideoToClients(socket) {
     let buf = Buffer.alloc(0);
     let headerDone = false;
+    let lastDataTime = Date.now();
     // scrcpy 2.x device-info header: 1 dummy + 64 name + 4 codec + 4 W + 4 H = 77 bytes
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
 
+    // Watchdog: if no data received for 3 seconds, fall back to screenrecord
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastDataTime > 3000 && !this._fallbackActive) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] No video data for 3s — starting screenrecord fallback`);
+        this._startScreenrecordFallback();
+      }
+    }, 1000);
+
     socket.on('data', (chunk) => {
+      lastDataTime = Date.now();
       buf = Buffer.concat([buf, chunk]);
 
       // 1. Skip the device-info header exactly once
@@ -329,11 +345,17 @@ class ScrcpyEngine extends EventEmitter {
     });
 
     socket.on('close', () => {
+      clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
+      // Start fallback if socket closes unexpectedly
+      if (this.isRunning && !this._fallbackActive) {
+        this._startScreenrecordFallback();
+      }
     });
 
     socket.on('error', (e) => {
+      clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket error: ${e.message}`);
       this.videoSocket = null;
     });
@@ -358,6 +380,93 @@ class ScrcpyEngine extends EventEmitter {
 
       try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
     }
+  }
+
+  /**
+   * Fast real-time fallback using ADB screenrecord with H264 streaming.
+   * This is ~10x faster than screencap polling and provides near-realtime video.
+   * 
+   * screenrecord outputs raw H264 with .mp4 container overhead, but we can
+   * pipe stdout and strip the container to get raw NAL units for WebCodecs.
+   */
+  _startScreenrecordFallback() {
+    if (this._fallbackActive) return;
+    this._fallbackActive = true;
+    logger.info(`[ScrcpyEngine ${this.serial}] Starting screenrecord H264 fallback (real-time)`);
+
+    const startFallback = () => {
+      if (!this._fallbackActive || !this.isRunning) return;
+
+      // screenrecord: 720p, 2Mbps, 180 second chunks, time-limit to force restart
+      const proc = spawn(ADB_BIN, [
+        '-s', this.serial, 'shell',
+        'screenrecord', '--output-format=h264', '--size=720x1280',
+        '--bit-rate=2000000', '--time-limit=180', '-'
+      ], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      let buf = Buffer.alloc(0);
+      const NAL_START = Buffer.from([0, 0, 0, 1]);
+
+      proc.stdout.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+
+        // Extract NAL units (0x00000001 start codes)
+        while (true) {
+          const start = buf.indexOf(NAL_START);
+          if (start === -1) break;
+
+          const nextStart = buf.indexOf(NAL_START, start + 4);
+          if (nextStart === -1) {
+            // Keep the partial NAL in buffer
+            buf = buf.slice(start);
+            break;
+          }
+
+          const nal = buf.slice(start, nextStart);
+          buf = buf.slice(nextStart);
+
+          // Check NAL type (byte after start code)
+          if (nal.length > 4) {
+            const nalType = nal[4] & 0x1f;
+            const isSps = nalType === 7;
+            const isIdr = nalType === 5;
+
+            // Cache SPS/PPS for new clients
+            if (isSps && !this._configPacket) {
+              this._configPacket = Buffer.from(nal);
+              logger.info(`[ScrcpyEngine ${this.serial}] Fallback SPS cached (${nal.length} bytes)`);
+            }
+
+            // Broadcast NAL unit to all clients
+            this._broadcastVideo(nal, isSps || isIdr);
+          }
+        }
+
+        // Prevent buffer overflow
+        if (buf.length > 512 * 1024) buf = Buffer.alloc(0);
+      });
+
+      proc.on('close', (code) => {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Fallback screenrecord exited (${code}) — restarting`);
+        if (this._fallbackActive && this.isRunning) {
+          setTimeout(startFallback, 500);
+        }
+      });
+
+      proc.on('error', (e) => {
+        logger.error(`[ScrcpyEngine ${this.serial}] Fallback error: ${e.message}`);
+        if (this._fallbackActive && this.isRunning) {
+          setTimeout(startFallback, 1000);
+        }
+      });
+
+      this._fallbackProc = proc;
+    };
+
+    startFallback();
   }
 
   // ── Control protocol ──────────────────────────────────────────────────────
