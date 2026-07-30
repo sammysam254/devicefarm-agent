@@ -261,175 +261,30 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── WebCodecs H264 decoder ───────────────────────────────────────────────
-  // Zero-latency design:
-  //   • latencyMode:'realtime' disables internal frame reordering buffers
-  //   • optimizeForLatency:true is the older Chrome hint — kept for compat
-  //   • We wait for a real SPS/PPS config packet before configuring so the
-  //     codec string (avc1.PPCCLL) reflects the actual stream profile/level.
-  //   • On every new config packet we re-configure without closing so Chrome
-  //     handles resolution changes seamlessly.
+  // ── WebSocket connection ─────────────────────────────────────────────────
+  // The server streams PNG frames as binary WebSocket messages.
+  // We decode each PNG with createImageBitmap and draw it via rAF.
+  // If the WS keeps failing (tunnel not up yet), we fall back to polling
+  // /screen.jpg — but we never fall back while the WS is delivering frames.
 
-  let decoder = null;
-  let decoderConfigured = false;
-  let cachedSpsPps = null;
-  let lastTs = 0;
+  let ws = null, wsOk = false;
+  let wsFailCount = 0;
+  let wsRetryTimer = null;
+  // Tracks the last time a frame was received (set on message arrival,
+  // before decoding, so the fallback watchdog is not fooled by slow decodes).
+  let lastFrameReceivedTime = 0;
 
-  function initDecoder() {
-    if (decoder) {
-      try { decoder.close(); } catch (_) {}
-      decoder = null;
-    }
-    decoderConfigured = false;
-    decoder = new VideoDecoder({
-      output: (frame) => { queueDraw(frame); },
-      error:  (e) => {
-        console.warn('[Decoder] error:', e);
-        if (decoder) { try { decoder.close(); } catch(_){} decoder = null; }
-        decoderConfigured = false;
-      }
-    });
-    console.log('[Decoder] created — waiting for SPS/PPS config');
-  }
-
-  function getNalTypes(buf) {
-    const u8 = new Uint8Array(buf);
-    const types = [];
-    for (let i = 0; i < u8.length - 3; i++) {
-      if (u8[i] === 0 && u8[i+1] === 0) {
-        if (u8[i+2] === 1 && i + 3 < u8.length) {
-          types.push(u8[i+3] & 0x1f);
-        } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
-          types.push(u8[i+4] & 0x1f);
-        }
-      }
-    }
-    return types;
-  }
-
-  let lastDecodedFrameTime = 0;
-  // Start the watchdog only after the first frame arrives — don't seed it on WS open
-  // to avoid suppressing the fallback when the decoder never produces output.
-  setInterval(() => {
-    // Only trigger if we've actually received at least one frame before
-    // (lastDecodedFrameTime > 0) OR the WS has been open for >3s without any frame.
-    const wsOpenTooLong = wsOk && wsConnectedAt > 0 && (Date.now() - wsConnectedAt) > 3000;
-    const frameStalled  = lastDecodedFrameTime > 0 && (Date.now() - lastDecodedFrameTime) > 1500;
-    if ((frameStalled || wsOpenTooLong) && !fbRunning) {
-      console.warn('[Watchdog] No H264 frames rendered — enabling screencap fallback');
+  // Fallback watchdog: only fires if WS is connected but no frames arrive
+  // for >5s. This handles the case where the server is up but screencap
+  // on the device has stalled.
+  setInterval(function() {
+    if (!wsOk) return; // not connected — don't trigger fallback
+    if (lastFrameReceivedTime === 0) return; // no frame ever received yet
+    if (Date.now() - lastFrameReceivedTime > 5000 && !fbRunning) {
+      console.warn('[Watchdog] No frames for 5s — starting HTTP fallback');
       startFallback();
     }
   }, 1000);
-
-  function parseSpsCodecString(data) {
-    try {
-      const u8 = new Uint8Array(data);
-      for (let i = 0; i < u8.length - 4; i++) {
-        if (u8[i] === 0 && u8[i+1] === 0) {
-          const offset = (u8[i+2] === 1) ? 3 : (u8[i+2] === 0 && u8[i+3] === 1) ? 4 : 0;
-          if (offset > 0 && i + offset < u8.length) {
-            const nalType = u8[i + offset] & 0x1f;
-            if (nalType === 7 && i + offset + 3 < u8.length) {
-              const p = u8[i + offset + 1].toString(16).padStart(2, '0').toUpperCase();
-              const c = u8[i + offset + 2].toString(16).padStart(2, '0').toUpperCase();
-              const l = u8[i + offset + 3].toString(16).padStart(2, '0').toUpperCase();
-              return 'avc1.' + p + c + l;
-            }
-          }
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  function configureDecoder(configData) {
-    cachedSpsPps = new Uint8Array(configData);
-    const codecStr = parseSpsCodecString(configData) || 'avc1.42E01F';
-    try {
-      if (!decoder || decoder.state === 'closed') initDecoder();
-      const cfg = { codec: codecStr, optimizeForLatency: true };
-      try { cfg.latencyMode = 'realtime'; } catch(_) {}
-      decoder.configure(cfg);
-      decoderConfigured = true;
-      console.log('[Decoder] configured with', codecStr);
-    } catch (e) {
-      console.warn('[Decoder] configure failed:', e);
-      decoderConfigured = false;
-    }
-  }
-
-  function feedFrame(data, isKey) {
-    if (!decoder || decoder.state === 'closed' || !decoderConfigured) return;
-
-    let payload = data;
-    if (isKey && cachedSpsPps) {
-      const types = getNalTypes(data);
-      if (!types.includes(7)) {
-        const combined = new Uint8Array(cachedSpsPps.length + data.byteLength);
-        combined.set(cachedSpsPps, 0);
-        combined.set(new Uint8Array(data), cachedSpsPps.length);
-        payload = combined.buffer;
-      }
-    }
-
-    const ts = Math.max(lastTs + 1, Math.floor(performance.now() * 1000));
-    lastTs = ts;
-    try {
-      decoder.decode(new EncodedVideoChunk({
-        type: isKey ? 'key' : 'delta',
-        timestamp: ts,
-        data: payload
-      }));
-    } catch (e) {
-      console.warn('[Decoder] decode error:', e);
-    }
-  }
-
-  function parseAndFeedNal(data) {
-    const types = getNalTypes(data);
-    const hasSps = types.includes(7);
-    const hasIdr = types.includes(5);
-    const hasPps = types.includes(8);
-
-    console.log('[NAL] Received:', types.map(function(t) { return 'type=' + t; }).join(', '), '(' + data.byteLength + ' bytes)');
-
-    if (hasSps) {
-      // Configure (or re-configure) decoder with the new SPS/PPS data.
-      // Do NOT return early — the same buffer may also contain an IDR frame.
-      console.log('[NAL] Configuring decoder with SPS/PPS');
-      configureDecoder(data);
-      // If this packet is purely a config packet with no IDR, we're done.
-      if (!hasIdr) {
-        console.log('[NAL] Config-only packet, waiting for IDR');
-        return;
-      }
-    }
-
-    // If we still have no decoder config but have a cached SPS, configure now.
-    if (!decoderConfigured && cachedSpsPps) {
-      console.log('[NAL] Using cached SPS/PPS to configure');
-      configureDecoder(cachedSpsPps);
-    }
-
-    // Don't feed frames if the decoder still isn't ready.
-    if (!decoderConfigured) {
-      console.warn('[NAL] Decoder not configured yet, dropping frame');
-      return;
-    }
-
-    if (hasIdr) {
-      console.log('[NAL] Feeding IDR frame');
-      feedFrame(data, true);
-    } else if (types.includes(1)) {
-      feedFrame(data, false);
-    }
-  }
-
-  // ── WebSocket connection ─────────────────────────────────────────────────
-  let ws = null, wsOk = false;
-  let wsFailCount = 0;       // number of consecutive WS failures
-  let wsRetryTimer = null;
-  let wsConnectedAt = 0;     // timestamp when WS last connected (0 = never)
 
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
@@ -437,58 +292,53 @@ function buildPlayerHtml(serial, screenW, screenH) {
     ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
     ws.binaryType = 'arraybuffer';
 
-    ws.onopen = () => {
+    ws.onopen = function() {
       wsOk = true;
       wsFailCount = 0;
-      wsConnectedAt = Date.now();
       modeText.textContent = 'LIVE';
       flushQueue();
     };
 
-    ws.onmessage = (e) => {
+    ws.onmessage = function(e) {
       if (!(e.data instanceof ArrayBuffer)) return;
-      
-      // Received PNG image - display it
-      const blob = new Blob([e.data], { type: 'image/png' });
-      createImageBitmap(blob).then(bmp => {
-        queueDraw(bmp);
-      }).catch(err => {
-        console.warn('[Stream] Failed to decode image:', err);
-      });
+      // Mark frame received immediately — before decode — so watchdog stays quiet
+      lastFrameReceivedTime = Date.now();
+      // Stop HTTP fallback if it was running; WS is working again
+      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE'; }
+      createImageBitmap(new Blob([e.data], { type: 'image/png' }))
+        .then(function(bmp) { queueDraw(bmp); })
+        .catch(function(err) { console.warn('[Stream] PNG decode error:', err); });
     };
 
-    // On error: just retry — don't start screencap fallback yet.
-    // Cloudflare tunnels return 530/503 during startup for 10-30s.
-    ws.onerror = () => {};
+    ws.onerror = function() {};
 
-    ws.onclose = () => {
+    ws.onclose = function() {
       wsOk = false;
-      decoderConfigured = false;
       wsFailCount++;
-      // Only fall back to screencap after 10 consecutive WS failures (~10s)
-      // This covers the Cloudflare tunnel startup window.
-      if (wsFailCount >= 10 && typeof VideoDecoder === 'undefined') {
-        startFallback();
-      }
-      // Retry: fast at first (500ms), then every 1s once tunnel is up
+      // Fall back to HTTP polling only after persistent failures (covers
+      // Cloudflare tunnel startup delay of up to ~30s).
+      if (wsFailCount >= 15 && !fbRunning) startFallback();
       const delay = wsFailCount < 5 ? 500 : 1000;
       wsRetryTimer = setTimeout(connectWS, delay);
     };
   }
 
-  // ── PNG/JPEG screencap fallback (for browsers without WebCodecs) ──────────
+  // ── HTTP screencap fallback ───────────────────────────────────────────────
+  // Used when WS is unavailable or frames have stalled. Polls /screen.jpg.
+  // Automatically stops when the WS recovers (ws.onmessage clears fbRunning).
   let fbRunning = false;
   function startFallback() {
     if (fbRunning) return;
     fbRunning = true;
     modeText.textContent = 'SCREENCAP';
     (function pull() {
-      if (!fbRunning) return; // stopped externally
+      if (!fbRunning) return;
       const q = location.search ? location.search + '&t=' + Date.now() : '?t=' + Date.now();
       fetch('/screen.jpg' + q)
-        .then(r => r.blob()).then(b => createImageBitmap(b))
-        .then(bmp => { queueDraw(bmp); requestAnimationFrame(pull); })
-        .catch(() => setTimeout(pull, 250));
+        .then(function(r) { return r.blob(); })
+        .then(function(b) { return createImageBitmap(b); })
+        .then(function(bmp) { queueDraw(bmp); setTimeout(pull, 67); })
+        .catch(function() { setTimeout(pull, 250); });
     })();
   }
 
