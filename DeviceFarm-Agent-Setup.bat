@@ -163,6 +163,11 @@ if exist "%INSTALL_DIR%\.git" (
 cd /d "%INSTALL_DIR%"
 echo [OK] Working directory: %CD%
 
+:: Patch config.json with correct binary paths for this install location
+echo [*] Patching config.json with local binary paths...
+"%NODE%" -e "const fs=require('fs'),p='config.json',cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p)):{}; cfg.adbPath=require('path').join(process.cwd(),'assets','bin','adb.exe'); cfg.cloudflaredPath=require('path').join(process.cwd(),'assets','bin','cloudflared.exe'); fs.writeFileSync(p,JSON.stringify(cfg,null,2));"
+echo [OK] config.json updated.
+
 :: ════════════════════════════════════════════════════════════════════════════
 :: STEP 5 — npm install + Electron binary
 :: ════════════════════════════════════════════════════════════════════════════

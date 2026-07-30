@@ -105,6 +105,7 @@ function stopHeartbeat() {
 module.exports = {
   registerDevice,
   unregisterDevice,
+  deregisterDevice: unregisterDevice,
   sendHeartbeat,
   startHeartbeat,
   stopHeartbeat,

@@ -121,77 +121,20 @@ function startDashboardServer(port = 7400) {
       }
 
       if (url === '/download/installer' || url === '/download/agent') {
-        const setupBatPath = path.join(process.cwd(), 'DeviceFarm-Agent-Setup.bat');
-        const distDir = path.join(process.cwd(), 'dist');
-        let fileToServe = null;
-
-        if (fs.existsSync(distDir)) {
-          const files = fs.readdirSync(distDir);
-          const exeFile = files.find(f => f.endsWith('.exe'));
-          if (exeFile) {
-            fileToServe = path.join(distDir, exeFile);
-          }
-        }
-
-        if (fileToServe && fs.existsSync(fileToServe)) {
-          const filename = path.basename(fileToServe);
-          res.writeHead(200, {
-            'Content-Type': 'application/octet-stream',
-            'Content-Disposition': `attachment; filename="${filename}"`
-          });
-          fs.createReadStream(fileToServe).pipe(res);
-          return;
-        } else if (fs.existsSync(setupBatPath)) {
+        // Always serve the real standalone setup bat that clones and runs the agent
+        const setupBatPath = path.join(__dirname, '..', '..', 'DeviceFarm-Agent-Setup.bat');
+        if (fs.existsSync(setupBatPath)) {
           res.writeHead(200, {
             'Content-Type': 'application/x-msdos-program',
-            'Content-Disposition': 'attachment; filename="DeviceFarm-Agent-Setup.bat"'
+            'Content-Disposition': 'attachment; filename="DeviceFarm-Agent-Setup.bat"',
+            'Cache-Control': 'no-cache',
           });
           fs.createReadStream(setupBatPath).pipe(res);
-          return;
         } else {
-          const batContent = `@echo off
-TITLE DeviceFarm Setup
-set "PATH=C:\\Program Files\\nodejs;C:\\platform-tools;%PATH%"
-if exist "%~dp0package.json" (
-    set "APP_DIR=%~dp0"
-) else (
-    set "APP_DIR=C:\\DEVICEFARM\\"
-)
-if "%APP_DIR:~-1%"=="\\" set "APP_DIR=%APP_DIR:~0,-1%"
-cd /d "%APP_DIR%"
-where node >nul 2>nul
-if %errorlevel% neq 0 (
-    echo Error: Node.js is not installed. Download from https://nodejs.org
-    pause
-    exit /b 1
-)
-if exist "%APP_DIR%\\node_modules\\electron" (
-    echo Packages verified. Starting Agent...
-) else (
-    echo Installing dependencies...
-    call npm install --no-audit --no-fund
-)
-if exist "%APP_DIR%\\node_modules\\electron\\dist\\electron.exe" (
-    start "" "%APP_DIR%\\node_modules\\electron\\dist\\electron.exe" "%APP_DIR%"
-) else (
-    start "" npx electron "%APP_DIR%"
-)
-echo [*] Waiting for Dashboard service on port 7400...
-:WAIT_LOOP
-curl -s --max-time 1 http://localhost:7400/api/devices >nul 2>nul
-if %errorlevel% neq 0 (
-    timeout /t 1 /nobreak >nul
-    goto WAIT_LOOP
-)
-start "" "http://localhost:7400"
-`;
-          res.writeHead(200, {
-            'Content-Type': 'application/x-msdos-program',
-            'Content-Disposition': 'attachment; filename="DeviceFarm-Agent-Setup.bat"'
-          });
-          res.end(batContent);
-          return;
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Installer not found');
         }
+        return;
       }
 
       if (url === '/' || url === '/index.html') {
@@ -243,8 +186,13 @@ function stopDashboardServer() {
   }
 }
 
+function getDashboardUrl() {
+  return `http://localhost:${serverPort}`;
+}
+
 module.exports = {
   startDashboardServer,
   openInChrome,
   stopDashboardServer,
+  getDashboardUrl,
 };
