@@ -140,6 +140,12 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _spawnServer() {
+    // Diagnostic: verify scrcpy-server.jar exists before spawning
+    if (!fs.existsSync(SCRCPY_JAR_PATH)) {
+      logger.error(`[ScrcpyEngine ${this.serial}] CRITICAL: ${SCRCPY_JAR_PATH} not found! Streaming will fail.`);
+      logger.error(`[ScrcpyEngine ${this.serial}] Download from: https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4`);
+    }
+
     const args = [
       '-s', this.serial, 'shell',
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
@@ -157,9 +163,16 @@ class ScrcpyEngine extends EventEmitter {
       'send_frame_meta=true',      // MUST be true — enables the 12-byte PTS+size header we parse
     ];
 
+    logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
+
     this.serverProc = spawn(ADB_BIN, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    this.serverProc.stdout.on('data', (d) => {
+      const msg = d.toString().trim();
+      if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
     });
 
     this.serverProc.stderr.on('data', (d) => {
