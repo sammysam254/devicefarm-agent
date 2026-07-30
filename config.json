@@ -4,8 +4,8 @@
   "heartbeatIntervalMs": 30000,
   "portRangeStart": 8100,
   "portRangeEnd": 8900,
-  "cloudflaredPath": "",
-  "adbPath": "",
+  "cloudflaredPath": "C:\\DeviceFarmAgent\\assets\\bin\\cloudflared.exe",
+  "adbPath": "C:\\DeviceFarmAgent\\assets\\bin\\adb.exe",
   "supabaseUrl": "https://oazbcgshvwtngaknrtch.supabase.co",
   "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hemJjZ3Nodnd0bmdha25ydGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5NzI4MDUsImV4cCI6MjEwMDU0ODgwNX0.HLKBziJAscEdUANmPObshfRBRvf3puLayYFmLQHf4Jk",
   "supabasePaymentPortalUrl": "https://devicepay.netlify.app",
@@ -13,5 +13,6 @@
   "monthlyFeePerDeviceUsd": 30,
   "defaultPaymentStatus": "unpaid",
   "allowLocalStandalone": true,
-  "allowOfflineGracePeriod": false
+  "allowOfflineGracePeriod": false,
+  "machineBindingCode": "25448462"
 }
