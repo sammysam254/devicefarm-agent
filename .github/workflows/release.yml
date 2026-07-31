@@ -3,12 +3,13 @@ name: Release Setup Script
 on:
   push:
     branches: [ main ]
-    paths: [ 'DeviceFarm-Agent-Setup.bat' ]
   workflow_dispatch:
 
 jobs:
   release:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +22,7 @@ jobs:
         shell: pwsh
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: DeviceFarm-Agent-Setup.bat
           tag_name: v${{ steps.version.outputs.version }}
@@ -31,12 +32,12 @@ jobs:
             
             The setup script will:
             - Install Git, Node.js, and ADB if missing
-            - Clone the agent repository
+            - Clone/update the agent repository
             - Install all dependencies
             - Launch the agent
-            
-            [Documentation](https://github.com/sammysam254/devicefarm-agent)
           draft: false
           prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

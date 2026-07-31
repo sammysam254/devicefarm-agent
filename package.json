@@ -1,6 +1,6 @@
 {
   "name": "my-device-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Automated Android Remote Streaming & Device Management Desktop Agent",
   "main": "src/main/index.js",
   "scripts": {
