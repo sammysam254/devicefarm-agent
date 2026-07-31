@@ -88,6 +88,27 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
+-- ── AUTO-CLEAR DEVICE ASSIGNMENTS WHEN USER IS BLOCKED ───────────────────────
+-- When is_blocked is set to TRUE, automatically delete all device_assignments
+-- for that user so the devices are freed up for reassignment.
+
+CREATE OR REPLACE FUNCTION public.handle_user_blocked()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Only act when is_blocked changed from FALSE/NULL to TRUE
+  IF NEW.is_blocked = TRUE AND (OLD.is_blocked IS DISTINCT FROM TRUE) THEN
+    DELETE FROM public.device_assignments
+    WHERE assigned_to_user_id = NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_user_blocked ON public.profiles;
+CREATE TRIGGER on_user_blocked
+  AFTER UPDATE ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.handle_user_blocked();
+
 -- Enable RLS
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.machine_bindings ENABLE ROW LEVEL SECURITY;

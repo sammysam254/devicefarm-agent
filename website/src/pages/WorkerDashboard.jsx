@@ -2,19 +2,19 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw } from 'lucide-react';
+import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 export default function WorkerDashboard() {
   const { profile } = useAuth();
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [unlockModal, setUnlockModal] = useState(null); // assignment object
+  const [unlockModal, setUnlockModal] = useState(null);
   const [inputPassword, setInputPassword] = useState('');
   const [error, setError] = useState(null);
+  const [revealedPasswords, setRevealedPasswords] = useState({});
 
   const loadData = async () => {
     if (!profile) return;
-    setLoading(true);
     try {
       const { data } = await supabase
         .from('device_assignments')
@@ -30,6 +30,25 @@ export default function WorkerDashboard() {
 
   useEffect(() => {
     loadData();
+    const timer = setInterval(loadData, 5000);
+    return () => clearInterval(timer);
+  }, [profile]);
+
+  // Live subscription: if assignment is removed (user blocked) reload immediately
+  useEffect(() => {
+    if (!profile) return;
+    const channel = supabase
+      .channel(`worker-assignments-${profile.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'device_assignments',
+        filter: `assigned_to_user_id=eq.${profile.id}`,
+      }, () => {
+        loadData();
+      })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
   }, [profile]);
 
   const handleUnlock = (e) => {
@@ -45,57 +64,119 @@ export default function WorkerDashboard() {
     }
   };
 
+  const togglePasswordReveal = (assignmentId) => {
+    setRevealedPasswords(prev => ({
+      ...prev,
+      [assignmentId]: !prev[assignmentId],
+    }));
+  };
+
+  const isDeviceOnline = (d) => d?.status === 'online' && d?.stream_url;
+
   return (
     <DashboardLayout>
       <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Smartphone size={24} color="var(--primary)" />
-            <h1 style={{ fontSize: '24px', fontWeight: 800 }}>Worker Assigned Streams</h1>
+            <h1 style={{ fontSize: '24px', fontWeight: 800 }}>My Assigned Devices</h1>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Devices assigned to you by your Admin. Click to unlock with your password.
+            Devices assigned to you. Use your password to unlock and open the stream.
           </p>
         </div>
         <button onClick={loadData} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh Links
+          <RefreshCw size={16} /> Refresh
         </button>
       </div>
 
       {loading ? (
-        <div>Loading assigned devices...</div>
+        <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>Loading assigned devices...</div>
       ) : assignments.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
-          <Lock size={40} style={{ marginBottom: '12px', opacity: 0.5 }} />
-          <h3>No Devices Assigned Yet</h3>
-          <p style={{ fontSize: '13px', marginTop: '6px' }}>Your Admin has not assigned any device streams to your account yet.</p>
+        <div className="card" style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
+          <Lock size={44} style={{ marginBottom: '14px', opacity: 0.4 }} />
+          <h3 style={{ fontSize: '18px', fontWeight: 700 }}>No Devices Assigned</h3>
+          <p style={{ fontSize: '13px', marginTop: '8px' }}>Your Admin has not assigned any device streams to your account yet.</p>
         </div>
       ) : (
         <div className="grid-cards">
-          {assignments.map(a => (
-            <div key={a.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <span className="badge badge-success">Assigned to You</span>
-                  <span style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{a.devices?.serial}</span>
+          {assignments.map(a => {
+            const online = isDeviceOnline(a.devices);
+            const revealed = revealedPasswords[a.id];
+            return (
+              <div key={a.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+                  <div>
+                    <h3 style={{ fontSize: '18px', fontWeight: 800 }}>
+                      {a.devices?.brand} {a.devices?.model}
+                    </h3>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '12px', fontFamily: 'monospace', marginTop: '3px' }}>
+                      {a.devices?.serial}
+                    </p>
+                  </div>
+                  <span className={`badge ${online ? 'badge-success' : 'badge-warning'}`} style={{ flexShrink: 0 }}>
+                    {online ? '🟢 Online' : '🟡 Offline'}
+                  </span>
                 </div>
-                <h3 style={{ fontSize: '18px', fontWeight: 700 }}>{a.devices?.brand} {a.devices?.model}</h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px' }}>
-                  Password protected device link
-                </p>
-              </div>
 
-              <div style={{ marginTop: '20px' }}>
-                <button 
+                {/* Password Row */}
+                <div style={{
+                  background: 'rgba(56,189,248,0.06)',
+                  border: '1px solid rgba(56,189,248,0.15)',
+                  borderRadius: '10px',
+                  padding: '10px 14px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  marginBottom: '14px',
+                }}>
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '3px' }}>
+                      Your Access Password
+                    </div>
+                    <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '18px', letterSpacing: '2px' }}>
+                      {revealed ? a.access_password : '••••••'}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => togglePasswordReveal(a.id)}
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 10px', fontSize: '12px' }}
+                    title={revealed ? 'Hide password' : 'Show password'}
+                  >
+                    {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                    {revealed ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+
+                {/* Stream URL info */}
+                {a.devices?.stream_url ? (
+                  <div style={{
+                    fontSize: '11px', fontFamily: 'monospace',
+                    color: 'var(--text-muted)', wordBreak: 'break-all',
+                    marginBottom: '14px', lineHeight: 1.5,
+                  }}>
+                    {a.devices.stream_url.substring(0, 60)}...
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', color: 'var(--text-dim)', fontSize: '12px' }}>
+                    <AlertCircle size={14} /> Device offline — stream link not yet available
+                  </div>
+                )}
+
+                {/* Open Button */}
+                <button
+                  disabled={!online}
                   onClick={() => { setUnlockModal(a); setInputPassword(''); setError(null); }}
                   className="btn btn-primary"
-                  style={{ width: '100%', justifyContent: 'center' }}
+                  style={{ width: '100%', justifyContent: 'center', opacity: online ? 1 : 0.5 }}
                 >
-                  <Unlock size={16} /> Unlock & Open Device Stream <ExternalLink size={14} />
+                  <Unlock size={16} />
+                  {online ? 'Unlock & Open Device Stream' : 'Device Offline'}
+                  {online && <ExternalLink size={14} />}
                 </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -107,7 +188,7 @@ export default function WorkerDashboard() {
               <Lock size={20} color="var(--primary)" /> Unlock Device Stream
             </h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '16px' }}>
-              Enter the password assigned by your Admin to open <b>{unlockModal.devices?.brand} {unlockModal.devices?.model}</b>.
+              Enter the password to open <b>{unlockModal.devices?.brand} {unlockModal.devices?.model}</b>.
             </p>
 
             {error && (
@@ -117,7 +198,7 @@ export default function WorkerDashboard() {
             )}
 
             <form onSubmit={handleUnlock} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <input 
+              <input
                 type="password"
                 required
                 autoFocus
@@ -126,7 +207,6 @@ export default function WorkerDashboard() {
                 value={inputPassword}
                 onChange={e => setInputPassword(e.target.value)}
               />
-
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
                 <button type="button" onClick={() => setUnlockModal(null)} className="btn btn-secondary">
                   Cancel

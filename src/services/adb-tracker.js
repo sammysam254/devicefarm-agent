@@ -10,6 +10,7 @@ const apiClient = require('./api-client');
 const processManager = require('../main/process-manager');
 const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
+const enrollmentGuard = require('./enrollment-guard');
 const path = require('path');
 const fs = require('fs');
 
@@ -212,6 +213,9 @@ async function startTracking() {
     tracker.on('error', (err) => logger.error(`ADB tracker error: ${err.message}`));
 
     logger.info('✅ ADB device tracker started');
+
+    // Start background enrollment guard (catches rebooted/silently-reconnected devices)
+    enrollmentGuard.startEnrollmentGuard(handleDeviceAdd, handleDeviceRemove, 12000);
   } catch (err) {
     logger.error(`Failed to start ADB tracker: ${err.message} — retry in 5s`);
     setTimeout(startTracking, 5000);
@@ -219,6 +223,7 @@ async function startTracking() {
 }
 
 function stopTracking() {
+  enrollmentGuard.stopEnrollmentGuard();
   if (tracker) {
     try { tracker.end(); tracker = null; logger.info('ADB tracker stopped'); }
     catch (err) { logger.error(`Error stopping ADB tracker: ${err.message}`); }
