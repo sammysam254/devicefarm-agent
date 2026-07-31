@@ -195,7 +195,15 @@ async function startTracking() {
     const devices = await client.listDevices();
     logger.info(`Initial ADB scan: ${devices.length} device(s)`);
     for (const d of devices) {
-      if (d.type === 'device') await handleDeviceAdd(d);
+      if (d.type === 'device') {
+        await handleDeviceAdd(d);
+      } else if (d.type === 'unauthorized') {
+        logger.warn(`Device ${d.id} is UNAUTHORIZED — check the phone screen and tap "Allow USB Debugging", then reconnect the cable.`);
+      } else if (d.type === 'offline') {
+        logger.warn(`Device ${d.id} is OFFLINE — try unplugging and replugging the USB cable.`);
+      } else {
+        logger.info(`Device ${d.id} skipped (type: ${d.type})`);
+      }
     }
   } catch (err) {
     logger.error(`Initial ADB scan failed: ${err.message}`);
@@ -204,7 +212,15 @@ async function startTracking() {
   try {
     tracker = await client.trackDevices();
 
-    tracker.on('add',    (d) => { if (d.type === 'device') handleDeviceAdd(d); });
+    tracker.on('add', (d) => {
+      if (d.type === 'device') {
+        handleDeviceAdd(d);
+      } else if (d.type === 'unauthorized') {
+        logger.warn(`Device ${d.id} is UNAUTHORIZED — check the phone screen and tap "Allow USB Debugging".`);
+      } else if (d.type === 'offline') {
+        logger.warn(`Device ${d.id} is OFFLINE — try unplugging and replugging the USB cable.`);
+      }
+    });
     tracker.on('remove', (d) => handleDeviceRemove(d));
     tracker.on('end',    () => {
       logger.warn('ADB tracker ended — restarting in 5s');
