@@ -554,41 +554,42 @@ function buildPlayerHtml(serial, screenW, screenH) {
     setTimeout(() => d.remove(), 230);
   }
 
-  // ── Pointer events ───────────────────────────────────────────────────────
+  // ── Pointer & Drag Control (Smooth & Zero Shaking) ──────────────────────
   let down = false;
-  let lastMoveTime = 0;
+  let activePointerId = null;
 
-  canvas.addEventListener('mousedown',  onDown);
-  canvas.addEventListener('mousemove',  onMove);
-  canvas.addEventListener('mouseup',    onUp);
-  canvas.addEventListener('touchstart', onDown, { passive: false });
-  canvas.addEventListener('touchmove',  onMove, { passive: false });
-  canvas.addEventListener('touchend',   onUp);
-
-  function onDown(e) {
-    e.preventDefault(); down = true;
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    down = true;
+    activePointerId = e.pointerId;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    initAudio();
     const c = coords(e);
     ripple(c.cx, c.cy);
     send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH });
-  }
-  function onMove(e) {
-    if (!down) return; e.preventDefault();
-    const now = Date.now();
-    if (now - lastMoveTime < 16) return; // 60Hz micro-throttle
-    lastMoveTime = now;
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!down) return;
+    e.preventDefault();
     const c = coords(e);
     send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH });
+  });
+
+  function releasePointer(e) {
+    if (!down) return;
+    down = false;
+    if (activePointerId !== null) {
+      try { canvas.releasePointerCapture(activePointerId); } catch (_) {}
+      activePointerId = null;
+    }
+    const c = coords(e);
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH });
   }
-  function onUp(e) {
-    if (!down) return; e.preventDefault(); down = false;
-    const cx = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
-    const cy = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
-    const r  = canvas.getBoundingClientRect();
-    send({ type:'touch', action:1,
-      x: Math.round((cx - r.left) * (nativeW / r.width)),
-      y: Math.round((cy - r.top)  * (nativeH / r.height)),
-      width:nativeW, height:nativeH });
-  }
+
+  canvas.addEventListener('pointerup', releasePointer);
+  canvas.addEventListener('pointercancel', releasePointer);
+  window.addEventListener('pointerup', releasePointer);
 
   // wheel scroll
   let wheelT = null;

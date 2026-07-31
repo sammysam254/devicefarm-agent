@@ -440,20 +440,29 @@ class ScrcpyEngine extends EventEmitter {
   _pipeAudioToClients(socket) {
     let buf = Buffer.alloc(0);
     let headerDone = false;
-    const CODEC_HEADER_LEN = 4;
-    const META = 12; // 8-byte PTS + 4-byte size
+
     socket.on('data', (chunk) => {
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+
       if (!headerDone) {
-        if (buf.length < CODEC_HEADER_LEN) return;
-        const codecStr = buf.toString('utf8', 0, 4);
-        logger.info(`[ScrcpyEngine ${this.serial}] Audio stream header: ${codecStr}`);
-        buf = buf.subarray(CODEC_HEADER_LEN);
+        // Scrcpy 2.4 sends 1 dummy byte (0x00) followed by 4-byte codec ID ("OPUS")
+        if (buf.length < 5) return;
+
+        let offset = 0;
+        if (buf[0] === 0x00) {
+          offset = 1;
+        }
+
+        const codecStr = buf.toString('utf8', offset, offset + 4);
+        logger.info(`[ScrcpyEngine ${this.serial}] Audio codec header detected: ${codecStr}`);
+        buf = buf.subarray(offset + 4);
         headerDone = true;
       }
+
+      const META = 12; // 8-byte PTS + 4-byte size
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
-        if (pktSize === 0 || pktSize > 1024 * 1024) {
+        if (pktSize === 0 || pktSize > 512 * 1024) {
           buf = buf.subarray(1);
           continue;
         }
@@ -464,7 +473,10 @@ class ScrcpyEngine extends EventEmitter {
       }
     });
     socket.on('close', () => { this.audioSocket = null; });
-    socket.on('error', () => { this.audioSocket = null; });
+    socket.on('error', (e) => {
+      logger.warn(`[ScrcpyEngine ${this.serial}] Audio socket error: ${e.message}`);
+      this.audioSocket = null;
+    });
   }
 
   _broadcastAudio(payload) {
