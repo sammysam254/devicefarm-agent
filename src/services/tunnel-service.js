@@ -83,8 +83,8 @@ function ensureCloudflaredAvailable() {
   });
 }
 
-/** Regex to capture trycloudflare.com URL */
-const TUNNEL_URL_REGEX = /https?:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
+/** Regex to capture trycloudflare.com URL (excluding Cloudflare internal api.trycloudflare.com) */
+const TUNNEL_URL_REGEX = /https?:\/\/(?!api\.)[a-zA-Z0-9-]+\.trycloudflare\.com/;
 const TUNNEL_TIMEOUT_MS = 30000;
 const MAX_RETRIES = 3;
 

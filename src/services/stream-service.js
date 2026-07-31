@@ -769,8 +769,9 @@ async function startStreamServer(serial, port) {
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 function buildStreamUrl(tunnelDomain, port, serial) {
-  const domain = tunnelDomain.replace(/^https?:\/\//, '');
-  return `https://${domain}/?action=proxy&remote=tcp%3A127.0.0.1%3A${port}&udid=${encodeURIComponent(serial)}`;
+  const cleanDomain = tunnelDomain.replace(/\/+$/, '');
+  const domain = cleanDomain.startsWith('http') ? cleanDomain : `https://${cleanDomain}`;
+  return `${domain}/?udid=${encodeURIComponent(serial)}`;
 }
 
 function killStreamServer(streamProcess) {
