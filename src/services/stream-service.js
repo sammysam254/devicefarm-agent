@@ -292,23 +292,26 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (audioDecoderReady) return true;
     if (typeof AudioDecoder === 'undefined') return false;
     try {
+      let layoutDetected = false;
+      let isPlanar = false;
+
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
           if (!audioCtx || !gainNode) { audioData.close(); return; }
           try {
-            const nCh = audioData.numberOfChannels;
+            const nCh     = audioData.numberOfChannels;
             const nFrames = audioData.numberOfFrames;
-            const sr = audioData.sampleRate;
+            const sr      = audioData.sampleRate;
 
-            // WebCodecs AudioSampleFormat: 'f32-planar' = one plane per channel,
-            // 'f32' = interleaved (all channels in a single plane).
-            // Detect by probing planeIndex 1 with the planar format.
-            let isPlanar = false;
-            if (nCh > 1) {
-              try { audioData.allocationSize({ planeIndex: 1, format: 'f32-planar' }); isPlanar = true; }
-              catch (_) { isPlanar = false; }
-            } else {
-              isPlanar = true;
+            // Detect planar vs interleaved once and cache it
+            if (!layoutDetected) {
+              if (nCh > 1) {
+                try { audioData.allocationSize({ planeIndex: 1, format: 'f32-planar' }); isPlanar = true; }
+                catch (_) { isPlanar = false; }
+              } else {
+                isPlanar = true;
+              }
+              layoutDetected = true;
             }
 
             const webAudioBuf = audioCtx.createBuffer(nCh, nFrames, sr);
@@ -316,36 +319,33 @@ function buildPlayerHtml(serial, screenW, screenH) {
             if (isPlanar) {
               for (let ch = 0; ch < nCh; ch++) {
                 const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32-planar' });
-                const plane = new Float32Array(byteLen / 4);
+                const plane   = new Float32Array(byteLen / 4);
                 audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
                 webAudioBuf.copyToChannel(plane, ch);
               }
             } else {
-              // Interleaved: format 'f32', single plane 0, layout [L0,R0,L1,R1,...]
-              const byteLen = audioData.allocationSize({ planeIndex: 0, format: 'f32' });
+              const byteLen    = audioData.allocationSize({ planeIndex: 0, format: 'f32' });
               const interleaved = new Float32Array(byteLen / 4);
               audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
               for (let ch = 0; ch < nCh; ch++) {
                 const chData = webAudioBuf.getChannelData(ch);
-                for (let i = 0; i < nFrames; i++) {
-                  chData[i] = interleaved[i * nCh + ch];
-                }
+                for (let i = 0; i < nFrames; i++) chData[i] = interleaved[i * nCh + ch];
               }
             }
 
             audioData.close();
+
             const src = audioCtx.createBufferSource();
             src.buffer = webAudioBuf;
             src.connect(gainNode);
+
             const now = audioCtx.currentTime;
-            // Keep audio within 120ms of real-time — drop if too far ahead
-            const MAX_AHEAD = 0.12;
-            if (audioNextPlayTime < now) {
-              audioNextPlayTime = now;
-            } else if (audioNextPlayTime > now + MAX_AHEAD) {
-              // Queue has drifted ahead — skip this packet to snap back to real-time
-              return;
-            }
+            // If behind real-time, snap forward immediately (no gap)
+            if (audioNextPlayTime < now) audioNextPlayTime = now;
+            // If more than 300ms ahead, snap back to now (prevent runaway drift)
+            // 300ms is generous enough to absorb normal network jitter without dropping
+            if (audioNextPlayTime > now + 0.3) audioNextPlayTime = now;
+
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -357,13 +357,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
           console.warn('[Audio] AudioDecoder error:', err);
           audioDecoderReady = false;
           audioDecoder = null;
+          layoutDetected = false;
         }
       });
-      audioDecoder.configure({
-        codec: 'opus',
-        sampleRate: 48000,
-        numberOfChannels: 2,
-      });
+      audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
       audioDecoderReady = true;
       return true;
     } catch (err) {
@@ -380,11 +377,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (!initOpusDecoder()) return;
     }
     if (!audioDecoder || audioDecoder.state === 'closed') { audioDecoderReady = false; return; }
-    // Drop if decode queue is backing up (latency control)
-    if (audioDecoder.decodeQueueSize > 6) return;
     try {
       audioDecoder.decode(new EncodedAudioChunk({
-        type: 'key', // Opus packets are always independently decodable
+        type: 'key',
         timestamp: performance.now() * 1000,
         data: bytes
       }));
@@ -414,11 +409,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       src.buffer = buf;
       src.connect(gainNode);
       const now = audioCtx.currentTime;
-      if (audioNextPlayTime < now) {
-        audioNextPlayTime = now;
-      } else if (audioNextPlayTime > now + 0.12) {
-        return; // too far ahead — drop to stay real-time
-      }
+      if (audioNextPlayTime < now) audioNextPlayTime = now;
+      if (audioNextPlayTime > now + 0.3) audioNextPlayTime = now;
       src.start(audioNextPlayTime);
       audioNextPlayTime += buf.duration;
     } catch (_) {}
