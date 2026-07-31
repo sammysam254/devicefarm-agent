@@ -240,18 +240,6 @@ echo [*] Generating Machine Binding Code...
 "%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
 "%NODE%" "src\services\verify-payment.js"
 
-:: ════════════════════════════════════════════════════════════════════════════
-:: STEP 6 — Payment verification + Launch
-:: ════════════════════════════════════════════════════════════════════════════
-echo.
-echo  ================================================================
-echo   STEP 1: PAYMENT SYSTEM VERIFICATION  ($30 / month)
-echo  ================================================================
-echo.
-echo [*] Generating Machine Binding Code...
-"%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
-"%NODE%" "src\services\verify-payment.js"
-
 echo.
 echo  ================================================================
 echo   STEP 2: RESETTING ADB SERVER
@@ -263,8 +251,9 @@ echo [*] Resetting ADB server to force fresh USB authorization prompt...
 set "ADB_BIN=%INSTALL_DIR%\assets\bin\adb.exe"
 if not exist "%ADB_BIN%" set "ADB_BIN=adb"
 
-:: Kill existing ADB server
+:: Kill every existing ADB server (bundled + any system-wide one)
 "%ADB_BIN%" kill-server >nul 2>&1
+taskkill /F /IM adb.exe >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
 
 :: Clear stale ADB keys so the phone is forced to show the Allow prompt
@@ -272,28 +261,67 @@ if exist "%USERPROFILE%\.android\adbkey" (
     echo [*] Removing stale ADB keys...
     del /F /Q "%USERPROFILE%\.android\adbkey" >nul 2>&1
     del /F /Q "%USERPROFILE%\.android\adbkey.pub" >nul 2>&1
-    echo [OK] Stale ADB keys removed.
+    echo [OK] Stale ADB keys removed — phone will be asked to authorize again.
 )
 
-:: Start fresh ADB server
+:: Start fresh ADB server with the bundled binary
 echo [*] Starting fresh ADB server...
 "%ADB_BIN%" start-server >nul 2>&1
+ping 127.0.0.1 -n 2 >nul
+
+echo.
+echo  ================================================================
+echo   ACTION REQUIRED — READ THIS CAREFULLY
+echo  ================================================================
+echo.
+echo   1. UNLOCK your phone screen right now
+echo   2. Keep the phone screen ON and USB cable plugged in
+echo   3. A popup asking "Allow USB Debugging?" should appear
+echo   4. Tap ALLOW  (check "Always allow" to skip this next time)
+echo.
+echo   If no popup appears after 10 seconds:
+echo     - Unplug the USB cable, wait 3 seconds, plug it back in
+echo     - The popup should appear within 5 seconds
+echo  ================================================================
+echo.
+
+:: Force a reconnect to re-trigger the auth handshake
+"%ADB_BIN%" reconnect >nul 2>&1
 ping 127.0.0.1 -n 3 >nul
 
-:: Show current device list so user knows what to do
-echo [*] Current ADB device status:
-"%ADB_BIN%" devices -l
+:: Wait loop — check every 5 seconds for up to 60 seconds
+set /a ADB_WAIT=0
+:adb_auth_loop
+set /a ADB_WAIT+=1
+if %ADB_WAIT% gtr 12 goto adb_auth_timeout
+
+:: Check if device is now authorized
+"%ADB_BIN%" devices 2>nul | findstr /R "device$" >nul
+if %errorlevel% equ 0 (
+    echo [OK] Phone authorized successfully!
+    "%ADB_BIN%" devices -l
+    goto adb_auth_done
+)
+
+:: Still unauthorized — nudge it with a reconnect every 3 checks
+set /a ADB_MOD=%ADB_WAIT% %% 3
+if %ADB_MOD% equ 0 (
+    "%ADB_BIN%" reconnect >nul 2>&1
+)
+
+echo [*] Waiting for phone authorization... attempt %ADB_WAIT%/12  ^(plug/unplug cable if no popup^)
+ping 127.0.0.1 -n 6 >nul
+goto adb_auth_loop
+
+:adb_auth_timeout
 echo.
-echo  ---------------------------------------------------------------
-echo   ACTION REQUIRED: Unlock your phone now.
-echo   A popup will appear asking "Allow USB Debugging?" — tap ALLOW.
-echo   Check "Always allow from this computer" to avoid this next time.
-echo  ---------------------------------------------------------------
+echo  [WARN] Phone not authorized after 60 seconds.
+echo         The agent will still launch — once you accept on the phone,
+echo         devices will appear in the dashboard automatically.
 echo.
-echo [*] Waiting 20 seconds for you to accept on the phone...
-ping 127.0.0.1 -n 21 >nul
-echo [*] Checking device status after wait...
-"%ADB_BIN%" devices -l
+goto adb_auth_done
+
+:adb_auth_done
 echo.
 
 echo.
