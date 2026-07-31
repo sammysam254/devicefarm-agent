@@ -162,3 +162,43 @@ body {
   padding: 28px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
 }
+
+/* ── Mobile Responsive ─────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .grid-cards {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .card {
+    padding: 16px;
+    border-radius: 12px;
+  }
+
+  .btn {
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .modal-overlay {
+    padding: 12px;
+    align-items: flex-end;
+  }
+
+  .modal-box {
+    padding: 20px 16px;
+    border-radius: 16px 16px 0 0;
+    max-width: 100%;
+  }
+
+  .badge {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+}
+
+@media (min-width: 641px) {
+  .nav-exit-label {
+    display: inline !important;
+  }
+}

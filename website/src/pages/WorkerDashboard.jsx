@@ -75,13 +75,13 @@ export default function WorkerDashboard() {
 
   return (
     <DashboardLayout>
-      <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Smartphone size={24} color="var(--primary)" />
-            <h1 style={{ fontSize: '24px', fontWeight: 800 }}>My Assigned Devices</h1>
+            <h1 style={{ fontSize: '22px', fontWeight: 800 }}>My Assigned Devices</h1>
           </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
             Devices assigned to you. Use your password to unlock and open the stream.
           </p>
         </div>

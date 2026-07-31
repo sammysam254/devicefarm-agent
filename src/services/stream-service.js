@@ -143,7 +143,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>${serial} — Live</title>
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -170,6 +170,70 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:360px}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
+
+    /* ── Mobile bottom navigation bar ─────────────────────────────────────── */
+    .mobile-nav{
+      display:none;
+      position:fixed;bottom:0;left:0;right:0;
+      background:rgba(8,12,24,.97);
+      border-top:1px solid rgba(56,189,248,.2);
+      backdrop-filter:blur(16px);
+      -webkit-backdrop-filter:blur(16px);
+      padding:6px 10px;
+      padding-bottom:max(6px, env(safe-area-inset-bottom, 6px));
+      z-index:50;
+      align-items:center;
+      justify-content:space-around;
+      gap:4px;
+    }
+    .mnav-btn{
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+      background:rgba(255,255,255,.05);
+      border:1px solid rgba(255,255,255,.1);
+      border-radius:12px;
+      padding:7px 6px;
+      color:#94a3b8;
+      font-size:20px;
+      cursor:pointer;
+      transition:all .15s ease;
+      flex:1;
+      max-width:68px;
+      min-width:44px;
+      min-height:52px;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .mnav-btn .lbl{font-size:9px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;line-height:1}
+    .mnav-btn:active{transform:scale(.88)}
+    /* Back — red accent */
+    .mnav-btn.nav-back{color:#f87171;border-color:rgba(248,113,113,.25);background:rgba(248,113,113,.07)}
+    .mnav-btn.nav-back:active{background:rgba(248,113,113,.25)}
+    /* Home — sky accent */
+    .mnav-btn.nav-home{color:#38bdf8;border-color:rgba(56,189,248,.3);background:rgba(56,189,248,.08)}
+    .mnav-btn.nav-home:active{background:rgba(56,189,248,.25)}
+    /* Recent — purple accent */
+    .mnav-btn.nav-recent{color:#c084fc;border-color:rgba(192,132,252,.25);background:rgba(192,132,252,.07)}
+    .mnav-btn.nav-recent:active{background:rgba(192,132,252,.2)}
+    /* Volume down — amber */
+    .mnav-btn.nav-voldn{color:#fbbf24;border-color:rgba(251,191,36,.25);background:rgba(251,191,36,.06)}
+    .mnav-btn.nav-voldn:active{background:rgba(251,191,36,.2)}
+    /* Volume up — emerald */
+    .mnav-btn.nav-volup{color:#34d399;border-color:rgba(52,211,153,.25);background:rgba(52,211,153,.06)}
+    .mnav-btn.nav-volup:active{background:rgba(52,211,153,.2)}
+    /* Mute — default muted state red */
+    .mnav-btn.nav-mute-m{color:#94a3b8}
+    .mnav-sep{width:1px;height:36px;background:rgba(255,255,255,.12);flex-shrink:0;border-radius:1px}
+
+    /* ── Responsive: mobile ≤ 640px ─────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .sidebar  { display: none !important; }
+      .back     { display: none !important; }
+      .mobile-nav { display: flex; }
+      body      { padding: 4px 8px; }
+      .stage    { padding-bottom: 78px; }
+      canvas    { max-height: calc(100dvh - 110px); max-width: 100%; width: auto; height: auto; }
+      .wrap     { border-radius: 10px; border-width: 1px; max-width: 100%; }
+      .header   { max-width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -210,6 +274,36 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <div class="hr"></div>
     <button class="btn btn-red" onclick="reboot()">&#128260;</button>
   </div>
+</div>
+
+<!-- ── Mobile Bottom Navigation Bar ───────────────────────────────────────── -->
+<div class="mobile-nav" id="mobileNav">
+  <button class="mnav-btn nav-back" onclick="key(4)" title="Back">
+    <span>&#x21A9;</span>
+    <span class="lbl">Back</span>
+  </button>
+  <div class="mnav-sep"></div>
+  <button class="mnav-btn nav-home" onclick="key(3)" title="Home">
+    <span>&#9711;</span>
+    <span class="lbl">Home</span>
+  </button>
+  <button class="mnav-btn nav-recent" onclick="key(187)" title="Recent Apps">
+    <span>&#9723;</span>
+    <span class="lbl">Recent</span>
+  </button>
+  <div class="mnav-sep"></div>
+  <button class="mnav-btn nav-voldn" onclick="key(25)" title="Volume Down">
+    <span>&#128264;</span>
+    <span class="lbl">Vol&#x2212;</span>
+  </button>
+  <button class="mnav-btn nav-mute-m" id="muteBtnM" onclick="toggleMute()" title="Mute/Unmute">
+    <span id="muteBtnMIcon">&#128266;</span>
+    <span class="lbl">Mute</span>
+  </button>
+  <button class="mnav-btn nav-volup" onclick="key(24)" title="Volume Up">
+    <span>&#128265;</span>
+    <span class="lbl">Vol+</span>
+  </button>
 </div>
 
 <div class="modal" id="textModal">
@@ -418,12 +512,21 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
       try { audioDecoder.flush().catch(function(){}); } catch (_) {}
     }
+    // Sync desktop sidebar mute button
     const btn = document.getElementById('muteBtn');
     if (btn) {
       btn.textContent = isMuted ? '🔇' : '🔊';
       btn.title = isMuted ? 'Unmute audio' : 'Mute audio';
       btn.style.color = isMuted ? '#f87171' : '';
       btn.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
+    }
+    // Sync mobile bottom bar mute button
+    const iconM = document.getElementById('muteBtnMIcon');
+    const btnM  = document.getElementById('muteBtnM');
+    if (iconM) iconM.textContent = isMuted ? '🔇' : '🔊';
+    if (btnM)  {
+      btnM.style.color = isMuted ? '#f87171' : '';
+      btnM.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
     }
   }
 

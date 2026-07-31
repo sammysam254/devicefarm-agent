@@ -7,10 +7,10 @@ export default function Navbar({ toggleSidebar }) {
 
   const getRoleBadge = (role) => {
     switch (role) {
-      case 'seed_admin': return <span class="badge badge-danger"><Shield size={12} /> Seed Owner</span>;
-      case 'super_admin': return <span class="badge badge-warning">Super Admin</span>;
-      case 'admin': return <span class="badge badge-info">Admin</span>;
-      default: return <span class="badge badge-success">Worker</span>;
+      case 'seed_admin': return <span className="badge badge-danger"><Shield size={12} /> Seed Owner</span>;
+      case 'super_admin': return <span className="badge badge-warning">Super Admin</span>;
+      case 'admin': return <span className="badge badge-info">Admin</span>;
+      default: return <span className="badge badge-success">Worker</span>;
     }
   };
 
@@ -23,12 +23,12 @@ export default function Navbar({ toggleSidebar }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '0 20px',
+      padding: '0 16px',
       position: 'sticky',
       top: 0,
       zIndex: 40
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         <button 
           onClick={toggleSidebar}
           className="btn btn-secondary"
@@ -37,13 +37,13 @@ export default function Navbar({ toggleSidebar }) {
         >
           <Menu size={20} />
         </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 800, fontSize: '18px' }}>
-          <Smartphone size={24} color="var(--primary)" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '18px' }}>
+          <Smartphone size={22} color="var(--primary)" />
           <span>DeviceFarm</span>
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <button 
           onClick={toggleTheme} 
           className="btn btn-secondary" 
@@ -54,13 +54,10 @@ export default function Navbar({ toggleSidebar }) {
         </button>
 
         {profile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {getRoleBadge(profile.role)}
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'none', mdDisplay: 'inline' }}>
-              {profile.email}
-            </span>
             <button onClick={logout} className="btn btn-danger" style={{ padding: '6px 12px', fontSize: '12px' }}>
-              <LogOut size={14} /> Exit
+              <LogOut size={14} /> <span style={{ display: 'none' }} className="nav-exit-label">Exit</span>
             </button>
           </div>
         )}
@@ -68,3 +65,4 @@ export default function Navbar({ toggleSidebar }) {
     </header>
   );
 }
+
