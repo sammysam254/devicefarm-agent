@@ -85,7 +85,7 @@ function ensureCloudflaredAvailable() {
 
 /** Regex to capture trycloudflare.com URL */
 const TUNNEL_URL_REGEX = /https?:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
-const TUNNEL_TIMEOUT_MS = 15000;
+const TUNNEL_TIMEOUT_MS = 30000;
 const MAX_RETRIES = 3;
 
 function createTunnel(port) {
@@ -111,7 +111,7 @@ function createTunnel(port) {
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          logger.warn(`Cloudflared tunnel timed out after ${TUNNEL_TIMEOUT_MS}ms for port ${port}`);
+          logger.warn(`Cloudflared tunnel timed out after ${TUNNEL_TIMEOUT_MS}ms for port ${port}. Output: ${combinedOutput.trim().substring(0, 300)}`);
           killTunnel(tunnelProcess);
           reject(new Error(`Tunnel URL not received within ${TUNNEL_TIMEOUT_MS}ms`));
         }
