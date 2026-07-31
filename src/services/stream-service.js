@@ -300,33 +300,33 @@ function buildPlayerHtml(serial, screenW, screenH) {
             const nFrames = audioData.numberOfFrames;
             const sr = audioData.sampleRate;
 
-            // AudioData may be interleaved (1 plane) or planar (nCh planes).
-            // Detect by checking if planeIndex 1 exists when nCh > 1.
+            // WebCodecs AudioSampleFormat: 'f32-planar' = one plane per channel,
+            // 'f32' = interleaved (all channels in a single plane).
+            // Detect by probing planeIndex 1 with the planar format.
             let isPlanar = false;
             if (nCh > 1) {
-              try { audioData.allocationSize({ planeIndex: 1, format: 'f32' }); isPlanar = true; }
+              try { audioData.allocationSize({ planeIndex: 1, format: 'f32-planar' }); isPlanar = true; }
               catch (_) { isPlanar = false; }
             } else {
               isPlanar = true;
             }
 
-            const buf = audioCtx.createBuffer(nCh, nFrames, sr);
+            const webAudioBuf = audioCtx.createBuffer(nCh, nFrames, sr);
 
             if (isPlanar) {
-              // Each channel is a separate plane
               for (let ch = 0; ch < nCh; ch++) {
-                const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32' });
+                const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32-planar' });
                 const plane = new Float32Array(byteLen / 4);
-                audioData.copyTo(plane, { planeIndex: ch, format: 'f32' });
-                buf.copyToChannel(plane, ch);
+                audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
+                webAudioBuf.copyToChannel(plane, ch);
               }
             } else {
-              // Interleaved: all channels in plane 0, layout = [L0,R0,L1,R1,...]
-              const byteLen = audioData.allocationSize({ planeIndex: 0, format: 'f32-interleaved' });
+              // Interleaved: format 'f32', single plane 0, layout [L0,R0,L1,R1,...]
+              const byteLen = audioData.allocationSize({ planeIndex: 0, format: 'f32' });
               const interleaved = new Float32Array(byteLen / 4);
-              audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32-interleaved' });
+              audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
               for (let ch = 0; ch < nCh; ch++) {
-                const chData = buf.getChannelData(ch);
+                const chData = webAudioBuf.getChannelData(ch);
                 for (let i = 0; i < nFrames; i++) {
                   chData[i] = interleaved[i * nCh + ch];
                 }
@@ -335,12 +335,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
             audioData.close();
             const src = audioCtx.createBufferSource();
-            src.buffer = buf;
+            src.buffer = webAudioBuf;
             src.connect(gainNode);
             const now = audioCtx.currentTime;
             if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
             src.start(audioNextPlayTime);
-            audioNextPlayTime += buf.duration;
+            audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
             console.warn('[Audio] output error:', err);
             try { audioData.close(); } catch (_) {}
@@ -519,8 +519,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     ws.onopen = function() {
       wsOk = true;
       wsFailCount = 0;
-      lastFrameReceivedTime = 0; // reset so watchdog waits full 15s from now
+      lastFrameReceivedTime = 0;
       modeText.textContent = 'LIVE 60FPS';
+      // Resume AudioContext now that the WS is open (counts as async user-initiated context)
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
     };
 
