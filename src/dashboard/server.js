@@ -137,7 +137,25 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
-      if (url === '/' || url === '/index.html') {
+      const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      const actionParam = fullUrl.searchParams.get('action');
+      const udidParam = fullUrl.searchParams.get('udid');
+      const remoteParam = fullUrl.searchParams.get('remote');
+
+      // If action=proxy or udid/remote is specified on dashboard server, redirect to the device stream server port
+      if (actionParam === 'proxy' || udidParam || remoteParam) {
+        const serial = udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null);
+        const devices = processManager.getActiveDeviceSummaries();
+        const targetDev = devices.find(d => d.serial === serial) || devices[0];
+        if (targetDev && targetDev.port) {
+          const targetUrl = `http://localhost:${targetDev.port}${req.url}`;
+          res.writeHead(302, { 'Location': targetUrl });
+          res.end();
+          return;
+        }
+      }
+
+      if (url === '/' || url === '/index.html' || !url) {
         fs.readFile(htmlPath, (err, data) => {
           if (err) {
             res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -150,8 +168,16 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('404 Not Found');
+      // Default fallback for any non-API SPA routes: serve dashboard index.html instead of 404
+      fs.readFile(htmlPath, (err, data) => {
+        if (err) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('404 Not Found');
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(data);
+      });
     });
 
     server.on('error', (err) => {

@@ -266,13 +266,20 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   // ── WebAudio Sound Playback ────────────────────────────────────────────────
   let audioCtx = null;
-  function playAudioData(audioBytes) {
+  function initAudio() {
     if (!audioCtx) {
       try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
     }
     if (audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume().catch(function() {});
     }
+  }
+  ['click', 'mousedown', 'touchstart', 'keydown'].forEach(function(evt) {
+    window.addEventListener(evt, initAudio, { passive: true });
+  });
+
+  function playAudioData(audioBytes) {
+    if (!audioCtx || audioCtx.state !== 'running') return;
   }
 
   // ── WebCodecs H264 Decoder & Auto-Detection ─────────────────────────────
