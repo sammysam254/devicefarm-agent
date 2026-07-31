@@ -156,7 +156,6 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=true',
       'send_dummy_byte=true',
       'video_source=display',
-      'max_size=720',
       'video_bit_rate=2500000',
       'max_fps=60',
       'send_frame_meta=true',
