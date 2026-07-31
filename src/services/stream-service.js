@@ -216,7 +216,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
 <script>
   const canvas = document.getElementById('c');
-  const ctx    = canvas.getContext('2d', { alpha: false });
+  const ctx    = canvas.getContext('2d', { alpha: false, desynchronized: true });
   const wrap   = document.getElementById('wrap');
   const badge  = document.getElementById('badge');
   const modeText = document.getElementById('modeText');
@@ -250,7 +250,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
-    lastDecodedFrameTime = Date.now();
     countFrame();
   }
 
@@ -377,6 +376,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (key) hasKeyframe = true;
       if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
 
+      // Skip non-keyframe chunk if decode queue is falling behind to preserve 0ms latency
+      if (!key && decoder.decodeQueueSize > 2) return;
+
       try {
         const chunk = new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
@@ -458,6 +460,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   // ── Pointer events ───────────────────────────────────────────────────────
   let down = false;
+  let lastMoveTime = 0;
 
   canvas.addEventListener('mousedown',  onDown);
   canvas.addEventListener('mousemove',  onMove);
@@ -474,6 +477,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
   function onMove(e) {
     if (!down) return; e.preventDefault();
+    const now = Date.now();
+    if (now - lastMoveTime < 16) return; // 60Hz micro-throttle
+    lastMoveTime = now;
     const c = coords(e);
     send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH });
   }
@@ -624,7 +630,7 @@ async function startStreamServer(serial, port) {
   });
 
   // ── WebSocket — relay H264 from scrcpy engine to browser ─────────────────
-  const wss = new WebSocket.Server({ server, path: '/ws' });
+  const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
   wss.on('connection', (ws) => {
     logger.info(`[StreamServer] WS connected for ${serial}`);

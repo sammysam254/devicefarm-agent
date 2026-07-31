@@ -161,7 +161,7 @@ class ScrcpyEngine extends EventEmitter {
       // Required for a visible, correctly framed H264 stream:
       'video_source=display',      // explicitly capture the display (not camera)
       'max_size=720',              // cap resolution — keeps bitrate and decode cost manageable
-      'video_bit_rate=4000000',    // 4 Mbps — good quality at up to 60fps
+      'video_bit_rate=2500000',    // 2.5 Mbps — smooth, instant low-latency 60fps
       'max_fps=60',                // 60fps high performance mode
       'send_frame_meta=true',      // MUST be true — enables the 12-byte PTS+size header we parse
     ];
@@ -204,7 +204,7 @@ class ScrcpyEngine extends EventEmitter {
       'screenrecord',
       '--output-format=h264',
       '--size', '720x1280',
-      '--bit-rate', '4000000',
+      '--bit-rate', '2500000',
       '-'
     ];
 
@@ -305,29 +305,15 @@ class ScrcpyEngine extends EventEmitter {
 
   /**
    * Relay raw H264 NAL units from the video socket to all WS clients.
-   *
-   * scrcpy 2.x tunnel_forward stream layout (send_frame_meta=true):
-   *   - 1 byte:  dummy byte (required by tunnel_forward, value = 0)
-   *   - 64 bytes: device name (null-padded)
-   *   - 4 bytes:  codec ID (0x68323634 = "h264")
-   *   - 4 bytes:  initial width  (u32BE)
-   *   - 4 bytes:  initial height (u32BE)
-   *   Total device-info header = 77 bytes (1 dummy + 68 device info + 8 resolution)
-   *
-   * Then for every video packet:
-   *   - 8 bytes: PTS (u64BE, high bit set on config/key frames)
-   *   - 4 bytes: payload size (u32BE)
-   *   - N bytes: raw H264 NAL unit(s)
+   * Zero-copy buffer slicing & minimal latency stream pipeline.
    */
   _pipeVideoToClients(socket) {
     let buf = Buffer.alloc(0);
     let headerDone = false;
     let lastDataTime = Date.now();
-    // scrcpy 2.x device-info header: 1 dummy + 64 name + 4 codec + 4 W + 4 H = 77 bytes
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
 
-    // Watchdog: if no data received for 3 seconds, fall back to screenrecord
     const watchdog = setInterval(() => {
       if (Date.now() - lastDataTime > 3000 && !this._fallbackActive) {
         logger.warn(`[ScrcpyEngine ${this.serial}] No video data for 3s — starting screenrecord fallback`);
@@ -337,47 +323,40 @@ class ScrcpyEngine extends EventEmitter {
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
-      buf = Buffer.concat([buf, chunk]);
+      buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
 
       // 1. Skip the device-info header exactly once
       if (!headerDone) {
-        if (buf.length < DEVICE_HEADER_LEN) return; // wait for the full header
+        if (buf.length < DEVICE_HEADER_LEN) return;
 
-        // Sanity-check: bytes [69..72] should be a plausible frame payload size
-        // (after 1 dummy + 64 name + 4 codec ID = 69 bytes of prefix, then 8-byte PTS at 69, size at 77)
-        // Actually the first META starts at DEVICE_HEADER_LEN, so read the size there:
-        // If we have enough bytes, verify the size field looks reasonable.
         if (buf.length >= DEVICE_HEADER_LEN + META) {
           const firstPktSize = buf.readUInt32BE(DEVICE_HEADER_LEN + 8);
-          // A sane first-packet size is > 0 and less than 2MB
           if (firstPktSize === 0 || firstPktSize > 2 * 1024 * 1024) {
-            // Header length mismatch — fall back to 1-byte dummy-only mode
             logger.warn(`[ScrcpyEngine ${this.serial}] Unexpected first packet size ${firstPktSize} — trying 1-byte header`);
-            buf = buf.slice(1);
+            buf = buf.subarray(1);
           } else {
-            buf = buf.slice(DEVICE_HEADER_LEN);
+            buf = buf.subarray(DEVICE_HEADER_LEN);
           }
         } else {
-          buf = buf.slice(DEVICE_HEADER_LEN);
+          buf = buf.subarray(DEVICE_HEADER_LEN);
         }
 
         logger.info(`[ScrcpyEngine ${this.serial}] Device-info header consumed, stream parsing started`);
         headerDone = true;
       }
 
-      // 2. Process video frame packets
+      // 2. Process video frame packets zero-copy
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
-        if (buf.length < META + pktSize) break; // need more data
+        if (buf.length < META + pktSize) break;
 
         const ptsHigh  = buf.readUInt32BE(0);
-        const payload  = buf.slice(META, META + pktSize);
-        buf = buf.slice(META + pktSize);
+        const payload  = buf.subarray(META, META + pktSize);
+        buf = buf.subarray(META + pktSize);
 
         const isSps = hasSpsNal(payload);
         const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
 
-        // Cache config packet (SPS/PPS) — sent to every new client on join
         if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
           logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
@@ -386,7 +365,7 @@ class ScrcpyEngine extends EventEmitter {
         this._broadcastVideo(payload, isConfig);
       }
 
-      // Safety: prevent unbounded growth
+      // Safety reset
       if (buf.length > 1024 * 1024) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow — resetting`);
         buf = Buffer.alloc(0);
@@ -397,7 +376,6 @@ class ScrcpyEngine extends EventEmitter {
       clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
-      // Start fallback if socket closes unexpectedly
       if (this.isRunning && !this._fallbackActive) {
         this._startScreenrecordFallback();
       }
@@ -411,12 +389,11 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload, isConfig) {
-    // Add logging to track frame source
     const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
     const source = this._fallbackActive ? 'fallback' : 'scrcpy';
     
     if (isConfig || nalType === 5) {
-      logger.info(`[ScrcpyEngine ${this.serial}] Broadcasting ${isConfig ? 'config' : 'IDR'} frame from ${source} (${payload.length} bytes, NAL type: ${nalType})`);
+      logger.info(`[ScrcpyEngine ${this.serial}] Broadcasting ${isConfig ? 'config' : 'IDR'} frame from ${source} (${payload.length} bytes)`);
     }
 
     for (const ws of this.wsClients) {
@@ -425,12 +402,11 @@ class ScrcpyEngine extends EventEmitter {
       if (isConfig) {
         ws._needsKeyframe = false;
       } else if (ws._needsKeyframe) {
-        // Skip P-frames after backpressure drop until next keyframe/config
         continue;
       }
 
-      // Drop non-config frames only when client is significantly behind (64KB).
-      if (!isConfig && ws.bufferedAmount > 64 * 1024) {
+      // Strict Zero-Queue Threshold: drop non-config P-frames if client buffer > 8KB
+      if (!isConfig && ws.bufferedAmount > 8 * 1024) {
         ws._needsKeyframe = true;
         continue;
       }
