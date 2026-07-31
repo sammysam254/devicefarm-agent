@@ -158,12 +158,11 @@ class ScrcpyEngine extends EventEmitter {
       'control=true',
       'cleanup=true',
       'send_dummy_byte=true',
-      // Required for a visible, correctly framed H264 stream:
-      'video_source=display',      // explicitly capture the display (not camera)
-      'max_size=720',              // cap resolution — keeps bitrate and decode cost manageable
-      'video_bit_rate=2500000',    // 2.5 Mbps — smooth, instant low-latency 60fps
-      'max_fps=60',                // 60fps high performance mode
-      'send_frame_meta=true',      // MUST be true — enables the 12-byte PTS+size header we parse
+      'video_source=display',
+      'max_size=720',
+      'video_bit_rate=2500000',
+      'max_fps=60',
+      'send_frame_meta=true',
     ];
 
     logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
@@ -173,14 +172,26 @@ class ScrcpyEngine extends EventEmitter {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    this.serverProc.stdout.on('data', (d) => {
-      const msg = d.toString().trim();
-      if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
-    });
+    // Return a Promise that resolves when scrcpy prints its "Device:" ready line.
+    // This avoids the race condition where we connect sockets before the server is ready.
+    this._serverReady = new Promise((resolve) => {
+      let resolved = false;
+      const done = () => { if (!resolved) { resolved = true; resolve(); } };
 
-    this.serverProc.stderr.on('data', (d) => {
-      const msg = d.toString().trim();
-      if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
+      this.serverProc.stdout.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
+        // scrcpy prints "Device:" once the encoder is initialised and the socket is open
+        if (msg.includes('Device:') || msg.includes('device:')) done();
+      });
+
+      this.serverProc.stderr.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
+      });
+
+      // Safety timeout — if no "Device:" within 5s, proceed anyway
+      setTimeout(done, 5000);
     });
 
     this.serverProc.on('error', (e) => {
@@ -265,9 +276,15 @@ class ScrcpyEngine extends EventEmitter {
   // ── Socket connection ─────────────────────────────────────────────────────
 
   async _connectSockets() {
-    // Give scrcpy server ~800ms to open the abstract socket
-    await new Promise(r => setTimeout(r, 800));
+    // Wait for scrcpy server to print its "Device:" ready signal before connecting.
+    // This eliminates the race condition where we connected before the server was ready.
+    logger.info(`[ScrcpyEngine ${this.serial}] Waiting for scrcpy server ready signal...`);
+    if (this._serverReady) await this._serverReady;
 
+    // Small additional buffer to ensure the ADB forward socket is fully open
+    await new Promise(r => setTimeout(r, 200));
+
+    logger.info(`[ScrcpyEngine ${this.serial}] Connecting video socket...`);
     // tunnel_forward: 1st connect = video socket, 2nd connect = control socket
     this.videoSocket = await this._connectOne(this.videoPort);
     this.videoSocket.setNoDelay(true);
@@ -275,8 +292,8 @@ class ScrcpyEngine extends EventEmitter {
     // Start video relay pipeline immediately so dummy/header bytes are consumed
     this._pipeVideoToClients(this.videoSocket);
 
-    // Wait 250ms for scrcpy encoder initialization before connecting control socket
-    await new Promise(r => setTimeout(r, 250));
+    // Small delay before connecting control socket
+    await new Promise(r => setTimeout(r, 150));
 
     this.controlSocket = await this._connectOne(this.videoPort);
     this.controlSocket.setNoDelay(true);
