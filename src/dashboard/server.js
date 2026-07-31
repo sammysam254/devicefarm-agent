@@ -142,15 +142,27 @@ function startDashboardServer(port = 7400) {
       const udidParam = fullUrl.searchParams.get('udid');
       const remoteParam = fullUrl.searchParams.get('remote');
 
-      // If action=proxy or udid/remote is specified on dashboard server, redirect to the device stream server port
+      // If action=proxy or udid/remote is specified on dashboard server, proxy traffic directly to device stream port
       if (actionParam === 'proxy' || udidParam || remoteParam) {
         const serial = udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null);
         const devices = processManager.getActiveDeviceSummaries();
         const targetDev = devices.find(d => d.serial === serial) || devices[0];
         if (targetDev && targetDev.port) {
-          const targetUrl = `http://localhost:${targetDev.port}${req.url}`;
-          res.writeHead(302, { 'Location': targetUrl });
-          res.end();
+          const proxyReq = http.request({
+            hostname: '127.0.0.1',
+            port: targetDev.port,
+            path: req.url,
+            method: req.method,
+            headers: req.headers,
+          }, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode, proxyRes.headers);
+            proxyRes.pipe(res, { end: true });
+          });
+          proxyReq.on('error', () => {
+            res.writeHead(502, { 'Content-Type': 'text/plain' });
+            res.end('502 Bad Gateway — Stream server offline');
+          });
+          req.pipe(proxyReq, { end: true });
           return;
         }
       }
@@ -178,6 +190,34 @@ function startDashboardServer(port = 7400) {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(data);
       });
+    });
+
+    // Handle WebSocket upgrade proxying for public tunnel connections
+    server.on('upgrade', (req, socket, head) => {
+      const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      const udidParam = fullUrl.searchParams.get('udid');
+      const remoteParam = fullUrl.searchParams.get('remote');
+      const serial = udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null);
+      const devices = processManager.getActiveDeviceSummaries();
+      const targetDev = devices.find(d => d.serial === serial) || devices[0];
+      if (targetDev && targetDev.port) {
+        const proxyReq = http.request({
+          hostname: '127.0.0.1',
+          port: targetDev.port,
+          path: req.url,
+          method: 'GET',
+          headers: req.headers,
+        });
+        proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+          socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
+          proxySocket.pipe(socket);
+          socket.pipe(proxySocket);
+        });
+        proxyReq.on('error', () => { try { socket.destroy(); } catch (_) {} });
+        proxyReq.end();
+      } else {
+        try { socket.destroy(); } catch (_) {}
+      }
     });
 
     server.on('error', (err) => {

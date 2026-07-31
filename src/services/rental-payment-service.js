@@ -158,11 +158,13 @@ async function checkDeviceRentalStatus(serialNumber) {
     };
   }
 
-  // Default fallback
-  const offlineGrace = config.allowOfflineGracePeriod === true;
+  // Default fallback: If Supabase is unconfigured (standalone local mode), default to active
+  const hasSupabase = Boolean(config.supabaseUrl && config.supabaseAnonKey);
+  const isStandalone = !hasSupabase;
+  const isPaidDefault = isStandalone || config.allowOfflineGracePeriod !== false;
   return {
-    isPaid: offlineGrace,
-    status: offlineGrace ? 'active_offline_grace' : 'unpaid',
+    isPaid: isPaidDefault,
+    status: isPaidDefault ? (isStandalone ? 'active' : 'active_offline_grace') : 'unpaid',
     monthlyFee,
     expiresAt: null,
     userProfileId: rentalUserId,
