@@ -294,25 +294,33 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try {
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
-          if (!audioCtx || !gainNode) return;
-          // Copy decoded float32 planes into a WebAudio buffer
-          const nCh = audioData.numberOfChannels;
-          const nFrames = audioData.numberOfFrames;
-          const buf = audioCtx.createBuffer(nCh, nFrames, audioData.sampleRate);
-          for (let ch = 0; ch < nCh; ch++) {
-            const plane = new Float32Array(nFrames);
-            audioData.copyTo(plane, { planeIndex: ch, format: 'f32' });
-            buf.copyToChannel(plane, ch);
-          }
-          audioData.close();
+          if (!audioCtx || !gainNode) { audioData.close(); return; }
+          try {
+            const nCh = audioData.numberOfChannels;
+            const nFrames = audioData.numberOfFrames;
+            const sr = audioData.sampleRate;
+            const buf = audioCtx.createBuffer(nCh, nFrames, sr);
+            for (let ch = 0; ch < nCh; ch++) {
+              // Use allocationSize to get the exact byte count needed, then size the
+              // Float32Array from that (allocationSize returns bytes for f32 = frames*4)
+              const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32' });
+              const plane = new Float32Array(byteLen / 4);
+              audioData.copyTo(plane, { planeIndex: ch, format: 'f32' });
+              buf.copyToChannel(plane, ch);
+            }
+            audioData.close();
 
-          const src = audioCtx.createBufferSource();
-          src.buffer = buf;
-          src.connect(gainNode);
-          const now = audioCtx.currentTime;
-          if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
-          src.start(audioNextPlayTime);
-          audioNextPlayTime += buf.duration;
+            const src = audioCtx.createBufferSource();
+            src.buffer = buf;
+            src.connect(gainNode);
+            const now = audioCtx.currentTime;
+            if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
+            src.start(audioNextPlayTime);
+            audioNextPlayTime += buf.duration;
+          } catch (err) {
+            console.warn('[Audio] output error:', err);
+            try { audioData.close(); } catch (_) {}
+          }
         },
         error: function(err) {
           console.warn('[Audio] AudioDecoder error:', err);
