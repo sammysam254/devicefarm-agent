@@ -196,8 +196,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <button class="btn" onclick="key(82)">&#8942;</button>
     <button class="btn btn-red" onclick="key(26)">&#9211;</button>
     <div class="hr"></div>
-    <button class="btn" onclick="key(24)">&#128266;</button>
-    <button class="btn" onclick="key(25)">&#128265;</button>
+    <button class="btn" id="muteBtn" onclick="toggleMute()" title="Toggle audio">&#128266;</button>
+    <button class="btn" onclick="key(24)">&#128265;</button>
+    <button class="btn" onclick="key(25)">&#128264;</button>
     <button class="btn" onclick="key(164)">&#128277;</button>
     <div class="hr"></div>
     <button class="btn" onclick="key(3)">&#9711;</button>
@@ -265,54 +266,141 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── WebAudio Sound Playback (PCM 16-bit 48kHz Stereo) ──────────────────────
+  // ── Audio — WebCodecs AudioDecoder (Opus) with raw PCM fallback ────────────
   let audioCtx = null;
+  let audioDecoder = null;
+  let audioDecoderReady = false;
   let audioNextPlayTime = 0;
+  let isMuted = false;
+  let gainNode = null;
 
   function initAudio() {
-    if (audioCtx) return;
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
+      return;
+    }
     try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = isMuted ? 0 : 1;
+      gainNode.connect(audioCtx.destination);
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
     } catch (_) {}
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(function() {});
+  }
+
+  function initOpusDecoder() {
+    if (audioDecoderReady) return true;
+    if (typeof AudioDecoder === 'undefined') return false;
+    try {
+      audioDecoder = new AudioDecoder({
+        output: function(audioData) {
+          if (!audioCtx || !gainNode) return;
+          // Copy decoded float32 planes into a WebAudio buffer
+          const nCh = audioData.numberOfChannels;
+          const nFrames = audioData.numberOfFrames;
+          const buf = audioCtx.createBuffer(nCh, nFrames, audioData.sampleRate);
+          for (let ch = 0; ch < nCh; ch++) {
+            const plane = new Float32Array(nFrames);
+            audioData.copyTo(plane, { planeIndex: ch, format: 'f32' });
+            buf.copyToChannel(plane, ch);
+          }
+          audioData.close();
+
+          const src = audioCtx.createBufferSource();
+          src.buffer = buf;
+          src.connect(gainNode);
+          const now = audioCtx.currentTime;
+          if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
+          src.start(audioNextPlayTime);
+          audioNextPlayTime += buf.duration;
+        },
+        error: function(err) {
+          console.warn('[Audio] AudioDecoder error:', err);
+          audioDecoderReady = false;
+          audioDecoder = null;
+        }
+      });
+      audioDecoder.configure({
+        codec: 'opus',
+        sampleRate: 48000,
+        numberOfChannels: 2,
+      });
+      audioDecoderReady = true;
+      return true;
+    } catch (err) {
+      console.warn('[Audio] AudioDecoder init failed:', err);
+      return false;
     }
   }
 
+  function playOpusPacket(bytes) {
+    initAudio();
+    if (!audioCtx || isMuted) return;
+    if (audioCtx.state === 'suspended') { audioCtx.resume().catch(function(){}); return; }
+    if (!audioDecoderReady) {
+      if (!initOpusDecoder()) return;
+    }
+    if (!audioDecoder || audioDecoder.state === 'closed') { audioDecoderReady = false; return; }
+    // Drop if decode queue is backing up (latency control)
+    if (audioDecoder.decodeQueueSize > 6) return;
+    try {
+      audioDecoder.decode(new EncodedAudioChunk({
+        type: 'key', // Opus packets are always independently decodable
+        timestamp: performance.now() * 1000,
+        data: bytes
+      }));
+    } catch (err) {
+      console.warn('[Audio] Opus decode error:', err);
+      audioDecoderReady = false;
+      audioDecoder = null;
+    }
+  }
+
+  function playRawPcm(bytes) {
+    // Fallback: raw signed 16-bit LE stereo 48kHz PCM
+    initAudio();
+    if (!audioCtx || !gainNode || isMuted) return;
+    if (audioCtx.state !== 'running') return;
+    try {
+      const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+      const sampleCount = Math.floor(int16.length / 2);
+      if (sampleCount <= 0) return;
+      const buf = audioCtx.createBuffer(2, sampleCount, 48000);
+      const L = buf.getChannelData(0), R = buf.getChannelData(1);
+      for (let i = 0; i < sampleCount; i++) {
+        L[i] = int16[i * 2]     / 32768.0;
+        R[i] = int16[i * 2 + 1] / 32768.0;
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(gainNode);
+      const now = audioCtx.currentTime;
+      if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
+      src.start(audioNextPlayTime);
+      audioNextPlayTime += buf.duration;
+    } catch (_) {}
+  }
+
+  // ── Mute toggle ──────────────────────────────────────────────────────────
+  function toggleMute() {
+    isMuted = !isMuted;
+    if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
+    if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
+      try { audioDecoder.flush().catch(function(){}); } catch (_) {}
+    }
+    const btn = document.getElementById('muteBtn');
+    if (btn) {
+      btn.textContent = isMuted ? '🔇' : '🔊';
+      btn.title = isMuted ? 'Unmute audio' : 'Mute audio';
+      btn.style.color = isMuted ? '#f87171' : '';
+      btn.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
+    }
+  }
+
+  // Resume AudioContext on first user gesture
   ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, initAudio, { passive: true });
   });
-
-  function playAudioData(audioBytes) {
-    initAudio();
-    if (!audioCtx || audioCtx.state !== 'running') return;
-    if (!audioBytes || audioBytes.length < 4) return;
-
-    try {
-      // Int16 LE PCM Stereo -> Float32 Array for WebAudio
-      const int16 = new Int16Array(audioBytes.buffer, audioBytes.byteOffset, Math.floor(audioBytes.byteLength / 2));
-      const sampleCount = Math.floor(int16.length / 2);
-      if (sampleCount <= 0) return;
-
-      const buffer = audioCtx.createBuffer(2, sampleCount, 48000);
-      const leftCh = buffer.getChannelData(0);
-      const rightCh = buffer.getChannelData(1);
-
-      for (let i = 0; i < sampleCount; i++) {
-        leftCh[i]  = int16[i * 2]     / 32768.0;
-        rightCh[i] = int16[i * 2 + 1] / 32768.0;
-      }
-
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioCtx.destination);
-
-      const now = audioCtx.currentTime;
-      if (audioNextPlayTime < now) audioNextPlayTime = now;
-      source.start(audioNextPlayTime);
-      audioNextPlayTime += buffer.duration;
-    } catch (_) {}
-  }
 
   // ── WebCodecs H264 Decoder & Auto-Detection ─────────────────────────────
   let decoder = null;
@@ -412,9 +500,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
 
-      // Handle tagged Audio binary frames ('A' = 0x41)
+      // Handle tagged Audio binary frames — [0x41]['O'=opus / 'R'=raw][...payload]
       if (rawU8[0] === 0x41) {
-        playAudioData(rawU8.subarray(1));
+        if (rawU8.length < 3) return;
+        const codec = rawU8[1]; // 0x4F='O' opus, 0x52='R' raw
+        const payload = rawU8.subarray(2);
+        if (codec === 0x4F) {       // Opus
+          playOpusPacket(payload);
+        } else {                    // Raw PCM fallback
+          playRawPcm(payload);
+        }
         return;
       }
 

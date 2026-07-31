@@ -154,7 +154,8 @@ class ScrcpyEngine extends EventEmitter {
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
       'audio=' + (this.enableAudio ? 'true' : 'false'),
-      'audio_codec=raw',
+      'audio_codec=opus',
+      'audio_bit_rate=128000',
       'control=true',
       'cleanup=true',
       'send_dummy_byte=true',
@@ -445,16 +446,16 @@ class ScrcpyEngine extends EventEmitter {
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
 
       if (!headerDone) {
-        // Scrcpy 2.4 sends 1 dummy byte (0x00) followed by 4-byte codec ID ("OPUS")
+        // Scrcpy 2.x sends: 1 dummy byte (0x00) + 4-byte codec ID (e.g. "opus")
+        // Total header = 5 bytes minimum
         if (buf.length < 5) return;
 
         let offset = 0;
-        if (buf[0] === 0x00) {
-          offset = 1;
-        }
+        if (buf[0] === 0x00) offset = 1;
 
-        const codecStr = buf.toString('utf8', offset, offset + 4);
-        logger.info(`[ScrcpyEngine ${this.serial}] Audio codec header detected: ${codecStr}`);
+        const codecStr = buf.toString('utf8', offset, offset + 4).toLowerCase().trim().replace(/\0/g, '');
+        logger.info(`[ScrcpyEngine ${this.serial}] Audio codec header detected: "${codecStr}"`);
+        this._audioCodec = codecStr; // 'opus' or 'raw'
         buf = buf.subarray(offset + 4);
         headerDone = true;
       }
@@ -480,12 +481,16 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastAudio(payload) {
-    const audioFrame = Buffer.allocUnsafe(1 + payload.length);
-    audioFrame[0] = 0x41; // 'A' prefix for Audio
-    payload.copy(audioFrame, 1);
+    // Frame layout: [0x41][codec_byte][...payload]
+    // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
+    const codec = (this._audioCodec === 'opus') ? 0x4F : 0x52;
+    const audioFrame = Buffer.allocUnsafe(2 + payload.length);
+    audioFrame[0] = 0x41; // 'A' = audio frame tag
+    audioFrame[1] = codec; // 'O' = opus, 'R' = raw
+    payload.copy(audioFrame, 2);
 
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1 && ws.bufferedAmount < 64 * 1024) {
+      if (ws.readyState === 1 && ws.bufferedAmount < 128 * 1024) {
         try { ws.send(audioFrame, { binary: true }); } catch (_) {}
       }
     }
