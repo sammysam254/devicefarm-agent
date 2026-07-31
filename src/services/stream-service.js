@@ -299,17 +299,41 @@ function buildPlayerHtml(serial, screenW, screenH) {
             const nCh = audioData.numberOfChannels;
             const nFrames = audioData.numberOfFrames;
             const sr = audioData.sampleRate;
-            const buf = audioCtx.createBuffer(nCh, nFrames, sr);
-            for (let ch = 0; ch < nCh; ch++) {
-              // Use allocationSize to get the exact byte count needed, then size the
-              // Float32Array from that (allocationSize returns bytes for f32 = frames*4)
-              const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32' });
-              const plane = new Float32Array(byteLen / 4);
-              audioData.copyTo(plane, { planeIndex: ch, format: 'f32' });
-              buf.copyToChannel(plane, ch);
-            }
-            audioData.close();
 
+            // AudioData may be interleaved (1 plane) or planar (nCh planes).
+            // Detect by checking if planeIndex 1 exists when nCh > 1.
+            let isPlanar = false;
+            if (nCh > 1) {
+              try { audioData.allocationSize({ planeIndex: 1, format: 'f32' }); isPlanar = true; }
+              catch (_) { isPlanar = false; }
+            } else {
+              isPlanar = true;
+            }
+
+            const buf = audioCtx.createBuffer(nCh, nFrames, sr);
+
+            if (isPlanar) {
+              // Each channel is a separate plane
+              for (let ch = 0; ch < nCh; ch++) {
+                const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32' });
+                const plane = new Float32Array(byteLen / 4);
+                audioData.copyTo(plane, { planeIndex: ch, format: 'f32' });
+                buf.copyToChannel(plane, ch);
+              }
+            } else {
+              // Interleaved: all channels in plane 0, layout = [L0,R0,L1,R1,...]
+              const byteLen = audioData.allocationSize({ planeIndex: 0, format: 'f32-interleaved' });
+              const interleaved = new Float32Array(byteLen / 4);
+              audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32-interleaved' });
+              for (let ch = 0; ch < nCh; ch++) {
+                const chData = buf.getChannelData(ch);
+                for (let i = 0; i < nFrames; i++) {
+                  chData[i] = interleaved[i * nCh + ch];
+                }
+              }
+            }
+
+            audioData.close();
             const src = audioCtx.createBufferSource();
             src.buffer = buf;
             src.connect(gainNode);
