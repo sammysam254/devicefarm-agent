@@ -246,20 +246,31 @@ echo   STEP 2: LAUNCHING DEVICEFARM AGENT
 echo  ================================================================
 echo.
 
-:: Check if DeviceFarm Agent is already running
-netstat -o -a -n | findstr :7400 >nul 2>&1
+:: ── Stop any existing DeviceFarm Agent processes ───────────────────────────
+echo [*] Stopping any running DeviceFarm Agent instances...
+
+:: Kill Electron processes running from the install dir
+tasklist /FI "IMAGENAME eq electron.exe" 2>nul | find /I "electron.exe" >nul
 if %errorlevel% equ 0 (
-    echo.
-    echo  ================================================================
-    echo  [OK] DeviceFarm Agent is ALREADY running and active!
-    echo       Preserving all active stream tunnels and connected devices.
-    echo       Dashboard : http://localhost:7400
-    echo  ================================================================
-    echo.
-    start "" "http://localhost:7400"
-    goto end_launch
+    echo [*] Killing electron.exe processes...
+    taskkill /F /IM electron.exe >nul 2>&1
 )
 
+:: Kill any node.exe processes from the install dir (verify-payment, tunnels, etc.)
+for /f "tokens=2" %%P in ('netstat -ano 2^>nul ^| findstr ":7400 "') do (
+    echo [*] Killing process on port 7400 ^(PID %%P^)...
+    taskkill /F /PID %%P >nul 2>&1
+)
+
+:: Also kill localtunnel / cloudflared that may be holding ports
+taskkill /F /IM cloudflared.exe >nul 2>&1
+taskkill /F /IM lt.cmd >nul 2>&1
+
+:: Give processes a moment to fully exit
+ping 127.0.0.1 -n 3 >nul 2>nul
+echo [OK] Previous instances stopped.
+
+:: ── Launch fresh ───────────────────────────────────────────────────────────
 set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
 if exist "%ELECTRON_BIN%" (
     echo [*] Launching DeviceFarm Agent...
