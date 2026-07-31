@@ -61,15 +61,11 @@ class ScrcpyEngine extends EventEmitter {
 
     // Connected WS clients receiving H264 stream
     this.wsClients = new Set();
-
-    // Last SPS/PPS config packet — sent immediately to new clients so
-    // the decoder can initialise before any keyframe arrives
     this._configPacket = null;
-
-    // Whether the scrcpy server has been pushed to the device already
+    this._keyframeBuffer = null;
+    this.videoWidth = 0;
+    this.videoHeight = 0;
     this._jarPushed = false;
-
-    // Fast real-time screencap streaming
     this._screencapActive = false;
   }
 
@@ -78,13 +74,14 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Register a WS client. We immediately flush the cached SPS/PPS config
-   * so the WebCodecs decoder is initialised before the next keyframe.
+   * Register a WS client. We immediately flush the cached SPS/PPS + IDR keyframe
+   * so the WebCodecs decoder is initialised before any new delta frame arrives.
    */
   addClient(ws) {
     this.wsClients.add(ws);
-    if (this._configPacket && ws.readyState === 1) {
-      try { ws.send(this._configPacket, { binary: true }); } catch (_) {}
+    const initialPacket = this._keyframeBuffer || this._configPacket;
+    if (initialPacket && ws.readyState === 1) {
+      try { ws.send(initialPacket, { binary: true }); } catch (_) {}
     }
   }
 
@@ -332,19 +329,29 @@ class ScrcpyEngine extends EventEmitter {
     const META = 12; // 8-byte PTS + 4-byte size
 
     const watchdog = setInterval(() => {
-      if (Date.now() - lastDataTime > 3000 && !this._fallbackActive) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] No video data for 3s — starting screenrecord fallback`);
+      if ((!this.videoSocket || this.videoSocket.destroyed || Date.now() - lastDataTime > 15000) && !this._fallbackActive) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] No video data for 15s — starting screenrecord fallback`);
         this._startScreenrecordFallback();
       }
-    }, 1000);
+    }, 2000);
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
 
-      // 1. Skip the device-info header exactly once
+      // 1. Skip the device-info header exactly once & parse real video stream size
       if (!headerDone) {
         if (buf.length < DEVICE_HEADER_LEN) return;
+
+        try {
+          const w = buf.readUInt32BE(68);
+          const h = buf.readUInt32BE(72);
+          if (w > 0 && h > 0 && w < 10000 && h < 10000) {
+            this.videoWidth = w;
+            this.videoHeight = h;
+            logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy stream resolution: ${w}x${h}`);
+          }
+        } catch (_) {}
 
         if (buf.length >= DEVICE_HEADER_LEN + META) {
           const firstPktSize = buf.readUInt32BE(DEVICE_HEADER_LEN + 8);
@@ -371,12 +378,22 @@ class ScrcpyEngine extends EventEmitter {
         const payload  = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);
 
+        const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
         const isSps = hasSpsNal(payload);
+        const isIdr = nalType === 5;
         const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
 
         if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
           logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
+        }
+
+        if (isIdr) {
+          if (this._configPacket) {
+            this._keyframeBuffer = Buffer.concat([this._configPacket, payload]);
+          } else {
+            this._keyframeBuffer = Buffer.from(payload);
+          }
         }
 
         this._broadcastVideo(payload, isConfig);
@@ -511,16 +528,25 @@ class ScrcpyEngine extends EventEmitter {
    */
   sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-    const W = (width  > 10) ? width  : this.screenWidth;
-    const H = (height > 10) ? height : this.screenHeight;
+    
+    // Scale coordinates to scrcpy server's actual video stream size so events are never rejected
+    const targetW = this.videoWidth  || this.screenWidth  || 720;
+    const targetH = this.videoHeight || this.screenHeight || 1600;
+
+    const srcW = (width  > 10) ? width  : targetW;
+    const srcH = (height > 10) ? height : targetH;
+    
+    const scaledX = Math.round((x / srcW) * targetW);
+    const scaledY = Math.round((y / srcH) * targetH);
+
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);
     buf.writeUInt8(action, 1);
     buf.writeBigInt64BE(-1n, 2);
-    buf.writeInt32BE(Math.round(x), 10);
-    buf.writeInt32BE(Math.round(y), 14);
-    buf.writeUInt16BE(W, 18);
-    buf.writeUInt16BE(H, 20);
+    buf.writeInt32BE(Math.max(0, Math.min(targetW, scaledX)), 10);
+    buf.writeInt32BE(Math.max(0, Math.min(targetH, scaledY)), 14);
+    buf.writeUInt16BE(targetW, 18);
+    buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(Math.floor(pressure * 65535), 22);
     buf.writeInt32BE(action === 0 ? 1 : 0, 24);
     buf.writeInt32BE(action === 1 ? 0 : 1, 28);

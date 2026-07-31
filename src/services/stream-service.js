@@ -297,7 +297,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function isH264Keyframe(u8) {
-    for (let i = 0; i < Math.min(u8.length - 4, 128); i++) {
+    for (let i = 0; i < Math.min(u8.length - 4, 256); i++) {
       if (u8[i] === 0 && u8[i+1] === 0) {
         let ntype = -1;
         if (u8[i+2] === 1 && i + 3 < u8.length) {
@@ -305,7 +305,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
         } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
           ntype = u8[i+4] & 0x1f;
         }
-        if (ntype === 7 || ntype === 8 || ntype === 5) return true;
+        // WebCodecs requires NAL unit 5 (IDR keyframe) to initialize decoding
+        if (ntype === 5) return true;
       }
     }
     return false;
