@@ -162,6 +162,7 @@ class ScrcpyEngine extends EventEmitter {
       'video_source=display',
       'video_bit_rate=2500000',
       'max_fps=60',
+      'i_frame_interval=2',
       'send_frame_meta=true',
     ];
 
@@ -419,6 +420,7 @@ class ScrcpyEngine extends EventEmitter {
         const isSps = hasSpsNal(payload);
         const isIdr = nalType === 5;
         const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
+        const isKeyframe = isConfig || isIdr || isSps;
 
         if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
@@ -433,7 +435,7 @@ class ScrcpyEngine extends EventEmitter {
           }
         }
 
-        this._broadcastVideo(payload, isConfig);
+        this._broadcastVideo(payload, isKeyframe);
       }
 
       // Safety reset
@@ -517,25 +519,25 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  _broadcastVideo(payload, isConfig) {
+  _broadcastVideo(payload, isKeyframe) {
     const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
     const source = this._fallbackActive ? 'fallback' : 'scrcpy';
     
-    if (isConfig || nalType === 5) {
-      logger.info(`[ScrcpyEngine ${this.serial}] Broadcasting ${isConfig ? 'config' : 'IDR'} frame from ${source} (${payload.length} bytes)`);
+    if (isKeyframe || nalType === 5) {
+      logger.info(`[ScrcpyEngine ${this.serial}] Broadcasting keyframe from ${source} (${payload.length} bytes)`);
     }
 
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
 
-      if (isConfig) {
+      if (isKeyframe) {
         ws._needsKeyframe = false;
       } else if (ws._needsKeyframe) {
         continue;
       }
 
-      // Strict Zero-Queue Threshold: drop non-config P-frames if client buffer > 8KB
-      if (!isConfig && ws.bufferedAmount > 8 * 1024) {
+      // Drop non-keyframe P-frames if client WS send buffer > 64KB
+      if (!isKeyframe && ws.bufferedAmount > 64 * 1024) {
         ws._needsKeyframe = true;
         continue;
       }

@@ -342,9 +342,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
             const now = audioCtx.currentTime;
             // If behind real-time, snap forward immediately (no gap)
             if (audioNextPlayTime < now) audioNextPlayTime = now;
-            // If more than 300ms ahead, snap back to now (prevent runaway drift)
-            // 300ms is generous enough to absorb normal network jitter without dropping
-            if (audioNextPlayTime > now + 0.3) audioNextPlayTime = now;
+            // If more than 120ms ahead, snap back to now (prevent runaway drift)
+            if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
 
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
@@ -410,7 +409,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       src.connect(gainNode);
       const now = audioCtx.currentTime;
       if (audioNextPlayTime < now) audioNextPlayTime = now;
-      if (audioNextPlayTime > now + 0.3) audioNextPlayTime = now;
+      if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
       src.start(audioNextPlayTime);
       audioNextPlayTime += buf.duration;
     } catch (_) {}
@@ -461,14 +460,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
-          const h = frame.displayHeight || frame.codedHeight || frame.height;
-          if (w && h && (canvas.width !== w || canvas.height !== h)) {
-            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-          }
-          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-          frame.close();
-          countFrame();
+          queueDraw(frame);
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
@@ -617,8 +609,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (key) hasKeyframe = true;
       if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
 
-      // Skip non-keyframe chunk if decode queue is backed up — keeps video real-time
-      if (!key && decoder.decodeQueueSize > 4) return;
+      // If decode queue is backed up (> 8 frames), reset decoder to drop stale frames and keep real-time sync
+      if (decoder.decodeQueueSize > 8) {
+        console.warn('[Stream] VideoDecoder queue backed up — resetting for real-time sync');
+        resetDecoder();
+        return;
+      }
 
       try {
         const chunk = new EncodedVideoChunk({
