@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
 const licenseService = require('./license-service');
 
@@ -30,23 +32,40 @@ function saveConfig(cfg) {
 }
 
 /**
- * Generate or retrieve the unique 8-digit machine binding code.
+ * Derives a static, deterministic 8-digit machine binding code based on machine hardware identity.
+ * This guarantees the exact same computer ALWAYS keeps the exact same binding code across setup script reruns.
  */
 function getOrGenerateBindingCode() {
   const cfg = loadConfig();
   if (cfg.machineBindingCode && /^\d{8}$/.test(cfg.machineBindingCode)) {
     return cfg.machineBindingCode;
   }
-  const randomNum = Math.floor(10000000 + Math.random() * 90000000).toString();
-  cfg.machineBindingCode = randomNum;
+
+  const hostname = os.hostname() || process.env.COMPUTERNAME || 'Windows-Machine';
+  const interfaces = os.networkInterfaces();
+  let mac = '';
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name]) {
+      if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
+        mac = net.mac;
+        break;
+      }
+    }
+    if (mac) break;
+  }
+
+  const rawSeed = `${hostname.toLowerCase()}-${mac.toLowerCase() || 'default-mac'}`;
+  const hash = crypto.createHash('sha256').update(rawSeed).digest('hex');
+  const bindingCode = (parseInt(hash.substring(0, 8), 16) % 90000000 + 10000000).toString();
+
+  cfg.machineBindingCode = bindingCode;
   saveConfig(cfg);
-  logger.info(`[BindingService] Generated new 8-digit machine binding code: ${randomNum}`);
-  return randomNum;
+  logger.info(`[BindingService] Derived hardware machine code for ${hostname}: ${bindingCode}`);
+  return bindingCode;
 }
 
 /**
  * Sync machine binding to Supabase machine_bindings table.
- * Also ensures license record exists.
  */
 async function syncMachineBinding() {
   const bindingCode = getOrGenerateBindingCode();
@@ -69,11 +88,13 @@ async function syncMachineBinding() {
       },
     });
 
-    // Upsert machine_bindings
-    await client.post('/machine_bindings', {
+    // Upsert machine_bindings with on_conflict=binding_code
+    await client.post('/machine_bindings?on_conflict=binding_code', {
       binding_code: bindingCode,
-      machine_name: process.env.COMPUTERNAME || 'Windows Agent Machine',
+      machine_name: process.env.COMPUTERNAME || os.hostname() || 'Windows Agent Machine',
       updated_at: new Date().toISOString(),
+    }, {
+      headers: { Prefer: 'resolution=merge-duplicates' },
     });
 
     logger.info(`[BindingService] Machine binding code ${bindingCode} synced to Supabase`);

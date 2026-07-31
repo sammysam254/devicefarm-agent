@@ -9,6 +9,5 @@
   "supabaseUrl": "https://dnpuqnmukawehtjxfqct.supabase.co",
   "supabaseServiceRoleKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRucHVxbm11a2F3ZWh0anhmcWN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTQ4ODY2NSwiZXhwIjoyMTAxMDY0NjY1fQ.ShfY3xyc01tZVEtcIlufacZdaGsCSpcUTLf2M3P0f4c",
   "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRucHVxbm11a2F3ZWh0anhmcWN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0ODg2NjUsImV4cCI6MjEwMTA2NDY2NX0.Sg455y5OYkT1OvUarfXt6-E_tRukEZ62GawXPhIjEng",
-  "allowLocalStandalone": true,
-  "machineBindingCode": "25448462"
+  "allowLocalStandalone": true
 }

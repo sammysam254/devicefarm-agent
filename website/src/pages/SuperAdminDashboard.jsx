@@ -13,7 +13,6 @@ export default function SuperAdminDashboard() {
   const [loading, setLoading] = useState(true);
 
   const loadData = async () => {
-    setLoading(true);
     try {
       // 1. Fetch bindings associated with this super admin or all if seed admin
       const isSeed = profile?.role === 'seed_admin';
@@ -43,7 +42,13 @@ export default function SuperAdminDashboard() {
   };
 
   useEffect(() => {
-    if (profile) loadData();
+    if (profile) {
+      loadData();
+      const timer = setInterval(() => {
+        loadData();
+      }, 4000);
+      return () => clearInterval(timer);
+    }
   }, [profile]);
 
   const handleClaimBinding = async (e) => {

@@ -120,7 +120,7 @@ async function syncDeviceToCloud(params) {
       updated_at: new Date().toISOString(),
     };
 
-    await client.post('/devices', payload, {
+    await client.post('/devices?on_conflict=serial', payload, {
       headers: { Prefer: 'resolution=merge-duplicates' },
     });
 
