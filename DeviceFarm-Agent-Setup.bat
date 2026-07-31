@@ -165,6 +165,11 @@ if exist "%INSTALL_DIR%\.git" (
 cd /d "%INSTALL_DIR%"
 echo [OK] Working directory: %CD%
 
+:: ── Add Node.js directory to PATH so npm postinstall scripts can call node ──
+for %%I in ("%NODE%") do set "NODE_DIR=%%~dpI"
+set "PATH=%NODE_DIR%;%PATH%"
+echo [OK] Node.js added to PATH: %NODE_DIR%
+
 :: Patch config.json with correct binary paths for this install location
 echo [*] Patching config.json with local binary paths...
 "%NODE%" -e "const fs=require('fs'),p='config.json',cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p)):{}; cfg.adbPath=require('path').join(process.cwd(),'assets','bin','adb.exe'); cfg.cloudflaredPath=require('path').join(process.cwd(),'assets','bin','cloudflared.exe'); fs.writeFileSync(p,JSON.stringify(cfg,null,2));"
@@ -181,7 +186,7 @@ if exist "node_modules\winston\package.json" (
 ) else (
     echo [*] Running npm install — this may take a few minutes...
     call "%NPM%" install --no-audit --no-fund
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo [ERROR] npm install failed. Check your internet connection and try again.
         pause & exit /b 1
     )
