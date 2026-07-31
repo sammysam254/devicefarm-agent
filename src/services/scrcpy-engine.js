@@ -157,7 +157,7 @@ class ScrcpyEngine extends EventEmitter {
       'audio_codec=opus',
       'audio_bit_rate=128000',
       'control=true',
-      'cleanup=true',
+      'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
       'video_bit_rate=2500000',
@@ -198,10 +198,31 @@ class ScrcpyEngine extends EventEmitter {
       logger.error(`[ScrcpyEngine ${this.serial}] proc error: ${e.message}`);
     });
 
+    this._procStartTime = Date.now();
+    this._restartPending = false;
+
     this.serverProc.on('close', (code) => {
-      logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (${code}) — restarting in 1.5s`);
+      // Ignore close events triggered by our own stop() call
+      if (!this.isRunning) return;
+      // Ignore if a restart is already queued
+      if (this._restartPending) return;
+
+      const uptime = Date.now() - this._procStartTime;
+      logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (code=${code}, uptime=${uptime}ms)`);
+
       this._cleanup();
-      if (this.isRunning && !this._fallbackActive) setTimeout(() => this._restart(), 1500);
+
+      // Only restart if we weren't already in fallback mode
+      if (!this._fallbackActive) {
+        this._restartPending = true;
+        // Back off longer if it died quickly (likely a startup error)
+        const delay = uptime < 3000 ? 4000 : 1500;
+        logger.info(`[ScrcpyEngine ${this.serial}] Restarting in ${delay}ms...`);
+        setTimeout(() => {
+          this._restartPending = false;
+          if (this.isRunning && !this._fallbackActive) this._restart();
+        }, delay);
+      }
     });
   }
 
@@ -707,6 +728,7 @@ class ScrcpyEngine extends EventEmitter {
     // Clear stale keyframe cache so fresh SPS/PPS+IDR are sent after restart
     this._configPacket   = null;
     this._keyframeBuffer = null;
+    this._restartPending = false;
     // Tell connected browsers to reset their decoders before new stream data arrives
     const resetMsg = Buffer.from(JSON.stringify({ type: 'stream_reset' }));
     for (const ws of this.wsClients) {
