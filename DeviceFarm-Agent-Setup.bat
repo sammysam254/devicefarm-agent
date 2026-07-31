@@ -176,55 +176,51 @@ echo [OK] config.json updated.
 echo.
 echo [5/6] Installing dependencies...
 
-if exist "node_modules\electron\dist\electron.exe" (
-    echo [OK] Dependencies already installed.
+if exist "node_modules\winston\package.json" (
+    echo [OK] npm dependencies already installed.
 ) else (
     echo [*] Running npm install — this may take a few minutes...
-    
-    :: Run npm install in background for parallel download
-    start /B "" cmd /c "call ""%NPM%"" install --no-audit --no-fund >nul 2>&1"
-    
-    :: While npm installs, download scrcpy-server.jar + Electron binary in parallel
-    echo [*] Downloading scrcpy-server.jar in parallel...
-    if not exist "scrcpy-server.jar" (
-        "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-            "Invoke-WebRequest -Uri 'https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4' -OutFile 'scrcpy-server.jar' -UseBasicParsing"
-    )
-    
-    echo [*] Downloading Electron v33.4.11 in parallel...
-    if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist" >nul 2>nul
-    if not exist "node_modules\electron\dist\electron.exe" (
-        "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-            "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip' -UseBasicParsing"
-        if exist "node_modules\electron\ez.zip" (
-            "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-                "Expand-Archive -Path 'node_modules\electron\ez.zip' -DestinationPath 'node_modules\electron\dist' -Force"
-            del "node_modules\electron\ez.zip" >nul 2>nul
-            echo electron.exe> "node_modules\electron\path.txt"
-        )
-    )
-    
-    :: Wait for npm install to complete
-    echo [*] Waiting for npm install to complete...
-    :waitnpm
-    tasklist /FI "IMAGENAME eq npm.cmd" 2>nul | find /I "npm.cmd" >nul
-    if %errorlevel% equ 0 (
-        ping 127.0.0.1 -n 2 >nul
-        goto waitnpm
+    call "%NPM%" install --no-audit --no-fund
+    if %errorlevel% neq 0 (
+        echo [ERROR] npm install failed. Check your internet connection and try again.
+        pause & exit /b 1
     )
     echo [OK] npm packages installed.
-    
+)
+
+:: Download scrcpy-server.jar if missing
+if not exist "scrcpy-server.jar" (
+    echo [*] Downloading scrcpy-server.jar...
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Invoke-WebRequest -Uri 'https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4' -OutFile 'scrcpy-server.jar' -UseBasicParsing"
     if exist "scrcpy-server.jar" (
         echo [OK] scrcpy-server.jar ready.
     ) else (
         echo [WARN] scrcpy-server.jar missing — streaming may fail!
     )
+) else (
+    echo [OK] scrcpy-server.jar already present.
+)
 
+:: Download Electron binary if missing
+if not exist "node_modules\electron\dist\electron.exe" (
+    echo [*] Downloading Electron v33.4.11...
+    if not exist "node_modules\electron\dist" mkdir "node_modules\electron\dist" >nul 2>nul
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Invoke-WebRequest -Uri 'https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip' -OutFile 'node_modules\electron\ez.zip' -UseBasicParsing"
+    if exist "node_modules\electron\ez.zip" (
+        "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+            "Expand-Archive -Path 'node_modules\electron\ez.zip' -DestinationPath 'node_modules\electron\dist' -Force"
+        del "node_modules\electron\ez.zip" >nul 2>nul
+        echo electron.exe> "node_modules\electron\path.txt"
+    )
     if exist "node_modules\electron\dist\electron.exe" (
         echo [OK] Electron binary ready.
     ) else (
         echo [WARN] Electron binary not found — launch may fail.
     )
+) else (
+    echo [OK] Electron binary already present.
 )
 
 :: ════════════════════════════════════════════════════════════════════════════
