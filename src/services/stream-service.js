@@ -338,7 +338,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.buffer = webAudioBuf;
             src.connect(gainNode);
             const now = audioCtx.currentTime;
-            if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
+            // Keep audio within 120ms of real-time — drop if too far ahead
+            const MAX_AHEAD = 0.12;
+            if (audioNextPlayTime < now) {
+              audioNextPlayTime = now;
+            } else if (audioNextPlayTime > now + MAX_AHEAD) {
+              // Queue has drifted ahead — skip this packet to snap back to real-time
+              return;
+            }
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -407,7 +414,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
       src.buffer = buf;
       src.connect(gainNode);
       const now = audioCtx.currentTime;
-      if (audioNextPlayTime < now) audioNextPlayTime = now + 0.005;
+      if (audioNextPlayTime < now) {
+        audioNextPlayTime = now;
+      } else if (audioNextPlayTime > now + 0.12) {
+        return; // too far ahead — drop to stay real-time
+      }
       src.start(audioNextPlayTime);
       audioNextPlayTime += buf.duration;
     } catch (_) {}
@@ -542,6 +553,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       lastFrameReceivedTime = 0;
       modeText.textContent = 'LIVE 60FPS';
       resetDecoder();
+      audioNextPlayTime = 0;
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
@@ -613,8 +625,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (key) hasKeyframe = true;
       if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
 
-      // Skip non-keyframe chunk if decode queue is falling behind to preserve 0ms latency
-      if (!key && decoder.decodeQueueSize > 2) return;
+      // Skip non-keyframe chunk if decode queue is backed up — keeps video real-time
+      if (!key && decoder.decodeQueueSize > 4) return;
 
       try {
         const chunk = new EncodedVideoChunk({
