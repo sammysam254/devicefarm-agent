@@ -6,6 +6,7 @@ import SeedAdminDashboard from './pages/SeedAdminDashboard';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import WorkerDashboard from './pages/WorkerDashboard';
+import BlockedScreen from './pages/BlockedScreen';
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth();
@@ -19,6 +20,11 @@ function ProtectedRoute({ children, allowedRoles }) {
   }
 
   if (!user) return <Navigate to="/login" replace />;
+
+  // If user is blocked, always show the blocked screen regardless of role
+  if (profile?.is_blocked === true) {
+    return <BlockedScreen />;
+  }
 
   if (allowedRoles && profile) {
     const isSeed = profile.role === 'seed_admin';

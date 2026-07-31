@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     email TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT 'worker' CHECK (role IN ('seed_admin', 'super_admin', 'admin', 'worker')),
     super_admin_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    is_blocked BOOLEAN DEFAULT FALSE,
+    blocked_reason TEXT DEFAULT NULL,
+    blocked_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -108,3 +111,4 @@ CREATE POLICY "Allow all write device_assignments" ON public.device_assignments 
 ALTER PUBLICATION supabase_realtime ADD TABLE public.devices;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.machine_bindings;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.device_assignments;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;

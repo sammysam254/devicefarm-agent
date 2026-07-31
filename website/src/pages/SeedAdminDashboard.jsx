@@ -1,12 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
+import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock } from 'lucide-react';
+import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck } from 'lucide-react';
 
 export default function SeedAdminDashboard() {
+  const { profile: myProfile } = useAuth();
   const [bindings, setBindings] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [blockingId, setBlockingId] = useState(null);
+  const [blockReason, setBlockReason] = useState('');
+  const [blockReasonModal, setBlockReasonModal] = useState(null); // profile to block
 
   const loadData = async () => {
     setLoading(true);
@@ -49,6 +54,46 @@ export default function SeedAdminDashboard() {
     loadData();
   };
 
+  const handleBlockUser = async (e) => {
+    e.preventDefault();
+    if (!blockReasonModal) return;
+    setBlockingId(blockReasonModal.id);
+    try {
+      await supabase.from('profiles').update({
+        is_blocked: true,
+        blocked_reason: blockReason.trim() || 'Suspended by Seed Owner',
+        blocked_by: myProfile?.id,
+        updated_at: new Date().toISOString(),
+      }).eq('id', blockReasonModal.id);
+      setBlockReasonModal(null);
+      setBlockReason('');
+      loadData();
+    } catch (err) {
+      alert('Error blocking user: ' + err.message);
+    } finally {
+      setBlockingId(null);
+    }
+  };
+
+  const handleUnblockUser = async (userId) => {
+    setBlockingId(userId);
+    try {
+      await supabase.from('profiles').update({
+        is_blocked: false,
+        blocked_reason: null,
+        blocked_by: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', userId);
+      loadData();
+    } catch (err) {
+      alert('Error unblocking user: ' + err.message);
+    } finally {
+      setBlockingId(null);
+    }
+  };
+
+  const isSeedOwner = (p) => p.email?.toLowerCase() === 'sammyseth260@gmail.com';
+
   return (
     <DashboardLayout>
       <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -58,7 +103,7 @@ export default function SeedAdminDashboard() {
             <h1 style={{ fontSize: '24px', fontWeight: 800 }}>Seed Admin Control Center</h1>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Owner rights (`sammyseth260@gmail.com`). Manage Super Admin licenses, binding codes, and system modes.
+            Owner rights (sammyseth260@gmail.com). Manage Super Admin licenses, binding codes, and system modes.
           </p>
         </div>
         <button onClick={loadData} className="btn btn-secondary">
@@ -79,14 +124,14 @@ export default function SeedAdminDashboard() {
           </div>
         </div>
         <div className="card">
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>FREE MODE MACHINES</div>
-          <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--warning)' }}>
-            {bindings.filter(b => b.license_mode === 'free').length}
-          </div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>TOTAL USERS</div>
+          <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--accent)' }}>{profiles.length}</div>
         </div>
         <div className="card">
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>REGISTERED USERS</div>
-          <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--accent)' }}>{profiles.length}</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>BLOCKED USERS</div>
+          <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--danger)' }}>
+            {profiles.filter(p => p.is_blocked).length}
+          </div>
         </div>
       </div>
 
@@ -157,7 +202,7 @@ export default function SeedAdminDashboard() {
         )}
       </div>
 
-      {/* User Role Management */}
+      {/* User Role Management & Block Controls */}
       <div className="card">
         <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Users size={18} color="var(--accent)" /> User Role & Access Control
@@ -169,7 +214,9 @@ export default function SeedAdminDashboard() {
               <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px' }}>
                 <th style={{ padding: '12px' }}>EMAIL</th>
                 <th style={{ padding: '12px' }}>CURRENT ROLE</th>
-                <th style={{ padding: '12px', textAlign: 'right' }}>ASSIGN ROLE</th>
+                <th style={{ padding: '12px' }}>STATUS</th>
+                <th style={{ padding: '12px' }}>ASSIGN ROLE</th>
+                <th style={{ padding: '12px', textAlign: 'right' }}>BLOCK / UNBLOCK</th>
               </tr>
             </thead>
             <tbody>
@@ -185,8 +232,19 @@ export default function SeedAdminDashboard() {
                       {p.role.replace('_', ' ').toUpperCase()}
                     </span>
                   </td>
-                  <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                    {p.email?.toLowerCase() === 'sammyseth260@gmail.com' ? (
+                  <td style={{ padding: '14px 12px' }}>
+                    {p.is_blocked ? (
+                      <span className="badge badge-danger">
+                        <UserX size={11} /> BLOCKED
+                      </span>
+                    ) : (
+                      <span className="badge badge-success">
+                        <UserCheck size={11} /> ACTIVE
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: '14px 12px' }}>
+                    {isSeedOwner(p) ? (
                       <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Owner (Immutable)</span>
                     ) : (
                       <select 
@@ -201,12 +259,69 @@ export default function SeedAdminDashboard() {
                       </select>
                     )}
                   </td>
+                  <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                    {isSeedOwner(p) ? (
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Cannot Block Owner</span>
+                    ) : p.is_blocked ? (
+                      <button
+                        onClick={() => handleUnblockUser(p.id)}
+                        disabled={blockingId === p.id}
+                        className="btn btn-primary"
+                        style={{ padding: '6px 14px', fontSize: '12px' }}
+                      >
+                        <UserCheck size={14} /> Unblock
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => { setBlockReasonModal(p); setBlockReason(''); }}
+                        disabled={blockingId === p.id}
+                        className="btn btn-danger"
+                        style={{ padding: '6px 14px', fontSize: '12px' }}
+                      >
+                        <UserX size={14} /> Block User
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Block Reason Modal */}
+      {blockReasonModal && (
+        <div className="modal-overlay" onClick={() => setBlockReasonModal(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)' }}>
+              <UserX size={20} /> Block User
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '16px' }}>
+              You are about to block <strong style={{ color: 'var(--text-main)' }}>{blockReasonModal.email}</strong>. They will immediately see an "Access Revoked" screen.
+            </p>
+            <form onSubmit={handleBlockUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+                  REASON (optional)
+                </label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="e.g. Violated usage policy"
+                  value={blockReason}
+                  onChange={e => setBlockReason(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '6px' }}>
+                <button type="button" onClick={() => setBlockReasonModal(null)} className="btn btn-secondary">Cancel</button>
+                <button type="submit" className="btn btn-danger" disabled={blockingId}>
+                  <UserX size={14} /> Confirm Block
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }

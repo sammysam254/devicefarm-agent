@@ -42,6 +42,25 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Subscribe to real-time profile changes to instantly enforce blocks/unblocks
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel(`profile-watch-${user.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'profiles',
+        filter: `id=eq.${user.id}`,
+      }, (payload) => {
+        setProfile(payload.new);
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [user]);
+
   const fetchProfile = async (currentUser) => {
     try {
       let { data, error } = await supabase
@@ -56,7 +75,8 @@ export function AuthProvider({ children }) {
         const { data: newProf } = await supabase.from('profiles').insert([{
           id: currentUser.id,
           email: currentUser.email,
-          role: isSeed ? 'seed_admin' : 'worker'
+          role: isSeed ? 'seed_admin' : 'worker',
+          is_blocked: false,
         }]).select().single();
         data = newProf;
       }
