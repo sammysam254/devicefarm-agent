@@ -245,8 +245,19 @@ echo   STEP 2: LAUNCHING DEVICEFARM AGENT
 echo  ================================================================
 echo.
 
-taskkill /F /IM electron.exe /T >nul 2>nul
-taskkill /F /IM node.exe /T >nul 2>nul
+:: Check if DeviceFarm Agent is already running
+netstat -o -a -n | findstr :7400 >nul 2>&1
+if %errorlevel% equ 0 (
+    echo.
+    echo  ================================================================
+    echo  [OK] DeviceFarm Agent is ALREADY running and active!
+    echo       Preserving all active stream tunnels and connected devices.
+    echo       Dashboard : http://localhost:7400
+    echo  ================================================================
+    echo.
+    start "" "http://localhost:7400"
+    goto end_launch
+)
 
 set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
 if exist "%ELECTRON_BIN%" (
@@ -260,6 +271,8 @@ if exist "%ELECTRON_BIN%" (
 echo [*] Waiting for Dashboard...
 ping 127.0.0.1 -n 5 >nul 2>nul
 start "" "http://localhost:7400"
+
+:end_launch
 
 echo.
 echo  ================================================================

@@ -12,6 +12,17 @@ const { isCloudflaredAvailable } = require('../services/tunnel-service');
 const { startDashboardServer, openInChrome, stopDashboardServer, getDashboardUrl } = require('../dashboard/server');
 
 // ──────────────────────────────────────────────────────────
+//  Single Instance Guard
+// ──────────────────────────────────────────────────────────
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  logger.info('[SingleInstance] DeviceFarm Agent is ALREADY running. Preserving active streams.');
+  app.quit();
+  process.exit(0);
+}
+
+// ──────────────────────────────────────────────────────────
 //  Globals
 // ──────────────────────────────────────────────────────────
 
