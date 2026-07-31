@@ -2,10 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
 const logger = require('../utils/logger');
-const { getDecryptedSystemCredentials } = require('../utils/security');
-const rentalPaymentService = require('./rental-payment-service');
+const licenseService = require('./license-service');
 
 function loadConfigPath() {
   const candidates = [
@@ -13,9 +11,7 @@ function loadConfigPath() {
     path.join(__dirname, '..', '..', 'config.json'),
   ];
   for (const p of candidates) {
-    if (fs.existsSync(p)) {
-      return p;
-    }
+    if (fs.existsSync(p)) return p;
   }
   return path.join(process.cwd(), 'config.json');
 }
@@ -23,9 +19,7 @@ function loadConfigPath() {
 function loadConfig() {
   const cfgPath = loadConfigPath();
   if (fs.existsSync(cfgPath)) {
-    try {
-      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    } catch (_) {}
+    try { return JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); } catch (_) {}
   }
   return {};
 }
@@ -37,33 +31,33 @@ function saveConfig(cfg) {
 
 /**
  * Generate or retrieve the unique 8-digit machine binding code.
- * E.g., "53361175"
  */
 function getOrGenerateBindingCode() {
   const cfg = loadConfig();
   if (cfg.machineBindingCode && /^\d{8}$/.test(cfg.machineBindingCode)) {
     return cfg.machineBindingCode;
   }
-
   const randomNum = Math.floor(10000000 + Math.random() * 90000000).toString();
   cfg.machineBindingCode = randomNum;
   saveConfig(cfg);
-  logger.info(`[Binding Service] Generated new 8-digit machine binding code: ${randomNum}`);
+  logger.info(`[BindingService] Generated new 8-digit machine binding code: ${randomNum}`);
   return randomNum;
 }
 
 /**
- * Sync machine binding code and connected devices to Supabase.
+ * Sync machine binding to Supabase machine_bindings table.
+ * Also ensures license record exists.
  */
-async function syncMachineBindingToSupabase(devices = []) {
+async function syncMachineBinding() {
   const bindingCode = getOrGenerateBindingCode();
-  const creds = getDecryptedSystemCredentials();
-  const supabaseUrl = creds.supabaseUrl;
-  const apiKey = creds.supabaseServiceRoleKey || creds.supabaseAnonKey;
+  const cfg = loadConfig();
+  const supabaseUrl = cfg.supabaseUrl;
+  const apiKey = cfg.supabaseServiceRoleKey || cfg.supabaseAnonKey;
 
   if (!supabaseUrl || !apiKey) return bindingCode;
 
   try {
+    const axios = require('axios');
     const client = axios.create({
       baseURL: `${supabaseUrl.replace(/\/$/, '')}/rest/v1`,
       timeout: 6000,
@@ -75,52 +69,41 @@ async function syncMachineBindingToSupabase(devices = []) {
       },
     });
 
-    // 1. Check if this 8-digit Machine Code was previously bound to a user account in Supabase
-    let boundUserId = null;
-    try {
-      const resBind = await client.get(`/machine_bindings?binding_code=eq.${bindingCode}&select=*`);
-      if (resBind.data && resBind.data.length > 0 && resBind.data[0].user_id) {
-        boundUserId = resBind.data[0].user_id;
-        const cfg = loadConfig();
-        cfg.rentalUserId = boundUserId;
-        saveConfig(cfg);
-        logger.info(`[Auto-Link] Recognized Machine Code ${bindingCode} auto-bound to profile: ${boundUserId}`);
-      }
-    } catch (_) {}
+    // Upsert machine_bindings
+    await client.post('/machine_bindings', {
+      binding_code: bindingCode,
+      machine_name: process.env.COMPUTERNAME || 'Windows Agent Machine',
+      updated_at: new Date().toISOString(),
+    });
 
-    // 2. Register/update machine binding record in Supabase
-    try {
-      const bindPayload = {
-        binding_code: bindingCode,
-        machine_name: process.env.COMPUTERNAME || 'Windows Agent Machine',
-        updated_at: new Date().toISOString(),
-      };
-      if (boundUserId) bindPayload.user_id = boundUserId;
-
-      await client.post('/machine_bindings', bindPayload, {
-        headers: { Prefer: 'resolution=merge-duplicates' }
-      });
-    } catch (_) {}
-
-    // 3. Sync connected devices using robust createOrUpdateDeviceRental
-    for (const dev of devices) {
-      try {
-        await rentalPaymentService.createOrUpdateDeviceRental(dev.serial, {
-          deviceModel: dev.model || 'Android Device',
-          deviceBrand: dev.brand || 'Generic',
-        });
-      } catch (_) {}
-    }
-
-    logger.info(`[Binding Sync] Synced 8-digit code ${bindingCode} and ${devices.length} devices to Supabase.`);
+    logger.info(`[BindingService] Machine binding code ${bindingCode} synced to Supabase`);
   } catch (err) {
-    logger.warn(`[Binding Sync Note] Local machine status ready: ${err.message}`);
+    logger.warn(`[BindingService] Sync notice: ${err.message}`);
   }
 
   return bindingCode;
 }
 
+/**
+ * Sync a device's stream URL to Supabase.
+ * Called each time device connects or tunnel URL changes.
+ */
+async function syncDeviceUrl(serial, streamUrl, opts = {}) {
+  const bindingCode = getOrGenerateBindingCode();
+  await licenseService.syncDeviceToCloud({
+    serial,
+    model: opts.model,
+    brand: opts.brand,
+    streamUrl,
+    localUrl: opts.localUrl,
+    port: opts.port,
+    bindingCode,
+    status: 'online',
+  });
+}
+
 module.exports = {
   getOrGenerateBindingCode,
-  syncMachineBindingToSupabase,
+  syncMachineBinding,
+  syncDeviceUrl,
 };

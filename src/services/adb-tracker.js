@@ -8,15 +8,13 @@ const { startStreamServer, buildStreamUrl } = require('./stream-service');
 const { createTunnel } = require('./tunnel-service');
 const apiClient = require('./api-client');
 const processManager = require('../main/process-manager');
-const rentalPaymentService = require('./rental-payment-service');
 const bindingService = require('./binding-service');
+const licenseService = require('./license-service');
 const path = require('path');
 const fs = require('fs');
-const { exec } = require('child_process');
 
-/**
- * Load config for port range.
- */
+// ─── Config ──────────────────────────────────────────────────────────────────
+
 function loadConfig() {
   const candidates = [
     path.join(process.cwd(), 'config.json'),
@@ -24,7 +22,7 @@ function loadConfig() {
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) {
-      return JSON.parse(fs.readFileSync(p, 'utf-8'));
+      try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) {}
     }
   }
   return {};
@@ -32,231 +30,199 @@ function loadConfig() {
 
 const config = loadConfig();
 const PORT_RANGE_START = config.portRangeStart || 8100;
-const PORT_RANGE_END = config.portRangeEnd || 8900;
+const PORT_RANGE_END   = config.portRangeEnd   || 8900;
 
-/** ADB client instance. */
-let client = null;
-
-/** Device tracker instance. */
+let client  = null;
 let tracker = null;
 
-/**
- * Debounce map to prevent rapid re-provisioning of the same serial.
- * Maps serial → timestamp of last removal.
- */
 const recentRemovals = new Map();
 const DEBOUNCE_MS = 3000;
 
-/**
- * Handle a newly detected device.
- * Orchestrates the full pipeline: properties → port → stream → tunnel → API.
- *
- * @param {object} device  The adbkit device object ({ id, type }).
- */
+// ─── Device Add ───────────────────────────────────────────────────────────────
+
 async function handleDeviceAdd(device) {
   const serial = device.id;
 
   if (processManager.getDevice(serial)) {
     logger.warn(`Device ${serial} already tracked — tearing down old session`);
     await handleDeviceRemove(device);
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   const lastRemoval = recentRemovals.get(serial);
   if (lastRemoval && Date.now() - lastRemoval < DEBOUNCE_MS) {
     const waitTime = DEBOUNCE_MS - (Date.now() - lastRemoval);
     logger.info(`Debouncing reconnection for ${serial}, waiting ${waitTime}ms`);
-    await new Promise((r) => setTimeout(r, waitTime));
+    await new Promise(r => setTimeout(r, waitTime));
   }
 
   logger.info(`Device connected: ${serial} (type: ${device.type})`);
 
   try {
-    // ----- 1. Read device properties -----
-    let deviceModel = 'SM-A042F';
-    let deviceBrand = 'samsung';
+    // 1. Read device properties
+    let deviceModel = 'Android';
+    let deviceBrand  = 'Generic';
 
     try {
       const deviceClient = client.getDevice(serial);
-      const properties = await deviceClient.getProperties();
-      deviceModel = properties['ro.product.model'] || 'SM-A042F';
-      deviceBrand = properties['ro.product.brand'] || 'samsung';
-      logger.info(`Device properties for ${serial}`, { deviceModel, deviceBrand });
+      const props = await deviceClient.getProperties();
+      deviceModel = props['ro.product.model'] || deviceModel;
+      deviceBrand  = props['ro.product.brand']  || deviceBrand;
+      logger.info(`Device properties: ${serial} → ${deviceBrand} ${deviceModel}`);
     } catch (err) {
-      logger.warn(`Could not read properties for ${serial}`, { error: err.message });
+      logger.warn(`Could not read properties for ${serial}: ${err.message}`);
     }
 
-    // ----- 2. Check / Register Supabase Monthly Device Rental Status ($30 USD/mo) -----
-    await bindingService.syncMachineBindingToSupabase([{ serial, model: deviceModel, brand: deviceBrand }]);
-    const rentalInfo = await rentalPaymentService.checkDeviceRentalStatus(serial);
-    if (!rentalInfo.isPaid) {
-      logger.warn(`[RENTAL ENFORCEMENT] Device ${serial} rental is ${rentalInfo.status.toUpperCase()} ($30 USD/month unpaid). Stream link will be INVALIDATED until paid.`);
+    // 2. Sync machine binding (no payment check — license managed online)
+    const bindingCode = await bindingService.syncMachineBinding();
+    const licenseStatus = await licenseService.checkLicenseStatus(bindingCode);
+
+    if (!licenseStatus.isActive) {
+      logger.warn(`[LICENSE] Binding ${bindingCode} is NOT licensed: ${licenseStatus.note}`);
+      logger.warn(`[LICENSE] Device ${serial} stream will be locked until license is restored by seed admin.`);
     } else {
-      logger.info(`[RENTAL ACTIVE] Device ${serial} monthly rental ($30 USD) is PAID and ACTIVE.`);
+      logger.info(`[LICENSE] Binding ${bindingCode} is active (${licenseStatus.mode})`);
     }
 
-    // ----- 3. Allocate a free port -----
+    // 3. Allocate port
     const port = await getFreePort(PORT_RANGE_START, PORT_RANGE_END);
     logger.info(`Allocated port ${port} for device ${serial}`);
 
-    // ----- 4. Start stream server -----
+    // 4. Start stream server (always starts — license is enforced at website level)
     const { streamProcess, localUrl } = await startStreamServer(serial, port);
-    logger.info(`Stream server started for ${serial}`, { localUrl });
+    logger.info(`Stream server started for ${serial}: ${localUrl}`);
 
-    // ----- 5. Create Cloudflare tunnel -----
-    let publicUrl = null;
+    // 5. Create Cloudflare tunnel
+    let publicUrl    = null;
     let tunnelProcess = null;
 
     try {
       const tunnelResult = await createTunnel(port);
-      publicUrl = tunnelResult.publicUrl;
+      publicUrl     = tunnelResult.publicUrl;
       tunnelProcess = tunnelResult.tunnelProcess;
-      logger.info(`Tunnel created for ${serial}`, { publicUrl });
+      logger.info(`Tunnel created for ${serial}: ${publicUrl}`);
     } catch (err) {
-      logger.error(`Failed to create tunnel for ${serial} — device will be local-only`, {
-        error: err.message,
-      });
+      logger.warn(`Failed to create tunnel for ${serial} — local-only: ${err.message}`);
     }
 
-    // ----- 6. Build the complete stream URL -----
-    let streamUrl;
-    if (publicUrl) {
-      streamUrl = buildStreamUrl(publicUrl, port, serial);
-    } else {
-      streamUrl = `http://localhost:${port}/?action=proxy&remote=tcp%3A127.0.0.1%3A${port}&udid=${encodeURIComponent(serial)}`;
-    }
+    // 6. Build stream URL
+    const streamUrl = publicUrl
+      ? buildStreamUrl(publicUrl, port, serial)
+      : `http://localhost:${port}/?udid=${encodeURIComponent(serial)}`;
+
     logger.info(`Stream URL for ${serial}: ${streamUrl}`);
 
-    // ----- 7. Register with process manager -----
+    // 7. Register with process manager
     processManager.addDevice(serial, {
       streamProcess,
       tunnelProcess,
       port,
       publicUrl,
       streamUrl,
+      localUrl,
       model: deviceModel,
       brand: deviceBrand,
       deviceModel,
       deviceBrand,
-      paymentStatus: rentalInfo.status,
-      isPaid: rentalInfo.isPaid,
-      monthlyFeeUsd: rentalInfo.monthlyFee || 30,
+      bindingCode,
+      isPaid: licenseStatus.isActive,
+      paymentStatus: licenseStatus.mode,
     });
 
-    // ----- 8. Register with central API -----
-    await apiClient.registerDevice({
-      serialNumber: serial,
-      deviceModel,
-      deviceBrand,
-      streamUrl,
-      status: rentalInfo.isPaid ? 'ONLINE' : 'UNPAID_BLOCKED',
-      rentalStatus: rentalInfo.status,
+    // 8. Sync device + stream URL to Supabase cloud (enables real-time URL updates for website users)
+    await bindingService.syncDeviceUrl(serial, streamUrl, {
+      model: deviceModel,
+      brand: deviceBrand,
+      localUrl,
+      port,
     });
 
-    logger.info(`Device ${serial} (${deviceBrand} ${deviceModel}) provisioned (Rental Paid: ${rentalInfo.isPaid})`);
+    // 9. Register with central API (silent fail)
+    try {
+      await apiClient.registerDevice({
+        serialNumber: serial,
+        deviceModel,
+        deviceBrand,
+        streamUrl,
+        status: 'ONLINE',
+      });
+    } catch (_) {}
+
+    logger.info(`✅ Device ${serial} (${deviceBrand} ${deviceModel}) provisioned — stream ready`);
   } catch (err) {
-    logger.error(`Failed to provision device ${serial}`, { error: err.message, stack: err.stack });
+    logger.error(`Failed to provision device ${serial}: ${err.message}`, { stack: err.stack });
     processManager.killDeviceProcesses(serial);
   }
 }
 
-/**
- * Handle a device disconnection.
- * Cleans up processes and notifies central API.
- *
- * @param {object} device  The adbkit device object ({ id, type }).
- */
+// ─── Device Remove ────────────────────────────────────────────────────────────
+
 async function handleDeviceRemove(device) {
   const serial = device.id;
   logger.info(`Device disconnected: ${serial}`);
   recentRemovals.set(serial, Date.now());
 
   processManager.killDeviceProcesses(serial);
+
+  // Mark device offline in Supabase
+  licenseService.markDeviceOffline(serial).catch(() => {});
+
   try { await apiClient.deregisterDevice(serial); } catch (_) {}
   logger.info(`Device ${serial} cleanup complete`);
 }
 
-/**
- * Initialize ADB tracker and listen for device connection/disconnection events.
- */
+// ─── Tracker ─────────────────────────────────────────────────────────────────
+
 async function startTracking() {
-  const adbHost = config.adbHost || '127.0.0.1';
-  const adbPort = config.adbPort || 5037;
-  let adbPath = config.adbPath || 'adb';
+  const cfg = loadConfig();
+  const adbHost = cfg.adbHost || '127.0.0.1';
+  const adbPort = cfg.adbPort || 5037;
+
+  let adbPath = cfg.adbPath || 'adb';
   const bundledAdb = path.join(__dirname, '../../assets/bin/adb.exe');
   if (!fs.existsSync(adbPath)) {
-    if (fs.existsSync(bundledAdb)) {
-      adbPath = bundledAdb;
-    } else if (fs.existsSync('C:\\platform-tools\\adb.exe')) {
-      adbPath = 'C:\\platform-tools\\adb.exe';
-    } else {
-      adbPath = 'adb';
-    }
+    if      (fs.existsSync(bundledAdb)) adbPath = bundledAdb;
+    else if (fs.existsSync('C:\\platform-tools\\adb.exe')) adbPath = 'C:\\platform-tools\\adb.exe';
+    else adbPath = 'adb';
   }
 
-  logger.info(`Initializing ADB client with binary: ${adbPath}`);
+  logger.info(`Initializing ADB client: ${adbPath}`);
   client = Adb.createClient({ host: adbHost, port: adbPort, bin: adbPath });
-
   logger.info('Starting ADB device tracker...');
 
   try {
     const devices = await client.listDevices();
-    logger.info(`Initial ADB device scan found ${devices.length} device(s)`);
-
-    for (const device of devices) {
-      if (device.type === 'device') {
-        await handleDeviceAdd(device);
-      }
+    logger.info(`Initial ADB scan: ${devices.length} device(s)`);
+    for (const d of devices) {
+      if (d.type === 'device') await handleDeviceAdd(d);
     }
   } catch (err) {
-    logger.error('Failed initial ADB device scan', { error: err.message });
+    logger.error(`Initial ADB scan failed: ${err.message}`);
   }
 
   try {
     tracker = await client.trackDevices();
 
-    tracker.on('add', (device) => {
-      if (device.type === 'device') {
-        handleDeviceAdd(device);
-      }
-    });
-
-    tracker.on('remove', (device) => {
-      handleDeviceRemove(device);
-    });
-
-    tracker.on('end', () => {
-      logger.warn('ADB tracker ended — attempting to restart in 5s');
+    tracker.on('add',    (d) => { if (d.type === 'device') handleDeviceAdd(d); });
+    tracker.on('remove', (d) => handleDeviceRemove(d));
+    tracker.on('end',    () => {
+      logger.warn('ADB tracker ended — restarting in 5s');
       setTimeout(startTracking, 5000);
     });
+    tracker.on('error', (err) => logger.error(`ADB tracker error: ${err.message}`));
 
-    tracker.on('error', (err) => {
-      logger.error('ADB tracker error', { error: err.message });
-    });
-
-    logger.info('ADB device tracker started successfully');
+    logger.info('✅ ADB device tracker started');
   } catch (err) {
-    logger.error('Failed to start ADB device tracker — retrying in 5s', { error: err.message });
+    logger.error(`Failed to start ADB tracker: ${err.message} — retry in 5s`);
     setTimeout(startTracking, 5000);
   }
 }
 
-/**
- * Stop the ADB tracker.
- */
 function stopTracking() {
   if (tracker) {
-    try {
-      tracker.end();
-      tracker = null;
-      logger.info('ADB device tracker stopped');
-    } catch (err) {
-      logger.error('Error stopping ADB tracker', { error: err.message });
-    }
+    try { tracker.end(); tracker = null; logger.info('ADB tracker stopped'); }
+    catch (err) { logger.error(`Error stopping ADB tracker: ${err.message}`); }
   }
 }
 
-module.exports = {
-  startTracking,
-  stopTracking,
-};
+module.exports = { startTracking, stopTracking };

@@ -6,7 +6,6 @@ const { spawn, exec, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
-const rentalPaymentService = require('./rental-payment-service');
 const ScrcpyEngine = require('./scrcpy-engine');
 
 // ─── Config & ADB ────────────────────────────────────────────────────────────
@@ -623,20 +622,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
 // ─── startStreamServer ───────────────────────────────────────────────────────
 
+
 async function startStreamServer(serial, port) {
   logger.info(`[StreamServer] Starting for ${serial} on port ${port}`);
 
-  let cachedStatus = null, lastCheck = 0;
-  async function getRentalStatus(force = false) {
-    const now = Date.now(), ttl = cachedStatus?.isPaid ? 15000 : 2000;
-    if (!force && cachedStatus && (now - lastCheck) < ttl) return cachedStatus;
-    try { cachedStatus = await rentalPaymentService.checkDeviceRentalStatus(serial); }
-    catch (_) { if (cachedStatus) return cachedStatus; cachedStatus = { isPaid: false }; }
-    lastCheck = Date.now();
-    return cachedStatus;
-  }
-
-  // Start scrcpy engine (video + control share same ADB-forwarded port)
+  // Start scrcpy engine
   const engine = new ScrcpyEngine(serial);
   const videoPort = port + 1000;
   try {
@@ -657,18 +647,6 @@ async function startStreamServer(serial, port) {
 
     const url = new URL(req.url, `http://localhost:${port}`);
     const p   = url.pathname;
-    const isPage = p === '/' || p === '/index.html';
-
-    const status = await getRentalStatus(isPage);
-    if (!status.isPaid) {
-      if (p === '/screen.jpg' || p === '/control' || p === '/upload') {
-        res.writeHead(402, {'Content-Type':'application/json'});
-        res.end(JSON.stringify({ error:'Payment required' })); return;
-      }
-      res.writeHead(200, {'Content-Type':'text/html'});
-      res.end(getStreamBlockedHtml(serial, rentalPaymentService.getPaymentCheckoutUrl(serial), status));
-      return;
-    }
 
     if (p === '/upload' && req.method === 'POST') {
       const chunks = [];
@@ -704,31 +682,12 @@ async function startStreamServer(serial, port) {
     res.end(buildPlayerHtml(serial, engine.screenWidth, engine.screenHeight));
   });
 
-  // ── WebSocket — relay H264 from scrcpy engine to browser ─────────────────
+  // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
   const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
   wss.on('connection', (ws) => {
     logger.info(`[StreamServer] WS connected for ${serial}`);
-
-    // Check payment BEFORE registering the client so no frames are delivered
-    // to unpaid sessions. Only add to the engine after the check passes.
-    getRentalStatus().then(status => {
-      if (!status || !status.isPaid) {
-        try { ws.send(JSON.stringify({type:'error',error:'Payment required'})); ws.close(4002,'Unpaid'); } catch (_) {}
-        return; // do NOT add to engine
-      }
-      // Payment confirmed — register client and flush cached SPS/PPS immediately
-      engine.addClient(ws);
-    }).catch(() => {
-      // On error default to adding the client (fail open) so a transient
-      // payment service outage doesn't black-screen paying users.
-      engine.addClient(ws);
-    });
-
-    const payCheck = setInterval(async () => {
-      const s = await getRentalStatus();
-      if (!s.isPaid) { engine.removeClient(ws); ws.close(4002, 'Unpaid'); }
-    }, 60000);
+    engine.addClient(ws);
 
     ws.on('message', (msg) => {
       try {
@@ -737,8 +696,8 @@ async function startStreamServer(serial, port) {
       } catch (_) {}
     });
 
-    ws.on('close', () => { engine.removeClient(ws); clearInterval(payCheck); });
-    ws.on('error', () => { engine.removeClient(ws); clearInterval(payCheck); });
+    ws.on('close', () => engine.removeClient(ws));
+    ws.on('error', () => engine.removeClient(ws));
   });
 
   return new Promise((resolve, reject) => {
