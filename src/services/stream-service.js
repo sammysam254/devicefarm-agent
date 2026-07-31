@@ -456,14 +456,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
-          const h = frame.displayHeight || frame.codedHeight || frame.height;
-          if (w && h && (canvas.width !== w || canvas.height !== h)) {
-            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-          }
-          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-          frame.close();
-          countFrame();
+          queueDraw(frame);
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);

@@ -523,11 +523,22 @@ class ScrcpyEngine extends EventEmitter {
 
   _broadcastVideo(payload, isKeyframe) {
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
-      } else {
-        this.wsClients.delete(ws);
+      if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
+
+      if (isKeyframe) {
+        ws._needsKeyframe = false;
+      } else if (ws._needsKeyframe) {
+        continue;
       }
+
+      // Adaptive Internet Speed Guard:
+      // If client connection is slow (send buffer > 128KB), skip non-keyframe P-frames to keep stream real-time & smooth
+      if (!isKeyframe && ws.bufferedAmount > 128 * 1024) {
+        ws._needsKeyframe = true;
+        continue;
+      }
+
+      try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
     }
   }
 
