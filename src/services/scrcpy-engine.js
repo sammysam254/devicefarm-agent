@@ -439,11 +439,24 @@ class ScrcpyEngine extends EventEmitter {
 
   _pipeAudioToClients(socket) {
     let buf = Buffer.alloc(0);
+    let headerDone = false;
+    const CODEC_HEADER_LEN = 4;
     const META = 12; // 8-byte PTS + 4-byte size
     socket.on('data', (chunk) => {
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+      if (!headerDone) {
+        if (buf.length < CODEC_HEADER_LEN) return;
+        const codecStr = buf.toString('utf8', 0, 4);
+        logger.info(`[ScrcpyEngine ${this.serial}] Audio stream header: ${codecStr}`);
+        buf = buf.subarray(CODEC_HEADER_LEN);
+        headerDone = true;
+      }
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
+        if (pktSize === 0 || pktSize > 1024 * 1024) {
+          buf = buf.subarray(1);
+          continue;
+        }
         if (buf.length < META + pktSize) break;
         const payload = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);

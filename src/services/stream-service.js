@@ -266,6 +266,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   // ── WebAudio Sound Playback ────────────────────────────────────────────────
   let audioCtx = null;
+  let audioDecoder = null;
+  let audioNextPlayTime = 0;
+
   function initAudio() {
     if (!audioCtx) {
       try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
@@ -273,13 +276,66 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume().catch(function() {});
     }
+    if (typeof AudioDecoder !== 'undefined' && !audioDecoder) {
+      try {
+        audioDecoder = new AudioDecoder({
+          output: playAudioFrame,
+          error: function(e) { console.warn('[AudioDecoder] decode error:', e); }
+        });
+        audioDecoder.configure({
+          codec: 'opus',
+          numberOfChannels: 2,
+          sampleRate: 48000
+        });
+      } catch (e) {
+        console.warn('[AudioDecoder] init failed:', e);
+      }
+    }
   }
+
   ['click', 'mousedown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, initAudio, { passive: true });
   });
 
+  function playAudioFrame(audioFrameData) {
+    if (!audioCtx) return;
+    try {
+      const channels = audioFrameData.numberOfChannels || 2;
+      const frames = audioFrameData.numberOfFrames;
+      const sampleRate = audioFrameData.sampleRate || 48000;
+      const buffer = audioCtx.createBuffer(channels, frames, sampleRate);
+
+      for (let ch = 0; ch < channels; ch++) {
+        audioFrameData.copyTo(buffer.getChannelData(ch), { planeIndex: ch });
+      }
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      if (audioNextPlayTime < now) audioNextPlayTime = now;
+      source.start(audioNextPlayTime);
+      audioNextPlayTime += buffer.duration;
+    } catch (_) {}
+    finally {
+      try { audioFrameData.close(); } catch (_) {}
+    }
+  }
+
   function playAudioData(audioBytes) {
+    initAudio();
     if (!audioCtx || audioCtx.state !== 'running') return;
+    if (!audioDecoder || audioDecoder.state === 'closed') return;
+
+    try {
+      const chunk = new EncodedAudioChunk({
+        type: 'key',
+        timestamp: performance.now() * 1000,
+        data: audioBytes
+      });
+      audioDecoder.decode(chunk);
+    } catch (_) {}
   }
 
   // ── WebCodecs H264 Decoder & Auto-Detection ─────────────────────────────
