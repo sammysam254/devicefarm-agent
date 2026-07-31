@@ -92,6 +92,18 @@ class ScrcpyEngine extends EventEmitter {
     this.wsClients.delete(ws);
   }
 
+  async _pushServerJar() {
+    if (this._jarPushed) return;
+    if (!fs.existsSync(SCRCPY_JAR_PATH)) {
+      logger.error(`[ScrcpyEngine ${this.serial}] CRITICAL: ${SCRCPY_JAR_PATH} not found!`);
+      throw new Error(`scrcpy-server.jar missing at ${SCRCPY_JAR_PATH}`);
+    }
+    logger.info(`[ScrcpyEngine ${this.serial}] Pushing scrcpy-server.jar to /data/local/tmp/scrcpy-server.jar...`);
+    await this._adb(['push', SCRCPY_JAR_PATH, '/data/local/tmp/scrcpy-server.jar']);
+    this._jarPushed = true;
+    logger.info(`[ScrcpyEngine ${this.serial}] scrcpy-server.jar pushed successfully`);
+  }
+
   async start(videoPort) {
     if (this.isRunning) return;
     this.videoPort = videoPort;
@@ -109,14 +121,24 @@ class ScrcpyEngine extends EventEmitter {
       } catch (_) {}
       logger.info(`[ScrcpyEngine ${this.serial}] Screen: ${this.screenWidth}x${this.screenHeight}`);
 
-      // 2. Use screencap as primary method - it's reliable and works everywhere
-      logger.info(`[ScrcpyEngine ${this.serial}] Starting with screencap streaming (reliable mode)`);
-      this._startScreencapStream();
+      // 2. Push scrcpy-server.jar to device
+      await this._pushServerJar();
+
+      // 3. Setup ADB port forwarding for scrcpy
+      try { await this._adb(['forward', '--remove', `tcp:${this.videoPort}`]); } catch (_) {}
+      await this._adb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
+
+      // 4. Spawn scrcpy-server process on device
+      this._spawnServer();
+
+      // 5. Connect video and control sockets
+      await this._connectSockets();
+
+      logger.info(`[ScrcpyEngine ${this.serial}] High-speed 60FPS Scrcpy H264 engine active`);
 
     } catch (err) {
-      logger.error(`[ScrcpyEngine ${this.serial}] Start failed: ${err.message}`);
-      this.stop();
-      throw err;
+      logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — falling back to screenrecord stream`);
+      this._startScreenrecordFallback();
     }
   }
 
@@ -140,7 +162,7 @@ class ScrcpyEngine extends EventEmitter {
       'video_source=display',      // explicitly capture the display (not camera)
       'max_size=720',              // cap resolution — keeps bitrate and decode cost manageable
       'video_bit_rate=4000000',    // 4 Mbps — good quality at up to 60fps
-      'max_fps=30',                // 30fps is plenty for remote control; reduces load
+      'max_fps=60',                // 60fps high performance mode
       'send_frame_meta=true',      // MUST be true — enables the 12-byte PTS+size header we parse
     ];
 
@@ -168,20 +190,76 @@ class ScrcpyEngine extends EventEmitter {
     this.serverProc.on('close', (code) => {
       logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (${code}) — restarting in 1.5s`);
       this._cleanup();
-      if (this.isRunning) setTimeout(() => this._restart(), 1500);
+      if (this.isRunning && !this._fallbackActive) setTimeout(() => this._restart(), 1500);
+    });
+  }
+
+  _startScreenrecordFallback() {
+    if (this._fallbackActive) return;
+    this._fallbackActive = true;
+    logger.info(`[ScrcpyEngine ${this.serial}] Starting hardware screenrecord fallback...`);
+
+    const args = [
+      '-s', this.serial, 'exec-out',
+      'screenrecord',
+      '--output-format=h264',
+      '--size', '720x1280',
+      '--bit-rate', '4000000',
+      '-'
+    ];
+
+    const proc = spawn(ADB_BIN, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    this._fallbackProc = proc;
+
+    proc.stdout.on('data', (chunk) => {
+      this._broadcastVideo(chunk, false);
+    });
+
+    proc.on('close', () => {
+      this._fallbackProc = null;
+      if (this.isRunning && this._fallbackActive) {
+        setTimeout(() => {
+          this._fallbackActive = false;
+          if (this.isRunning) this._startScreenrecordFallback();
+        }, 1000);
+      }
+    });
+
+    proc.on('error', (err) => {
+      logger.warn(`[ScrcpyEngine ${this.serial}] Screenrecord process error: ${err.message}`);
     });
   }
 
   stop() {
     this.isRunning = false;
     this._screencapActive = false;
+    this._fallbackActive = false;
+    if (this._fallbackProc) {
+      try { this._fallbackProc.kill(); } catch (_) {}
+      this._fallbackProc = null;
+    }
     this._cleanup();
     this.wsClients.clear();
     this.emit('stopped');
   }
 
   _cleanup() {
-    // Nothing to clean up for screencap mode
+    if (this.videoSocket) {
+      try { this.videoSocket.destroy(); } catch (_) {}
+      this.videoSocket = null;
+    }
+    if (this.controlSocket) {
+      try { this.controlSocket.destroy(); } catch (_) {}
+      this.controlSocket = null;
+    }
+    if (this.serverProc) {
+      try { this.serverProc.kill(); } catch (_) {}
+      this.serverProc = null;
+    }
   }
 
   // ── Socket connection ─────────────────────────────────────────────────────

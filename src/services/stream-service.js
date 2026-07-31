@@ -254,25 +254,74 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── WebSocket connection ─────────────────────────────────────────────────
-  // The server streams PNG frames as binary WebSocket messages.
-  // We decode each PNG with createImageBitmap and draw it via rAF.
-  // If the WS keeps failing (tunnel not up yet), we fall back to polling
-  // /screen.jpg — but we never fall back while the WS is delivering frames.
+  // ── WebCodecs H264 Decoder & Auto-Detection ─────────────────────────────
+  let decoder = null;
+  let decoderReady = false;
+  let hasKeyframe = false;
 
+  function initDecoder() {
+    if (typeof VideoDecoder === 'undefined') {
+      console.warn('[Stream] WebCodecs VideoDecoder not available in this browser');
+      return false;
+    }
+    try {
+      decoder = new VideoDecoder({
+        output: function(frame) {
+          lastFrameReceivedTime = Date.now();
+          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
+          const h = frame.displayHeight || frame.codedHeight || frame.height;
+          if (w && h && (canvas.width !== w || canvas.height !== h)) {
+            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+          }
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          frame.close();
+          countFrame();
+        },
+        error: function(err) {
+          console.error('[Stream] VideoDecoder error:', err);
+          decoderReady = false;
+          hasKeyframe = false;
+        }
+      });
+
+      decoder.configure({
+        codec: 'avc1.42E01E',
+        optimizeForLatency: true,
+        hardwareAcceleration: 'prefer-hardware'
+      });
+      decoderReady = true;
+      return true;
+    } catch (err) {
+      console.error('[Stream] Failed to init VideoDecoder:', err);
+      return false;
+    }
+  }
+
+  function isH264Keyframe(u8) {
+    for (let i = 0; i < Math.min(u8.length - 4, 128); i++) {
+      if (u8[i] === 0 && u8[i+1] === 0) {
+        let ntype = -1;
+        if (u8[i+2] === 1 && i + 3 < u8.length) {
+          ntype = u8[i+3] & 0x1f;
+        } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
+          ntype = u8[i+4] & 0x1f;
+        }
+        if (ntype === 7 || ntype === 8 || ntype === 5) return true;
+      }
+    }
+    return false;
+  }
+
+  // ── WebSocket connection ─────────────────────────────────────────────────
   let ws = null, wsOk = false;
   let wsFailCount = 0;
   let wsRetryTimer = null;
-  // Tracks the last time a frame was received (set on message arrival,
-  // before decoding, so the fallback watchdog is not fooled by slow decodes).
   let lastFrameReceivedTime = 0;
 
-  // Fallback watchdog: only fires if WS is connected but no frames arrive
-  // for >5s. This handles the case where the server is up but screencap
-  // on the device has stalled.
+  // Fallback watchdog: only fires if WS is connected but no frames arrive for >5s
   setInterval(function() {
-    if (!wsOk) return; // not connected — don't trigger fallback
-    if (lastFrameReceivedTime === 0) return; // no frame ever received yet
+    if (!wsOk) return;
+    if (lastFrameReceivedTime === 0) return;
     if (Date.now() - lastFrameReceivedTime > 5000 && !fbRunning) {
       console.warn('[Watchdog] No frames for 5s — starting HTTP fallback');
       startFallback();
@@ -288,19 +337,57 @@ function buildPlayerHtml(serial, screenW, screenH) {
     ws.onopen = function() {
       wsOk = true;
       wsFailCount = 0;
-      modeText.textContent = 'LIVE';
+      modeText.textContent = 'LIVE 60FPS';
       flushQueue();
     };
 
     ws.onmessage = function(e) {
       if (!(e.data instanceof ArrayBuffer)) return;
-      // Mark frame received immediately — before decode — so watchdog stays quiet
       lastFrameReceivedTime = Date.now();
-      // Stop HTTP fallback if it was running; WS is working again
-      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE'; }
-      createImageBitmap(new Blob([e.data], { type: 'image/png' }))
-        .then(function(bmp) { queueDraw(bmp); })
-        .catch(function(err) { console.warn('[Stream] PNG decode error:', err); });
+      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE 60FPS'; }
+
+      const u8 = new Uint8Array(e.data);
+      if (u8.length < 4) return;
+
+      // 1. PNG Image Auto-detection (0x89 0x50 0x4E 0x47)
+      if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47) {
+        createImageBitmap(new Blob([e.data], { type: 'image/png' }))
+          .then(function(bmp) { queueDraw(bmp); })
+          .catch(function(err) { console.warn('[Stream] PNG decode error:', err); });
+        return;
+      }
+
+      // 2. JPEG Image Auto-detection (0xFF 0xD8)
+      if (u8[0] === 0xFF && u8[1] === 0xD8) {
+        createImageBitmap(new Blob([e.data], { type: 'image/jpeg' }))
+          .then(function(bmp) { queueDraw(bmp); })
+          .catch(function(err) { console.warn('[Stream] JPEG decode error:', err); });
+        return;
+      }
+
+      // 3. Raw H264 NAL stream via WebCodecs
+      if (!decoderReady || !decoder || decoder.state === 'closed') {
+        if (!initDecoder()) {
+          startFallback();
+          return;
+        }
+      }
+
+      const key = isH264Keyframe(u8);
+      if (key) hasKeyframe = true;
+      if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
+
+      try {
+        const chunk = new EncodedVideoChunk({
+          type: key ? 'key' : 'delta',
+          timestamp: performance.now() * 1000,
+          data: e.data
+        });
+        decoder.decode(chunk);
+      } catch (err) {
+        console.warn('[Stream] H264 chunk decode error:', err);
+        hasKeyframe = false;
+      }
     };
 
     ws.onerror = function() {};
@@ -308,8 +395,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     ws.onclose = function() {
       wsOk = false;
       wsFailCount++;
-      // Fall back to HTTP polling only after persistent failures (covers
-      // Cloudflare tunnel startup delay of up to ~30s).
       if (wsFailCount >= 15 && !fbRunning) startFallback();
       const delay = wsFailCount < 5 ? 500 : 1000;
       wsRetryTimer = setTimeout(connectWS, delay);
