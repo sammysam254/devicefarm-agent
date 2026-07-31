@@ -437,7 +437,7 @@ class ScrcpyEngine extends EventEmitter {
           }
         }
 
-        this._broadcastVideo(payload, isKeyframe);
+        this._broadcastVideo(payload);
       }
 
       // Safety reset
@@ -521,24 +521,13 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  _broadcastVideo(payload, isKeyframe) {
+  _broadcastVideo(payload) {
     for (const ws of this.wsClients) {
-      if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
-
-      if (isKeyframe) {
-        ws._needsKeyframe = false;
-      } else if (ws._needsKeyframe) {
-        continue;
+      if (ws.readyState === 1) {
+        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+      } else {
+        this.wsClients.delete(ws);
       }
-
-      // Adaptive Internet Speed Guard:
-      // If client connection is slow (send buffer > 128KB), skip non-keyframe P-frames to keep stream real-time & smooth
-      if (!isKeyframe && ws.bufferedAmount > 128 * 1024) {
-        ws._needsKeyframe = true;
-        continue;
-      }
-
-      try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
     }
   }
 
