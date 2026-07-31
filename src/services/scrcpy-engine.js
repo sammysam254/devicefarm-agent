@@ -329,8 +329,9 @@ class ScrcpyEngine extends EventEmitter {
     const META = 12; // 8-byte PTS + 4-byte size
 
     const watchdog = setInterval(() => {
-      if ((!this.videoSocket || this.videoSocket.destroyed || Date.now() - lastDataTime > 15000) && !this._fallbackActive) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] No video data for 15s — starting screenrecord fallback`);
+      // Only trigger fallback if video socket is destroyed or disconnected
+      if ((!this.videoSocket || this.videoSocket.destroyed) && !this._fallbackActive && this.isRunning) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Video socket disconnected — starting screenrecord fallback`);
         this._startScreenrecordFallback();
       }
     }, 2000);
@@ -529,9 +530,9 @@ class ScrcpyEngine extends EventEmitter {
   sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
     
-    // Scale coordinates to scrcpy server's actual video stream size so events are never rejected
-    const targetW = this.videoWidth  || this.screenWidth  || 720;
-    const targetH = this.videoHeight || this.screenHeight || 1600;
+    // Scrcpy 2.4 server expects touch coordinates scaled to the real device physical screen size!
+    const targetW = this.screenWidth  || 720;
+    const targetH = this.screenHeight || 1600;
 
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;

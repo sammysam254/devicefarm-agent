@@ -90,23 +90,34 @@ function handleControl(type, data, serial, engine) {
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
 
+  const realW = engine.screenWidth  || 720;
+  const realH = engine.screenHeight || 1600;
+
   if (type === 'touch') {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
-    if (!engine.sendTouchEvent(action, x, y, W, H)) {
-      if (action === 0) adbInput(serial, `input tap ${Math.round(x)} ${Math.round(y)}`);
+    if (!engine.isReady || !engine.sendTouchEvent(action, x, y, W, H)) {
+      if (action === 0) {
+        const rx = Math.round((x / W) * realW);
+        const ry = Math.round((y / H) * realH);
+        adbInput(serial, `input tap ${rx} ${ry}`);
+      }
     }
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    if (!engine.sendTouchEvent(0, x, y, W, H)) adbInput(serial, `input tap ${Math.round(x)} ${Math.round(y)}`);
+    const rx = Math.round((x / W) * realW);
+    const ry = Math.round((y / H) * realH);
+    if (!engine.isReady || !engine.sendTouchEvent(0, x, y, W, H)) adbInput(serial, `input tap ${rx} ${ry}`);
     else engine.sendTouchEvent(1, x, y, W, H);
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 100;
-    if (!engine.sendTouchEvent(0, x1, y1, W, H)) {
-      adbInput(serial, `input swipe ${Math.round(x1)} ${Math.round(y1)} ${Math.round(x2)} ${Math.round(y2)} ${dur}`);
+    const rx1 = Math.round((x1 / W) * realW), ry1 = Math.round((y1 / H) * realH);
+    const rx2 = Math.round((x2 / W) * realW), ry2 = Math.round((y2 / H) * realH);
+    if (!engine.isReady || !engine.sendTouchEvent(0, x1, y1, W, H)) {
+      adbInput(serial, `input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`);
     } else {
       engine.sendTouchEvent(2, x2, y2, W, H);
       engine.sendTouchEvent(1, x2, y2, W, H);
