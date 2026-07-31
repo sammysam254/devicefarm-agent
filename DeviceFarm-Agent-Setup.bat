@@ -142,13 +142,14 @@ echo.
 echo [4/6] Setting up agent files...
 
 if exist "%INSTALL_DIR%\.git" (
-    echo [*] Agent directory exists — pulling latest updates...
-    "%GIT%" -C "%INSTALL_DIR%" pull --ff-only
+    echo [*] Agent directory exists — fetching latest updates...
+    "%GIT%" -C "%INSTALL_DIR%" fetch origin main
+    "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main
     if %errorlevel% neq 0 (
-        echo [WARN] git pull failed — continuing with existing files.
-    ) else (
-        echo [OK] Agent updated to latest version.
+        echo [WARN] git update failed — attempting git pull...
+        "%GIT%" -C "%INSTALL_DIR%" pull origin main
     )
+    echo [OK] Agent updated to latest version from GitHub.
 ) else (
     echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
     echo [*] Using shallow clone for faster download...
