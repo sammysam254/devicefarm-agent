@@ -59,7 +59,7 @@ class ScrcpyEngine extends EventEmitter {
     this.screenWidth  = 720;
     this.screenHeight = 1600;
 
-    // Connected WS clients receiving H264 stream
+    // Connected WS clients receiving H264 stream & audio
     this.wsClients = new Set();
     this._configPacket = null;
     this._keyframeBuffer = null;
@@ -67,6 +67,8 @@ class ScrcpyEngine extends EventEmitter {
     this.videoHeight = 0;
     this._jarPushed = false;
     this._screencapActive = false;
+    this.enableAudio = true;
+    this.audioSocket = null;
   }
 
   get isReady() {
@@ -151,7 +153,8 @@ class ScrcpyEngine extends EventEmitter {
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
-      'audio=false',
+      'audio=' + (this.enableAudio ? 'true' : 'false'),
+      'audio_codec=opus',
       'control=true',
       'cleanup=true',
       'send_dummy_byte=true',
@@ -281,16 +284,28 @@ class ScrcpyEngine extends EventEmitter {
     await new Promise(r => setTimeout(r, 200));
 
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting video socket...`);
-    // tunnel_forward: 1st connect = video socket, 2nd connect = control socket
+    // tunnel_forward socket 1 = video stream
     this.videoSocket = await this._connectOne(this.videoPort);
     this.videoSocket.setNoDelay(true);
-
-    // Start video relay pipeline immediately so dummy/header bytes are consumed
     this._pipeVideoToClients(this.videoSocket);
 
-    // Small delay before connecting control socket
     await new Promise(r => setTimeout(r, 150));
 
+    // tunnel_forward socket 2 = audio stream (when audio=true)
+    if (this.enableAudio) {
+      try {
+        logger.info(`[ScrcpyEngine ${this.serial}] Connecting audio socket...`);
+        this.audioSocket = await this._connectOne(this.videoPort);
+        this.audioSocket.setNoDelay(true);
+        this._pipeAudioToClients(this.audioSocket);
+        await new Promise(r => setTimeout(r, 150));
+      } catch (err) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Audio socket notice: ${err.message}`);
+      }
+    }
+
+    // tunnel_forward socket 3 = control socket
+    logger.info(`[ScrcpyEngine ${this.serial}] Connecting control socket...`);
     this.controlSocket = await this._connectOne(this.videoPort);
     this.controlSocket.setNoDelay(true);
     this.controlSocket.setKeepAlive(true, 1000);
@@ -422,6 +437,35 @@ class ScrcpyEngine extends EventEmitter {
     });
   }
 
+  _pipeAudioToClients(socket) {
+    let buf = Buffer.alloc(0);
+    const META = 12; // 8-byte PTS + 4-byte size
+    socket.on('data', (chunk) => {
+      buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+      while (buf.length >= META) {
+        const pktSize = buf.readUInt32BE(8);
+        if (buf.length < META + pktSize) break;
+        const payload = buf.subarray(META, META + pktSize);
+        buf = buf.subarray(META + pktSize);
+        this._broadcastAudio(payload);
+      }
+    });
+    socket.on('close', () => { this.audioSocket = null; });
+    socket.on('error', () => { this.audioSocket = null; });
+  }
+
+  _broadcastAudio(payload) {
+    const audioFrame = Buffer.allocUnsafe(1 + payload.length);
+    audioFrame[0] = 0x41; // 'A' prefix for Audio
+    payload.copy(audioFrame, 1);
+
+    for (const ws of this.wsClients) {
+      if (ws.readyState === 1 && ws.bufferedAmount < 64 * 1024) {
+        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
+      }
+    }
+  }
+
   _broadcastVideo(payload, isConfig) {
     const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
     const source = this._fallbackActive ? 'fallback' : 'scrcpy';
@@ -550,8 +594,12 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(Math.floor(pressure * 65535), 22);
     buf.writeInt32BE(action === 0 ? 1 : 0, 24);
     buf.writeInt32BE(action === 1 ? 0 : 1, 28);
-    try { this.controlSocket.write(buf); return true; }
-    catch (e) { logger.error(`[ScrcpyEngine ${this.serial}] touch write: ${e.message}`); return false; }
+    try {
+      this.controlSocket.cork();
+      this.controlSocket.write(buf);
+      this.controlSocket.uncork();
+      return true;
+    } catch (e) { logger.error(`[ScrcpyEngine ${this.serial}] touch write: ${e.message}`); return false; }
   }
 
   /**

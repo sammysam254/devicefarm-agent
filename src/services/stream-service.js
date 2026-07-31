@@ -264,6 +264,17 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
+  // ── WebAudio Sound Playback ────────────────────────────────────────────────
+  let audioCtx = null;
+  function playAudioData(audioBytes) {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function() {});
+    }
+  }
+
   // ── WebCodecs H264 Decoder & Auto-Detection ─────────────────────────────
   let decoder = null;
   let decoderReady = false;
@@ -359,12 +370,20 @@ function buildPlayerHtml(serial, screenW, screenH) {
       lastFrameReceivedTime = Date.now();
       if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE 60FPS'; }
 
-      const u8 = new Uint8Array(e.data);
-      if (u8.length < 4) return;
+      const rawU8 = new Uint8Array(e.data);
+      if (rawU8.length < 4) return;
+
+      // Handle tagged Audio binary frames ('A' = 0x41)
+      if (rawU8[0] === 0x41) {
+        playAudioData(rawU8.subarray(1));
+        return;
+      }
+
+      const u8 = (rawU8[0] === 0x56) ? rawU8.subarray(1) : rawU8;
 
       // 1. PNG Image Auto-detection (0x89 0x50 0x4E 0x47)
       if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47) {
-        createImageBitmap(new Blob([e.data], { type: 'image/png' }))
+        createImageBitmap(new Blob([u8], { type: 'image/png' }))
           .then(function(bmp) { queueDraw(bmp); })
           .catch(function(err) { console.warn('[Stream] PNG decode error:', err); });
         return;
@@ -372,7 +391,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
       // 2. JPEG Image Auto-detection (0xFF 0xD8)
       if (u8[0] === 0xFF && u8[1] === 0xD8) {
-        createImageBitmap(new Blob([e.data], { type: 'image/jpeg' }))
+        createImageBitmap(new Blob([u8], { type: 'image/jpeg' }))
           .then(function(bmp) { queueDraw(bmp); })
           .catch(function(err) { console.warn('[Stream] JPEG decode error:', err); });
         return;
@@ -397,7 +416,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
         const chunk = new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
           timestamp: performance.now() * 1000,
-          data: e.data
+          data: u8
         });
         decoder.decode(chunk);
       } catch (err) {
