@@ -164,6 +164,8 @@ class ScrcpyEngine extends EventEmitter {
       'max_fps=60',
       'i_frame_interval=2',
       'send_frame_meta=true',
+      'show_touches=false',
+      'stay_awake=false',
     ];
 
     logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
