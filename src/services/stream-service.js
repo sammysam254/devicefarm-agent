@@ -264,49 +264,42 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── WebAudio Sound Playback ────────────────────────────────────────────────
+  // ── WebAudio Sound Playback (PCM 16-bit 48kHz Stereo) ──────────────────────
   let audioCtx = null;
-  let audioDecoder = null;
   let audioNextPlayTime = 0;
 
   function initAudio() {
-    if (!audioCtx) {
-      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
-    }
+    if (audioCtx) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    } catch (_) {}
     if (audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume().catch(function() {});
     }
-    if (typeof AudioDecoder !== 'undefined' && !audioDecoder) {
-      try {
-        audioDecoder = new AudioDecoder({
-          output: playAudioFrame,
-          error: function(e) { console.warn('[AudioDecoder] decode error:', e); }
-        });
-        audioDecoder.configure({
-          codec: 'opus',
-          numberOfChannels: 2,
-          sampleRate: 48000
-        });
-      } catch (e) {
-        console.warn('[AudioDecoder] init failed:', e);
-      }
-    }
   }
 
-  ['click', 'mousedown', 'touchstart', 'keydown'].forEach(function(evt) {
+  ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, initAudio, { passive: true });
   });
 
-  function playAudioFrame(audioFrameData) {
-    if (!audioCtx) return;
-    try {
-      const channels = audioFrameData.numberOfChannels || 2;
-      const frames = audioFrameData.numberOfFrames;
-      const sampleRate = audioFrameData.sampleRate || 48000;
-      const buffer = audioCtx.createBuffer(channels, frames, sampleRate);
+  function playAudioData(audioBytes) {
+    initAudio();
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    if (!audioBytes || audioBytes.length < 4) return;
 
-      for (let ch = 0; ch < channels; ch++) {
-        audioFrameData.copyTo(buffer.getChannelData(ch), { planeIndex: ch });
+    try {
+      // Int16 LE PCM Stereo -> Float32 Array for WebAudio
+      const int16 = new Int16Array(audioBytes.buffer, audioBytes.byteOffset, Math.floor(audioBytes.byteLength / 2));
+      const sampleCount = Math.floor(int16.length / 2);
+      if (sampleCount <= 0) return;
+
+      const buffer = audioCtx.createBuffer(2, sampleCount, 48000);
+      const leftCh = buffer.getChannelData(0);
+      const rightCh = buffer.getChannelData(1);
+
+      for (let i = 0; i < sampleCount; i++) {
+        leftCh[i]  = int16[i * 2]     / 32768.0;
+        rightCh[i] = int16[i * 2 + 1] / 32768.0;
       }
 
       const source = audioCtx.createBufferSource();
@@ -317,24 +310,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (audioNextPlayTime < now) audioNextPlayTime = now;
       source.start(audioNextPlayTime);
       audioNextPlayTime += buffer.duration;
-    } catch (_) {}
-    finally {
-      try { audioFrameData.close(); } catch (_) {}
-    }
-  }
-
-  function playAudioData(audioBytes) {
-    initAudio();
-    if (!audioCtx || audioCtx.state !== 'running') return;
-    if (!audioDecoder || audioDecoder.state === 'closed') return;
-
-    try {
-      const chunk = new EncodedAudioChunk({
-        type: 'key',
-        timestamp: performance.now() * 1000,
-        data: audioBytes
-      });
-      audioDecoder.decode(chunk);
     } catch (_) {}
   }
 

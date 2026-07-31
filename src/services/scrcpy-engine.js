@@ -154,7 +154,7 @@ class ScrcpyEngine extends EventEmitter {
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
       'audio=' + (this.enableAudio ? 'true' : 'false'),
-      'audio_codec=opus',
+      'audio_codec=raw',
       'control=true',
       'cleanup=true',
       'send_dummy_byte=true',
@@ -609,16 +609,16 @@ class ScrcpyEngine extends EventEmitter {
     const scaledY = Math.round((y / srcH) * targetH);
 
     const buf = Buffer.allocUnsafe(32);
-    buf.writeUInt8(2, 0);
-    buf.writeUInt8(action, 1);
-    buf.writeBigInt64BE(0n, 2); // 0n = Touch pointer #0 (finger 0) - valid Android MotionEvent pointer ID
+    buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
+    buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
+    buf.writeBigInt64BE(0n, 2);           // pointerId 0n (finger 0)
     buf.writeInt32BE(Math.max(0, Math.min(targetW, scaledX)), 10);
     buf.writeInt32BE(Math.max(0, Math.min(targetH, scaledY)), 14);
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
-    buf.writeUInt16BE(Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(action === 0 ? 1 : 0, 24);
-    buf.writeInt32BE(action === 1 ? 0 : 1, 28);
+    buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
+    buf.writeInt32BE(0, 24);              // action_button = 0 (clean touch event — prevents mouse button state conflict & screen shaking)
+    buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
     try {
       this.controlSocket.cork();
       this.controlSocket.write(buf);
