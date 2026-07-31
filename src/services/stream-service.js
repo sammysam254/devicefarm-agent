@@ -434,12 +434,22 @@ function buildPlayerHtml(serial, screenW, screenH) {
     window.addEventListener(evt, initAudio, { passive: true });
   });
 
-  // ── WebCodecs H264 Decoder & Auto-Detection ─────────────────────────────
+  // ── WebCodecs H264 Decoder ───────────────────────────────────────────────
   let decoder = null;
   let decoderReady = false;
   let hasKeyframe = false;
 
+  function resetDecoder() {
+    hasKeyframe = false;
+    if (decoder) {
+      try { decoder.close(); } catch (_) {}
+      decoder = null;
+    }
+    decoderReady = false;
+  }
+
   function initDecoder() {
+    resetDecoder();
     if (typeof VideoDecoder === 'undefined') {
       console.warn('[Stream] WebCodecs VideoDecoder not available in this browser');
       return false;
@@ -459,11 +469,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
-          decoderReady = false;
-          hasKeyframe = false;
+          resetDecoder();
         }
       });
-
       decoder.configure({
         codec: 'avc1.42E01E',
         optimizeForLatency: true,
@@ -500,15 +508,27 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let lastFrameReceivedTime = 0;
 
   // Fallback watchdog: only fires if WS is connected but no frames arrive for >15s.
-  // 15s gives scrcpy and screenrecord time to start up before we fall back to HTTP.
+  // 15s gives scrcpy time to start up before we fall back to HTTP screencap.
   setInterval(function() {
     if (!wsOk) return;
-    if (lastFrameReceivedTime === 0) return; // no frame ever received yet
+    if (lastFrameReceivedTime === 0) return;
     if (Date.now() - lastFrameReceivedTime > 15000 && !fbRunning) {
       console.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
       startFallback();
     }
   }, 1000);
+
+  // Separate first-frame watchdog — if WS is open but no frame ever arrives in 12s, fallback
+  let firstFrameTimer = null;
+  function startFirstFrameWatchdog() {
+    if (firstFrameTimer) clearTimeout(firstFrameTimer);
+    firstFrameTimer = setTimeout(function() {
+      if (wsOk && lastFrameReceivedTime === 0 && !fbRunning) {
+        console.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
+        startFallback();
+      }
+    }, 12000);
+  }
 
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
@@ -521,12 +541,28 @@ function buildPlayerHtml(serial, screenW, screenH) {
       wsFailCount = 0;
       lastFrameReceivedTime = 0;
       modeText.textContent = 'LIVE 60FPS';
-      // Resume AudioContext now that the WS is open (counts as async user-initiated context)
+      resetDecoder();
+      fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
     };
 
     ws.onmessage = function(e) {
+      // JSON control messages (stream_reset, etc.)
+      if (typeof e.data === 'string' || e.data instanceof ArrayBuffer && e.data.byteLength > 0 && new Uint8Array(e.data)[0] === 0x7B) {
+        try {
+          const txt = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
+          const msg = JSON.parse(txt);
+          if (msg.type === 'stream_reset') {
+            console.log('[Stream] Server stream reset — reinitialising decoder');
+            resetDecoder();
+            fbRunning = false;
+            lastFrameReceivedTime = 0;
+          }
+          return;
+        } catch (_) {}
+      }
+
       if (!(e.data instanceof ArrayBuffer)) return;
       lastFrameReceivedTime = Date.now();
       if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE 60FPS'; }
@@ -869,7 +905,6 @@ async function startStreamServer(serial, port) {
         handleControl(data.type, data, serial, engine);
       } catch (_) {}
     });
-
     ws.on('close', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
     ws.on('error', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
   });

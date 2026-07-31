@@ -688,9 +688,30 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
+  // ── Reset stream state on restart ────────────────────────────────────────
+  _resetStreamState() {
+    this._configPacket   = null;
+    this._keyframeBuffer = null;
+    // Notify all connected browsers to reset their decoders
+    const resetMsg = Buffer.from(JSON.stringify({ type: 'stream_reset' }));
+    for (const ws of this.wsClients) {
+      if (ws.readyState === 1) {
+        try { ws.send(resetMsg); } catch (_) {}
+      }
+    }
+  }
+
   async _restart() {
     if (!this.isRunning) return;
     logger.info(`[ScrcpyEngine ${this.serial}] Restarting...`);
+    // Clear stale keyframe cache so fresh SPS/PPS+IDR are sent after restart
+    this._configPacket   = null;
+    this._keyframeBuffer = null;
+    // Tell connected browsers to reset their decoders before new stream data arrives
+    const resetMsg = Buffer.from(JSON.stringify({ type: 'stream_reset' }));
+    for (const ws of this.wsClients) {
+      if (ws.readyState === 1) try { ws.send(resetMsg); } catch (_) {}
+    }
     try {
       try { await this._adb(['forward', '--remove', `tcp:${this.videoPort}`]); } catch (_) {}
       await this._adb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
