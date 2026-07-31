@@ -369,9 +369,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function playOpusPacket(bytes) {
-    initAudio();
-    if (!audioCtx || isMuted) return;
-    if (audioCtx.state === 'suspended') { audioCtx.resume().catch(function(){}); return; }
+    if (isMuted) return;
+    if (!audioCtx) initAudio();
+    if (!audioCtx || audioCtx.state !== 'running') return;
     if (!audioDecoderReady) {
       if (!initOpusDecoder()) return;
     }
@@ -460,7 +460,18 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          queueDraw(frame);
+          if (decoder && decoder.decodeQueueSize > 0) {
+            frame.close();
+            return;
+          }
+          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
+          const h = frame.displayHeight || frame.codedHeight || frame.height;
+          if (w && h && (canvas.width !== w || canvas.height !== h)) {
+            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+          }
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          frame.close();
+          countFrame();
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
@@ -609,12 +620,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (key) hasKeyframe = true;
       if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
 
-      // If decode queue is backed up (> 8 frames), reset decoder to drop stale frames and keep real-time sync
-      if (decoder.decodeQueueSize > 8) {
-        console.warn('[Stream] VideoDecoder queue backed up — resetting for real-time sync');
-        resetDecoder();
-        return;
-      }
+      // If decode queue is severely backed up (> 30 frames), drop non-keyframe chunk to catch up
+      if (!key && decoder.decodeQueueSize > 30) return;
 
       try {
         const chunk = new EncodedVideoChunk({
