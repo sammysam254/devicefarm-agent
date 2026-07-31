@@ -543,7 +543,7 @@ class ScrcpyEngine extends EventEmitter {
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);
     buf.writeUInt8(action, 1);
-    buf.writeBigInt64BE(-1n, 2);
+    buf.writeBigInt64BE(0n, 2); // 0n = Touch pointer #0 (finger 0) - valid Android MotionEvent pointer ID
     buf.writeInt32BE(Math.max(0, Math.min(targetW, scaledX)), 10);
     buf.writeInt32BE(Math.max(0, Math.min(targetH, scaledY)), 14);
     buf.writeUInt16BE(targetW, 18);
