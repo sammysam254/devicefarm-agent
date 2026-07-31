@@ -240,9 +240,65 @@ echo [*] Generating Machine Binding Code...
 "%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
 "%NODE%" "src\services\verify-payment.js"
 
+:: ════════════════════════════════════════════════════════════════════════════
+:: STEP 6 — Payment verification + Launch
+:: ════════════════════════════════════════════════════════════════════════════
 echo.
 echo  ================================================================
-echo   STEP 2: LAUNCHING DEVICEFARM AGENT
+echo   STEP 1: PAYMENT SYSTEM VERIFICATION  ($30 / month)
+echo  ================================================================
+echo.
+echo [*] Generating Machine Binding Code...
+"%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
+"%NODE%" "src\services\verify-payment.js"
+
+echo.
+echo  ================================================================
+echo   STEP 2: RESETTING ADB SERVER
+echo  ================================================================
+echo.
+
+:: ── Reset ADB so the phone gets a fresh authorization prompt ───────────────
+echo [*] Resetting ADB server to force fresh USB authorization prompt...
+set "ADB_BIN=%INSTALL_DIR%\assets\bin\adb.exe"
+if not exist "%ADB_BIN%" set "ADB_BIN=adb"
+
+:: Kill existing ADB server
+"%ADB_BIN%" kill-server >nul 2>&1
+ping 127.0.0.1 -n 2 >nul
+
+:: Clear stale ADB keys so the phone is forced to show the Allow prompt
+if exist "%USERPROFILE%\.android\adbkey" (
+    echo [*] Removing stale ADB keys...
+    del /F /Q "%USERPROFILE%\.android\adbkey" >nul 2>&1
+    del /F /Q "%USERPROFILE%\.android\adbkey.pub" >nul 2>&1
+    echo [OK] Stale ADB keys removed.
+)
+
+:: Start fresh ADB server
+echo [*] Starting fresh ADB server...
+"%ADB_BIN%" start-server >nul 2>&1
+ping 127.0.0.1 -n 3 >nul
+
+:: Show current device list so user knows what to do
+echo [*] Current ADB device status:
+"%ADB_BIN%" devices -l
+echo.
+echo  ---------------------------------------------------------------
+echo   ACTION REQUIRED: Unlock your phone now.
+echo   A popup will appear asking "Allow USB Debugging?" — tap ALLOW.
+echo   Check "Always allow from this computer" to avoid this next time.
+echo  ---------------------------------------------------------------
+echo.
+echo [*] Waiting 20 seconds for you to accept on the phone...
+ping 127.0.0.1 -n 21 >nul
+echo [*] Checking device status after wait...
+"%ADB_BIN%" devices -l
+echo.
+
+echo.
+echo  ================================================================
+echo   STEP 3: LAUNCHING DEVICEFARM AGENT
 echo  ================================================================
 echo.
 
