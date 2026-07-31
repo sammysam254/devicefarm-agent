@@ -340,11 +340,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.connect(gainNode);
 
             const now = audioCtx.currentTime;
-            // If behind real-time, snap forward immediately (no gap)
             if (audioNextPlayTime < now) audioNextPlayTime = now;
-            // If more than 120ms ahead, snap back to now (prevent runaway drift)
-            if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
-
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -460,10 +456,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          if (decoder && decoder.decodeQueueSize > 0) {
-            frame.close();
-            return;
-          }
           const w = frame.displayWidth  || frame.codedWidth  || frame.width;
           const h = frame.displayHeight || frame.codedHeight || frame.height;
           if (w && h && (canvas.width !== w || canvas.height !== h)) {
@@ -620,8 +612,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (key) hasKeyframe = true;
       if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
 
-      // If decode queue is severely backed up (> 30 frames), drop non-keyframe chunk to catch up
-      if (!key && decoder.decodeQueueSize > 30) return;
+
 
       try {
         const chunk = new EncodedVideoChunk({

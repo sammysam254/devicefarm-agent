@@ -520,29 +520,12 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload, isKeyframe) {
-    const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
-    const source = this._fallbackActive ? 'fallback' : 'scrcpy';
-    
-    if (isKeyframe || nalType === 5) {
-      logger.info(`[ScrcpyEngine ${this.serial}] Broadcasting keyframe from ${source} (${payload.length} bytes)`);
-    }
-
     for (const ws of this.wsClients) {
-      if (ws.readyState !== 1) { this.wsClients.delete(ws); continue; }
-
-      if (isKeyframe) {
-        ws._needsKeyframe = false;
-      } else if (ws._needsKeyframe) {
-        continue;
+      if (ws.readyState === 1) {
+        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+      } else {
+        this.wsClients.delete(ws);
       }
-
-      // Drop non-keyframe P-frames if client WS send buffer > 64KB
-      if (!isKeyframe && ws.bufferedAmount > 64 * 1024) {
-        ws._needsKeyframe = true;
-        continue;
-      }
-
-      try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
     }
   }
 
