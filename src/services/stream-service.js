@@ -7,6 +7,8 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
 const ScrcpyEngine = require('./scrcpy-engine');
+const bindingService = require('./binding-service');
+const licenseService = require('./license-service');
 
 // ─── Config & ADB ────────────────────────────────────────────────────────────
 
@@ -645,6 +647,32 @@ async function startStreamServer(serial, port) {
     res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
+    const bindingCode = bindingService.getOrGenerateBindingCode();
+    const licenseInfo = await licenseService.checkLicenseStatus(bindingCode);
+
+    if (!licenseInfo.isActive) {
+      res.writeHead(403, { 'Content-Type': 'text/html' });
+      res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Machine License Suspended</title></head>
+        <body style="background:#090d16; color:#f8fafc; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center;">
+          <div style="max-width:440px; padding:32px; background:#0f172a; border:1px solid rgba(239,68,68,0.3); border-radius:16px;">
+            <div style="font-size:48px; margin-bottom:16px;">🔒</div>
+            <h2 style="color:#ef4444; margin-bottom:8px;">Machine License Suspended</h2>
+            <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
+              Access to this machine stream has been revoked by the Seed Owner.
+            </p>
+            <div style="margin-top:16px; font-family:monospace; background:rgba(255,255,255,0.05); padding:10px; border-radius:8px; font-size:13px;">
+              Binding Code: <strong>${bindingCode}</strong>
+            </div>
+          </div>
+        </body>
+        </html>
+      `);
+      return;
+    }
+
     const url = new URL(req.url, `http://localhost:${port}`);
     const p   = url.pathname;
 
@@ -685,9 +713,26 @@ async function startStreamServer(serial, port) {
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
   const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', async (ws) => {
+    const bindingCode = bindingService.getOrGenerateBindingCode();
+    const lic = await licenseService.checkLicenseStatus(bindingCode);
+
+    if (!lic.isActive) {
+      ws.close(4003, 'License Revoked');
+      return;
+    }
+
     logger.info(`[StreamServer] WS connected for ${serial}`);
     engine.addClient(ws);
+
+    const licCheckTimer = setInterval(async () => {
+      const currentLic = await licenseService.checkLicenseStatus(bindingCode);
+      if (!currentLic.isActive) {
+        engine.removeClient(ws);
+        ws.close(4003, 'License Revoked');
+        clearInterval(licCheckTimer);
+      }
+    }, 5000);
 
     ws.on('message', (msg) => {
       try {
@@ -696,8 +741,8 @@ async function startStreamServer(serial, port) {
       } catch (_) {}
     });
 
-    ws.on('close', () => engine.removeClient(ws));
-    ws.on('error', () => engine.removeClient(ws));
+    ws.on('close', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
+    ws.on('error', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
   });
 
   return new Promise((resolve, reject) => {

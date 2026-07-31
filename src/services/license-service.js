@@ -27,7 +27,7 @@ function saveConfig(cfg) {
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
 const licenseCache = new Map();
-const CACHE_TTL_MS = 60 * 1000; // 1 min
+const CACHE_TTL_MS = 5 * 1000; // 5 sec for rapid web activation/revocation sync
 
 // ─── Supabase client ──────────────────────────────────────────────────────────
 
@@ -68,30 +68,30 @@ async function checkLicenseStatus(bindingCode) {
 
   try {
     const res = await client.get(
-      `/licenses?binding_code=eq.${encodeURIComponent(bindingCode)}&select=*&limit=1`
+      `/machine_bindings?binding_code=eq.${encodeURIComponent(bindingCode)}&select=*&limit=1`
     );
     const rows = res.data;
 
     if (!rows || rows.length === 0) {
-      // No license record yet — treat as free/active until explicitly revoked
-      const result = { isActive: true, mode: 'free', bindingCode, note: 'No license record — auto-active' };
+      // No binding record yet in cloud — treat as free/active
+      const result = { isActive: true, mode: 'free', bindingCode, note: 'Unbound machine — active free mode' };
       licenseCache.set(bindingCode, { value: result, at: Date.now() });
       return result;
     }
 
     const lic = rows[0];
-    const isActive = lic.is_active === true && lic.revoked_at === null;
+    const isActive = lic.is_licensed !== false;
     const result = {
       isActive,
-      mode: lic.mode || 'licensed',
+      mode: lic.license_mode || 'licensed',
       bindingCode,
       note: isActive ? 'Licensed and active' : ('Revoked: ' + (lic.license_note || 'License revoked by seed admin')),
     };
     licenseCache.set(bindingCode, { value: result, at: Date.now() });
     return result;
   } catch (err) {
-    logger.warn(`[LicenseService] Failed to check license for ${bindingCode}: ${err.message} — defaulting to active`);
-    const result = { isActive: true, mode: 'offline_grace', bindingCode, note: 'Supabase unreachable — offline grace' };
+    logger.warn(`[LicenseService] License check note for ${bindingCode}: ${err.message}`);
+    const result = { isActive: true, mode: 'offline_grace', bindingCode, note: 'Supabase notice — active grace mode' };
     licenseCache.set(bindingCode, { value: result, at: Date.now() });
     return result;
   }

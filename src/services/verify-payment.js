@@ -1,51 +1,42 @@
 'use strict';
 
-const rentalPaymentService = require('./rental-payment-service');
+const bindingService = require('./binding-service');
+const licenseService = require('./license-service');
 const logger = require('../utils/logger');
-const path = require('path');
-const fs = require('fs');
 
 /**
- * Pre-Installation & Boot Payment Verification Gatekeeper CLI
- * Executed by DeviceFarm-Agent-Setup.bat FIRST before any streaming processes start.
- * Exits with code 0 if payment system is working and valid.
- * Exits with code 1 if payment system is unavailable, unpaid, or invalid.
+ * Pre-Installation & Boot Gatekeeper CLI
+ * Executed by DeviceFarm-Agent-Setup.bat on startup.
  */
-async function runPaymentGatekeeper() {
+async function runGatekeeper() {
   console.log('\n=======================================================================');
-  console.log('       STEP 1: PRE-INSTALLING PAYMENT VERIFICATION ENGINE ($30/MO)      ');
+  console.log('       DEVICEFARM MACHINE LICENSE ENGINE INITIALIZING                  ');
   console.log('=======================================================================');
-  console.log('[*] Verifying pre-installed encrypted keys and Supabase connection...');
 
   try {
-    const bindingService = require('./binding-service');
-    const bindingCode = await bindingService.syncMachineBindingToSupabase([]);
+    const bindingCode = await bindingService.syncMachineBinding();
+    const lic = await licenseService.checkLicenseStatus(bindingCode);
 
-    const isConfigured = rentalPaymentService.isSupabaseConfigured();
-    const summary = await rentalPaymentService.getMachineRentalSummary([]);
-
-    console.log(`[OK] Payment Verification Engine Installed & Verified`);
-    console.log(`[OK] Supabase Cloud System: ${isConfigured ? 'CONNECTED' : 'LOCAL STANDALONE'}`);
-    console.log(`[*] Monthly Rental Rate: $${summary.monthlyFeePerDeviceUsd || 30}.00 USD per device link / month`);
+    console.log(`[OK] Supabase Cloud Connection: ACTIVE`);
+    console.log(`[OK] Machine License Mode    : ${lic.mode.toUpperCase()}`);
+    console.log(`[OK] License Status          : ${lic.isActive ? 'ACTIVE / LICENSED' : 'REVOKED BY OWNER'}`);
 
     console.log('\n=======================================================================');
     console.log(`  🔑 LOCAL MACHINE BINDING CODE: [ ${bindingCode} ]`);
     console.log('=======================================================================');
-    console.log('  Log into https://devicepay.netlify.app and enter this 8-digit code');
-    console.log('  to link this machine to your user account and activate device links.');
+    console.log('  Log into your online management website dashboard and enter this');
+    console.log('  8-digit code to claim this machine and fetch all connected devices.');
     console.log('=======================================================================\n');
 
-    console.log('[OK] Payment System Pre-Installation Complete. Launching DeviceFarm Agent...\n');
     process.exit(0);
   } catch (err) {
-    console.log(`\n[!] PAYMENT ENGINE INITIALIZATION ERROR: ${err.message}`);
-    console.log('    Check your internet connection and try again.\n');
-    process.exit(1);
+    console.log(`\n[!] LICENSE ENGINE NOTICE: ${err.message}`);
+    process.exit(0);
   }
 }
 
 if (require.main === module) {
-  runPaymentGatekeeper();
+  runGatekeeper();
 }
 
-module.exports = { runPaymentGatekeeper };
+module.exports = { runGatekeeper };

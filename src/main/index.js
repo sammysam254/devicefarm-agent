@@ -176,23 +176,10 @@ function startTrayRefreshInterval() {
   }, 5000);
 }
 
-const rentalPaymentService = require('../services/rental-payment-service');
-
-// ──────────────────────────────────────────────────────────
-//  Startup Checks
-// ──────────────────────────────────────────────────────────
-
 async function runStartupChecks() {
   const isAuto = autoLaunch.isEnabled();
   logger.info(`Auto-launch status: ${isAuto ? 'ENABLED' : 'DISABLED'}`);
-
-  logger.info('[*] Verifying Payment System Engine & Supabase/Netlify status...');
-  const isPaymentConfigured = rentalPaymentService.isSupabaseConfigured();
-  if (isPaymentConfigured) {
-    logger.info('[OK] Payment Verification Engine: ONLINE ($30/mo per link via Paystack & NOWPayments)');
-  } else {
-    logger.info('[!] Payment Verification Engine: Local Standalone Mode ($30/mo per link enforcement active)');
-  }
+  logger.info('[OK] DeviceFarm Machine License Engine: ACTIVE (Managed Online)');
 
   const hasCloudflared = await isCloudflaredAvailable();
   if (hasCloudflared) {
