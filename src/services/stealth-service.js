@@ -1,11 +1,12 @@
 'use strict';
 
 /**
- * Device anti-detection & bootloader hiding service.
- * ─────────────────────────────────────────────────
+ * Device anti-detection, physical simulation & bootloader hiding service.
+ * ──────────────────────────────────────────────────────────────────────────
  * Configures connected Android devices so survey & earning apps
  * (e.g. Swagbucks, Freecash, AttaPoll, InboxDollars, Qmee) do not flag or block
- * the device due to unlocked bootloaders, developer options, root, or debugging overlays.
+ * the device due to remote control, unlocked bootloaders, developer options,
+ * USB tethering indicators, or location/accessibility detection.
  */
 
 const { exec } = require('child_process');
@@ -52,13 +53,13 @@ function execAdbShell(serial, cmd, timeoutMs = 5000) {
 }
 
 /**
- * Applies bootloader hiding & stealth anti-detection config to an Android device.
+ * Applies comprehensive anti-detection & physical device simulation to an Android device.
  * @param {string} serial - Device ADB serial number
  */
 async function applyDeviceStealth(serial) {
-  logger.info(`[StealthService] Applying bootloader hiding & anti-detection stealth config for device: ${serial}...`);
+  logger.info(`[StealthService] Applying bootloader hiding, remote-control masking & physical simulation for device: ${serial}...`);
 
-  // 1. Hide Developer Settings & Debugging flags from Android Settings API checks
+  // 1. Hide Developer Settings, ADB & Debugging flags from Settings API
   const settingsCmds = [
     'settings put global development_settings_enabled 0',
     'settings put global adb_enabled 0',
@@ -70,11 +71,33 @@ async function applyDeviceStealth(serial) {
     'settings put system stay_awake 0',
   ];
 
-  for (const cmd of settingsCmds) {
+  // 2. Hide Remote Control & Accessibility Service flags
+  // Apps check accessibility_enabled and active service lists to detect remote tools
+  const remoteControlCmds = [
+    'settings put secure accessibility_enabled 0',
+    'settings put secure enabled_accessibility_services ""',
+    'settings put global remote_control_enabled 0',
+    'settings put secure remote_control_enabled 0',
+  ];
+
+  // 3. Enforce Real Physical Location (Hardware GPS + Wi-Fi, No Mock Location)
+  const locationCmds = [
+    'settings put secure location_mode 3',
+    'settings put secure location_providers_allowed +gps,network',
+  ];
+
+  // 4. Simulate Real Physical Battery (Discharging/AC handheld status instead of USB device farm PC connection)
+  const batteryCmds = [
+    'dumpsys battery set usb 0',
+    'dumpsys battery set status 3', // BATTERY_STATUS_DISCHARGING (mimics handheld battery use)
+  ];
+
+  const allCmds = [...settingsCmds, ...remoteControlCmds, ...locationCmds, ...batteryCmds];
+  for (const cmd of allCmds) {
     await execAdbShell(serial, cmd);
   }
 
-  // 2. Hide Unlocked Bootloader & Root Build Indicators
+  // 5. Hide Unlocked Bootloader & Root Build Indicators
   const propConfigs = [
     { key: 'ro.boot.flash.locked', value: '1' },
     { key: 'ro.boot.verifiedbootstate', value: 'green' },
@@ -94,15 +117,13 @@ async function applyDeviceStealth(serial) {
 
   const suRes = await execAdbShell(serial, `su -c "${resetpropCmds}"`);
   if (!suRes.success) {
-    // Try resetprop directly without su wrapper
     const directReset = await execAdbShell(serial, resetpropCmds);
     if (!directReset.success) {
-      // Fallback to standard setprop
       await execAdbShell(serial, setpropCmds);
     }
   }
 
-  logger.info(`[StealthService] ✅ Bootloader hiding & stealth configuration active on device ${serial}`);
+  logger.info(`[StealthService] ✅ Bootloader, remote-control masking & physical simulation active on device ${serial}`);
   return true;
 }
 
