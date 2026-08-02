@@ -11,6 +11,7 @@ const processManager = require('../main/process-manager');
 const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
 const enrollmentGuard = require('./enrollment-guard');
+const stealthService = require('./stealth-service');
 const path = require('path');
 const fs = require('fs');
 
@@ -58,6 +59,13 @@ async function handleDeviceAdd(device) {
   }
 
   logger.info(`Device connected: ${serial} (type: ${device.type})`);
+
+  // Apply bootloader hiding & anti-detection stealth config before running apps
+  try {
+    await stealthService.applyDeviceStealth(serial);
+  } catch (stealthErr) {
+    logger.warn(`Stealth setup notice for ${serial}: ${stealthErr.message}`);
+  }
 
   try {
     // 1. Read device properties
