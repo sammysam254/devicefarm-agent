@@ -132,6 +132,8 @@ function handleControl(type, data, serial, engine) {
     if (!engine.sendText(text)) adbInput(serial, `input text "${text.replace(/"/g, '\\"')}"`);
   } else if (type === 'reboot') {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
+  } else if (type === 'expand_notifications' || type === 'notifications') {
+    exec(`"${ADB_BIN}" -s ${serial} shell cmd statusbar expand`);
   }
 }
 
@@ -163,7 +165,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .btn-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.3)}
     .btn-red:hover{background:rgba(248,113,113,.3)}
     .hr{height:1px;background:rgba(255,255,255,.1);margin:2px 0}
-    .back{position:absolute;bottom:10px;right:10px;width:40px;height:40px;border-radius:50%;background:#ef4444;color:#fff;border:2px solid rgba(255,255,255,.35);box-shadow:0 4px 12px rgba(239,68,68,.5);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;z-index:9}
     .ripple{position:absolute;width:24px;height:24px;border-radius:50%;background:rgba(56,189,248,.5);border:2px solid #38bdf8;transform:translate(-50%,-50%) scale(.3);pointer-events:none;animation:rip .22s forwards;z-index:10}
     @keyframes rip{to{transform:translate(-50%,-50%) scale(1.8);opacity:0}}
     .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);z-index:20;align-items:center;justify-content:center}
@@ -178,24 +179,25 @@ function buildPlayerHtml(serial, screenW, screenH) {
       background:rgba(8,12,24,.97);
       border-top:1px solid rgba(56,189,248,.2);
       backdrop-filter:blur(16px);
-      -webkit-backdrop-filter:blur(16px);
-      padding:6px 10px;
-      padding-bottom:max(6px, env(safe-area-inset-bottom, 6px));
-      z-index:50;
-      align-items:center;
       justify-content:space-around;
-      gap:4px;
+      align-items:center;
+      padding:6px 12px;
+      z-index:99;
+      height:64px;
     }
     .mnav-btn{
-      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:3px;
       background:rgba(255,255,255,.05);
       border:1px solid rgba(255,255,255,.1);
       border-radius:12px;
-      padding:7px 6px;
-      color:#94a3b8;
-      font-size:20px;
+      color:#f8fafc;
+      font-size:16px;
       cursor:pointer;
-      transition:all .15s ease;
+      padding:4px 8px;
       flex:1;
       max-width:68px;
       min-width:44px;
@@ -226,7 +228,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     /* ── Responsive: mobile ≤ 640px ─────────────────────────────────────── */
     @media (max-width: 640px) {
       .sidebar    { display: none !important; }
-      .back       { display: none !important; }
       .mobile-nav { display: flex; }
       body        { padding: 3px 6px; overflow: hidden; }
       .stage      { padding-bottom: 80px; flex-direction: column; justify-content: flex-start; }
@@ -255,25 +256,25 @@ function buildPlayerHtml(serial, screenW, screenH) {
 <div class="stage">
   <div class="wrap" id="wrap">
     <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
-    <button class="back" onclick="key(4)">&#x21A9;</button>
   </div>
   <div class="sidebar">
-    <button class="btn" onclick="key(82)">&#8942;</button>
-    <button class="btn btn-red" onclick="key(26)">&#9211;</button>
+    <button class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
+    <button class="btn btn-red" onclick="key(26)" title="Power (Key 26)">&#9211;</button>
+    <button class="btn btn-red" onclick="key(4)" title="Back (Key 4)">&#x21A9;</button>
     <div class="hr"></div>
     <button class="btn" id="muteBtn" onclick="toggleMute()" title="Toggle audio">&#128266;</button>
-    <button class="btn" onclick="key(24)">&#128265;</button>
-    <button class="btn" onclick="key(25)">&#128264;</button>
-    <button class="btn" onclick="key(164)">&#128277;</button>
+    <button class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
+    <button class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
+    <button class="btn" onclick="key(164)" title="Mute Volume">&#128277;</button>
     <div class="hr"></div>
-    <button class="btn" onclick="key(3)">&#9711;</button>
-    <button class="btn" onclick="key(187)">&#9723;</button>
+    <button class="btn" onclick="key(3)" title="Home">&#9711;</button>
+    <button class="btn" onclick="key(187)" title="Recent Apps">&#9723;</button>
     <div class="hr"></div>
-    <button class="btn" onclick="screenshot()">&#128247;</button>
-    <button class="btn" onclick="openText()">&#9000;</button>
-    <button class="btn" onclick="openUpload()">&#128228;</button>
+    <button class="btn" onclick="screenshot()" title="Screenshot">&#128247;</button>
+    <button class="btn" onclick="openText()" title="Send Text">&#9000;</button>
+    <button class="btn" onclick="openUpload()" title="Upload File">&#128228;</button>
     <div class="hr"></div>
-    <button class="btn btn-red" onclick="reboot()">&#128260;</button>
+    <button class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
   </div>
 </div>
 
@@ -854,6 +855,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   });
 
   function key(code) { send({ type:'code', code }); }
+  function expandNotifications() { send({ type:'expand_notifications' }); }
 
   function screenshot() {
     const q = location.search ? location.search + '&t=' + Date.now() : '?t=' + Date.now();
