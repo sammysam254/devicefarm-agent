@@ -69,6 +69,7 @@ async function applyDeviceStealth(serial) {
     'settings put system pointer_location 0',
     'settings put global stay_awake 0',
     'settings put system stay_awake 0',
+    'settings put global install_non_market_apps 0',
   ];
 
   // 2. Hide Remote Control & Accessibility Service flags
@@ -80,13 +81,15 @@ async function applyDeviceStealth(serial) {
     'settings put secure remote_control_enabled 0',
   ];
 
-  // 3. Enforce Real Physical Location (Hardware GPS + Wi-Fi, No Mock Location)
+  // 3. Enforce Real Physical Location & Network Time Consistency
   const locationCmds = [
     'settings put secure location_mode 3',
     'settings put secure location_providers_allowed +gps,network',
+    'settings put global auto_time 1',
+    'settings put global auto_time_zone 1',
   ];
 
-  // 4. Simulate Real Physical Battery (Discharging/AC handheld status instead of USB device farm PC connection)
+  // 4. Simulate Real Physical Battery (Discharging handheld status instead of USB device farm PC connection)
   const batteryCmds = [
     'dumpsys battery set usb 0',
     'dumpsys battery set status 3', // BATTERY_STATUS_DISCHARGING (mimics handheld battery use)
@@ -97,7 +100,7 @@ async function applyDeviceStealth(serial) {
     await execAdbShell(serial, cmd);
   }
 
-  // 5. Hide Unlocked Bootloader & Root Build Indicators
+  // 5. Hide Unlocked Bootloader, Root & Emulator Build Indicators
   const propConfigs = [
     { key: 'ro.boot.flash.locked', value: '1' },
     { key: 'ro.boot.verifiedbootstate', value: 'green' },
@@ -109,6 +112,7 @@ async function applyDeviceStealth(serial) {
     { key: 'ro.boot.bootloader', value: 'locked' },
     { key: 'vendor.boot.verifiedbootstate', value: 'green' },
     { key: 'sys.oem_unlock_allowed', value: '0' },
+    { key: 'ro.kernel.qemu', value: '0' },
   ];
 
   // Try resetprop via su first (for Magisk / KernelSU / APatch rooted devices)
