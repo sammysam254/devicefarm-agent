@@ -225,14 +225,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
     /* ── Responsive: mobile ≤ 640px ─────────────────────────────────────── */
     @media (max-width: 640px) {
-      .sidebar  { display: none !important; }
-      .back     { display: none !important; }
+      .sidebar    { display: none !important; }
+      .back       { display: none !important; }
       .mobile-nav { display: flex; }
-      body      { padding: 4px 8px; }
-      .stage    { padding-bottom: 78px; }
-      canvas    { max-height: calc(100dvh - 110px); max-width: 100%; width: auto; height: auto; }
-      .wrap     { border-radius: 10px; border-width: 1px; max-width: 100%; }
-      .header   { max-width: 100%; }
+      body        { padding: 3px 6px; overflow: hidden; }
+      .stage      { padding-bottom: 80px; flex-direction: column; justify-content: flex-start; }
+      /* canvas: never set height:auto on canvas — it collapses to 0. Use max-height only. */
+      canvas      { max-height: calc(100svh - 130px); max-width: 100%; width: auto; object-fit: contain; }
+      .wrap       { border-radius: 10px; border-width: 1px; max-width: 100%; display: flex; align-items: center; justify-content: center; }
+      .header     { max-width: 100%; }
     }
   </style>
 </head>
