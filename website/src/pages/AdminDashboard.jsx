@@ -3,6 +3,7 @@ import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Users, Smartphone, Key, Lock, CheckCircle, RefreshCw, UserX, UserCheck } from 'lucide-react';
+import CctvWall from '../components/CctvWall';
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
@@ -122,6 +123,9 @@ export default function AdminDashboard() {
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
+
+      {/* Real-time Security CCTV Camera Wall */}
+      <CctvWall currentUser={profile} isSuperAdmin={false} />
 
       {/* Assign Device Form */}
       <div className="card" style={{ marginBottom: '28px' }}>

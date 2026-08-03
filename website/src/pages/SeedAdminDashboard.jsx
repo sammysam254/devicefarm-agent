@@ -3,6 +3,7 @@ import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck } from 'lucide-react';
+import CctvWall from '../components/CctvWall';
 
 export default function SeedAdminDashboard() {
   const { profile: myProfile } = useAuth();
@@ -127,6 +128,7 @@ export default function SeedAdminDashboard() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>TOTAL USERS</div>
           <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--accent)' }}>{profiles.length}</div>
         </div>
+
         <div className="card">
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>BLOCKED USERS</div>
           <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--danger)' }}>
@@ -134,6 +136,9 @@ export default function SeedAdminDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Real-time Security CCTV Camera Wall */}
+      <CctvWall currentUser={myProfile} isSeedAdmin={true} />
 
       {/* Machine Bindings & License Management */}
       <div className="card" style={{ marginBottom: '32px' }}>
