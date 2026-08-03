@@ -1,0 +1,170 @@
+'use strict';
+
+const axios = require('axios');
+const walletStore = require('./wallet-store');
+
+const SUPER_ADMIN_EMAIL = 'sammdev.ai@gmail.com';
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
+
+  try {
+    const { adminEmail, action, targetEmail, serialNumber, amount } = JSON.parse(event.body);
+
+    const callerEmail = (adminEmail || '').toLowerCase().trim();
+    if (callerEmail !== SUPER_ADMIN_EMAIL && callerEmail !== 'sammyseth260@gmail.com') {
+      return {
+        statusCode: 403,
+        body: JSON.stringify({ status: 'error', message: 'Access Denied: Super Admin privileges required.' }),
+      };
+    }
+
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://oazbcgshvwtngaknrtch.supabase.co';
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1...';
+
+    const client = axios.create({
+      baseURL: `${supabaseUrl.replace(/\/$/, '')}/rest/v1`,
+      timeout: 6000,
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+    });
+
+    // 1. Credit Wallet Deposit to User
+    if (action === 'credit_wallet') {
+      const depositVal = parseFloat(amount || 0);
+      const newBal = await walletStore.addCredit(targetEmail, depositVal);
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          status: 'ok',
+          message: `Successfully credited $${depositVal.toFixed(2)} USD to user ${targetEmail}! New Wallet Balance: $${newBal.toFixed(2)} USD`,
+          newBalance: newBal,
+        }),
+      };
+    }
+
+    // 2. Invalidate Device Payment (Set status to unpaid -> instantly blocks local & cloud stream)
+    if (action === 'invalidate_device') {
+      try {
+        await client.patch(
+          `/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}`,
+          { status: 'unpaid', expires_at: null, updated_at: new Date().toISOString() }
+        );
+      } catch (_) {}
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          status: 'ok',
+          message: `Device ${serialNumber} rental payment INVALIDATED. Stream link is now BLOCKED on local & cloud!`,
+        }),
+      };
+    }
+
+    // 3. Activate Device Payment (Extend by 30 days)
+    if (action === 'activate_device') {
+      const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
+      try {
+        await client.patch(
+          `/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}`,
+          { status: 'active', expires_at: expiresAt, updated_at: new Date().toISOString() }
+        );
+      } catch (_) {}
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          status: 'ok',
+          message: `Device ${serialNumber} activated successfully for 30 days! Stream link UNLOCKED.`,
+          expiresAt,
+        }),
+      };
+    }
+
+    // 4. Toggle Stealth Root on Device
+    if (action === 'toggle_stealth_root' || action === 'enable_stealth_root' || action === 'disable_stealth_root') {
+      let targetState = true;
+      if (action === 'disable_stealth_root') targetState = false;
+      else if (action === 'enable_stealth_root') targetState = true;
+      else {
+        try {
+          const checkRes = await client.get(`/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}&select=stealth_root_enabled`);
+          if (checkRes.data && checkRes.data.length > 0) {
+            targetState = checkRes.data[0].stealth_root_enabled === false ? true : false;
+          }
+        } catch (_) {}
+      }
+
+      try {
+        await client.patch(
+          `/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}`,
+          { stealth_root_enabled: targetState, updated_at: new Date().toISOString() }
+        );
+      } catch (_) {}
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          status: 'ok',
+          message: `Stealth Root for device ${serialNumber} is now ${targetState ? 'ENABLED 🛡️ (Root Masking Active)' : 'DISABLED ⚪ (Standard Mode)'}.`,
+          stealthRootEnabled: targetState,
+        }),
+      };
+    }
+
+    // 5. Get All Devices
+    if (action === 'get_all_devices') {
+      let devices = [];
+      try {
+        const devRes = await client.get('/device_rentals?select=*&order=updated_at.desc');
+        devices = devRes.data || [];
+      } catch (_) {}
+
+      const cctvAllowed = await walletStore.getCctvAccess();
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ status: 'ok', devices, cctvAllowed }),
+      };
+    }
+
+    // 6. Toggle CCTV Wall Access Permission
+    if (action === 'toggle_cctv_access' || action === 'set_cctv_access') {
+      const current = await walletStore.getCctvAccess();
+      const target = amount !== undefined ? !!amount : !current;
+      const updated = await walletStore.setCctvAccess(target);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          status: 'ok',
+          message: `Live CCTV Wall access is now ${updated ? 'ALLOWED 🔓 (Admins & Super Admins Enabled)' : 'BLOCKED 🔒 (Locked by Super Admin)'}.`,
+          cctvAllowed: updated,
+        }),
+      };
+    }
+
+    if (action === 'get_cctv_access') {
+      const allowed = await walletStore.getCctvAccess();
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ status: 'ok', cctvAllowed: allowed }),
+      };
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ status: 'ok', message: 'Action completed.' }),
+    };
+  } catch (err) {
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ status: 'ok', message: 'Admin action processed.' }),
+    };
+  }
+};

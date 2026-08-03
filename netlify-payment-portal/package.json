@@ -1,0 +1,12 @@
+{
+  "name": "devicefarm-netlify-payment-portal",
+  "version": "1.0.0",
+  "description": "Netlify Payment Portal for DeviceFarm — Paystack Card & NOWPayments Crypto ($30/mo)",
+  "main": "index.html",
+  "scripts": {
+    "build": "echo 'Netlify build ready'"
+  },
+  "dependencies": {
+    "axios": "^1.7.9"
+  }
+}
