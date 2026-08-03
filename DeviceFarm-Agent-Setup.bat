@@ -256,15 +256,7 @@ if not exist "%ADB_BIN%" set "ADB_BIN=adb"
 taskkill /F /IM adb.exe >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
 
-:: Clear stale ADB keys so the phone is forced to show the Allow prompt
-if exist "%USERPROFILE%\.android\adbkey" (
-    echo [*] Removing stale ADB keys...
-    del /F /Q "%USERPROFILE%\.android\adbkey" >nul 2>&1
-    del /F /Q "%USERPROFILE%\.android\adbkey.pub" >nul 2>&1
-    echo [OK] Stale ADB keys removed — phone will be asked to authorize again.
-)
-
-:: Start fresh ADB server with the bundled binary
+:: Restart ADB server with bundled binary
 echo [*] Starting fresh ADB server...
 "%ADB_BIN%" start-server >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
