@@ -80,9 +80,9 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     return (
       <div className="card" style={{ marginTop: '24px', background: 'rgba(251, 113, 133, 0.08)', borderColor: 'rgba(251, 113, 133, 0.3)', textAlign: 'center', padding: '32px' }}>
         <div style={{ fontSize: '36px', marginBottom: '12px' }}>🔒</div>
-        <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--danger)' }}>Live CCTV Monitor Wall Locked</h3>
+        <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--danger)' }}>Live Admin Monitor Control Locked</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
-          Access to the multi-camera security CCTV wall has been locked by Super Admin.
+          Access to the live admin monitor control wall has been locked by Super Admin.
         </p>
       </div>
     );
@@ -90,15 +90,15 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
 
   return (
     <div style={{ marginTop: '28px' }}>
-      {/* CCTV Header */}
+      {/* Admin Monitor Header */}
       <div className="card" style={{ background: 'linear-gradient(135deg, rgba(15,23,42,0.95), rgba(6,9,17,0.98))', borderColor: 'rgba(56,189,248,0.35)', marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <div className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
               <span style={{ width: '6px', height: '6px', background: '#f87171', borderRadius: '50%', animation: 'pulse 1s infinite' }}></span>
-              🔴 LIVE SECURITY CCTV MONITOR WALL
+              🔴 LIVE ADMIN MONITOR CONTROL
             </div>
-            <h2 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Multi-Machine Camera Feed Wall</h2>
+            <h2 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Multi-Machine Live Monitor Wall</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
               Real-time video streams for all connected profile devices. Click any camera tile to focus and control.
             </p>
@@ -111,24 +111,24 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 className={`btn ${cctvLocked ? 'btn-danger' : 'btn-primary'}`}
                 style={{ fontSize: '12px', padding: '8px 14px' }}
               >
-                {cctvLocked ? '🔒 CCTV Wall: LOCKED' : '🔓 CCTV Wall: ALLOWED'}
+                {cctvLocked ? '🔒 Admin Monitor: LOCKED' : '🔓 Admin Monitor: ALLOWED'}
               </button>
             )}
-            <button onClick={fetchDevicesAndLockState} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+            <button onClick={() => fetchDevicesAndLockState(true)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
               <RefreshCw size={14} /> Refresh Feeds
             </button>
           </div>
         </div>
       </div>
 
-      {/* CCTV Grid View */}
+      {/* Grid View */}
       {loading ? (
         <div className="card" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-          Loading CCTV camera wall feeds...
+          Loading live admin monitor feeds...
         </div>
       ) : devices.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-          No active devices registered in CCTV stream registry. Connect devices via Desktop Agent.
+          No active online devices connected. Connect devices via Desktop Agent.
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
@@ -222,7 +222,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Serial: {focusDevice.serial}</div>
               </div>
               <button onClick={() => setFocusDevice(null)} className="btn btn-danger" style={{ padding: '6px 14px', fontSize: '12px' }}>
-                <ArrowLeft size={14} /> Back to CCTV Wall
+                <ArrowLeft size={14} /> Back to Admin Monitor
               </button>
             </div>
 
