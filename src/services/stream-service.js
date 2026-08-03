@@ -120,8 +120,19 @@ function handleControl(type, data, serial, engine) {
     if (!engine.isReady || !engine.sendTouchEvent(0, x1, y1, W, H)) {
       adbInput(serial, `input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`);
     } else {
-      engine.sendTouchEvent(2, x2, y2, W, H);
-      engine.sendTouchEvent(1, x2, y2, W, H);
+      const steps = Math.max(5, Math.floor(dur / 15));
+      const dt = dur / steps;
+      for (let i = 1; i <= steps; i++) {
+        setTimeout(() => {
+          const currX = x1 + (x2 - x1) * (i / steps);
+          const currY = y1 + (y2 - y1) * (i / steps);
+          if (i === steps) {
+            engine.sendTouchEvent(1, currX, currY, W, H);
+          } else {
+            engine.sendTouchEvent(2, currX, currY, W, H);
+          }
+        }, Math.round(i * dt));
+      }
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
@@ -150,14 +161,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
     html,body{height:100%;background:#04060a;color:#f8fafc;font-family:system-ui;overflow:hidden}
-    body{display:flex;flex-direction:column;align-items:center;padding:6px 12px;user-select:none;-webkit-user-select:none}
+    body{display:flex;flex-direction:column;align-items:center;padding:6px 12px;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
     .header{display:flex;align-items:center;justify-content:space-between;width:100%;max-width:560px;padding:2px 0;flex-shrink:0}
     .badge{background:rgba(56,189,248,.15);color:#38bdf8;border:1px solid rgba(56,189,248,.3);padding:3px 10px;border-radius:100px;font-size:11px;font-weight:700;display:flex;align-items:center;gap:5px}
     .dot{width:6px;height:6px;background:#38bdf8;border-radius:50%;animation:pulse 1s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
     .stage{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0}
-    .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0}
-    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default}
+    .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
     .sidebar{display:flex;flex-direction:column;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:7px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0}
     .btn{width:36px;height:36px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .12s}
     .btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
@@ -165,8 +176,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .btn-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.3)}
     .btn-red:hover{background:rgba(248,113,113,.3)}
     .hr{height:1px;background:rgba(255,255,255,.1);margin:2px 0}
-    .ripple{position:absolute;width:24px;height:24px;border-radius:50%;background:rgba(56,189,248,.5);border:2px solid #38bdf8;transform:translate(-50%,-50%) scale(.3);pointer-events:none;animation:rip .22s forwards;z-index:10}
-    @keyframes rip{to{transform:translate(-50%,-50%) scale(1.8);opacity:0}}
     .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);z-index:20;align-items:center;justify-content:center}
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:360px}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
@@ -788,16 +797,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  function ripple(cx, cy) {
-    const r = wrap.getBoundingClientRect();
-    const d = document.createElement('div');
-    d.className = 'ripple';
-    d.style.left = (cx - r.left) + 'px';
-    d.style.top  = (cy - r.top)  + 'px';
-    wrap.appendChild(d);
-    setTimeout(() => d.remove(), 230);
-  }
-
   // ── Pointer & Drag Control (Smooth & Zero Shaking) ──────────────────────
   let down = false;
   let activePointerId = null;
@@ -809,7 +808,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    ripple(c.cx, c.cy);
     send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH });
   });
 

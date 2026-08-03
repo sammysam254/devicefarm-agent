@@ -62,7 +62,21 @@ async function handleDeviceAdd(device) {
 
   // Apply bootloader hiding & anti-detection stealth config before running apps
   try {
-    await stealthService.applyDeviceStealth(serial);
+    const axios = require('axios');
+    let isStealthOn = true;
+    try {
+      const supabaseUrl = process.env.SUPABASE_URL || 'https://oazbcgshvwtngaknrtch.supabase.co';
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hemJjZ3Nodnd0bmdha25ydGNoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDk3MjgwNSwiZXhwIjoyMTAwNTQ4ODA1fQ.4cYTzZIIr5dXi_GezH9hbTnZayZqVWRUkKRWtgKWHbE';
+      const res = await axios.get(`${supabaseUrl}/rest/v1/device_rentals?serial_number=eq.${encodeURIComponent(serial)}&select=stealth_root_enabled`, {
+        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
+        timeout: 3000
+      });
+      if (res.data && res.data.length > 0 && res.data[0].stealth_root_enabled === false) {
+        isStealthOn = false;
+      }
+    } catch (_) {}
+
+    await stealthService.applyDeviceStealth(serial, isStealthOn);
   } catch (stealthErr) {
     logger.warn(`Stealth setup notice for ${serial}: ${stealthErr.message}`);
   }

@@ -58,7 +58,12 @@ function execAdbShell(serial, cmd, timeoutMs = 5000) {
  * Applies comprehensive anti-detection & physical device simulation to an Android device.
  * @param {string} serial - Device ADB serial number
  */
-async function applyDeviceStealth(serial) {
+async function applyDeviceStealth(serial, stealthRootEnabled = true) {
+  if (stealthRootEnabled === false) {
+    logger.info(`[StealthService] Stealth Root disabled by admin for device ${serial}. Skipping root masking.`);
+    return false;
+  }
+
   logger.info(`[StealthService] Applying bootloader hiding, remote-control masking & physical simulation for device: ${serial}...`);
 
   // 1. Ensure ADB and Developer Settings remain ENABLED (1) for scrcpy engine stability
