@@ -8,14 +8,27 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [cctvLocked, setCctvLocked] = useState(false);
   const [focusDevice, setFocusDevice] = useState(null);
 
-  const fetchDevicesAndLockState = async () => {
-    setLoading(true);
+  const fetchDevicesAndLockState = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
-      // 1. Fetch devices
-      const { data: dData } = await supabase.from('devices').select('*').order('created_at', { ascending: false });
-      setDevices(dData || []);
+      // 1. Fetch ONLY online devices whose streams are active and recent
+      const { data: dData } = await supabase
+        .from('devices')
+        .select('*')
+        .eq('status', 'online')
+        .order('updated_at', { ascending: false });
 
-      // 2. Fetch CCTV lock setting from system_settings if exists
+      // Filter out devices whose last_seen is older than 45 seconds to guarantee active online devices
+      const now = new Date().getTime();
+      const activeOnlineDevices = (dData || []).filter(d => {
+        if (!d.updated_at && !d.last_seen) return true;
+        const lastTime = new Date(d.updated_at || d.last_seen).getTime();
+        return (now - lastTime) < 45000;
+      });
+
+      setDevices(activeOnlineDevices);
+
+      // 2. Fetch CCTV lock setting from system_settings
       const { data: sData } = await supabase.from('system_settings').select('*').eq('key', 'cctv_wall_locked').single();
       if (sData) {
         setCctvLocked(sData.value === 'true' || sData.value === true);
@@ -23,13 +36,13 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     } catch (e) {
       console.error('Error loading CCTV Wall data:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDevicesAndLockState();
-    const interval = setInterval(fetchDevicesAndLockState, 5000);
+    fetchDevicesAndLockState(true);
+    const interval = setInterval(() => fetchDevicesAndLockState(false), 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -144,7 +157,13 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 {/* Viewport Frame */}
                 <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
                   {streamUrl ? (
-                    <iframe src={streamUrl} style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} title={d.serial} />
+                    <iframe 
+                      src={streamUrl} 
+                      style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} 
+                      title={d.serial} 
+                      referrerPolicy="no-referrer"
+                      allow="autoplay; fullscreen"
+                    />
                   ) : (
                     <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
                       Device Offline
@@ -213,6 +232,8 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 src={focusDevice.stream_url || `http://localhost:${focusDevice.local_port || 8100}`} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
+                referrerPolicy="no-referrer"
+                allow="autoplay; fullscreen"
               />
             </div>
           </div>
