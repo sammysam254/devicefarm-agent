@@ -33,6 +33,132 @@ function hasSpsNal(buf) {
 }
 
 /**
+ * Extract the encoded frame dimensions directly from an H.264 SPS NAL unit.
+ * This is the ground truth — the exact size the scrcpy encoder configured,
+ * and the value the server uses to validate INJECT_TOUCH_EVENT dimensions.
+ *
+ * Reads pic_width_in_mbs_minus1 and pic_height_in_map_units_minus1 from the
+ * SPS RBSP. These values encode the picture size in 16-pixel macroblocks.
+ * The full formula also accounts for frame_crop_* fields.
+ */
+function _findSpsStart(buf) {
+  for (let i = 0; i < Math.min(buf.length - 4, 256); i++) {
+    if (buf[i] === 0 && buf[i+1] === 0) {
+      if (buf[i+2] === 1 && (buf[i+3] & 0x1f) === 7) return i + 4;
+      if (buf[i+2] === 0 && buf[i+3] === 1 && (buf[i+4] & 0x1f) === 7) return i + 5;
+    }
+  }
+  return -1;
+}
+
+function _readUEGolomb(data, bitOffset) {
+  // Count leading zeros
+  let zeros = 0;
+  while (bitOffset < data.length * 8 && !((data[bitOffset >> 3] >> (7 - (bitOffset & 7))) & 1)) {
+    zeros++;
+    bitOffset++;
+  }
+  bitOffset++; // skip the 1 bit
+  if (zeros === 0) return { val: 0, bitOffset };
+  let val = 1;
+  for (let i = 0; i < zeros; i++) {
+    val = (val << 1) | ((data[bitOffset >> 3] >> (7 - (bitOffset & 7))) & 1);
+    bitOffset++;
+  }
+  return { val: val - 1, bitOffset };
+}
+
+function parseSpsWidth(payload) {
+  const start = _findSpsStart(payload);
+  if (start < 0 || start + 4 >= payload.length) return 0;
+  // RBSP: skip forbidden_zero_bit(1) + nal_ref_idc(2) + nal_unit_type(5) = already past NAL header
+  // SPS RBSP starts: profile_idc(8) + constraint_flags(8) + level_idc(8) + seq_parameter_set_id(UE)
+  let bit = 0;
+  // profile_idc
+  const profileIdc = payload[start];
+  bit = (start * 8) + 8;
+  // constraint_set flags + reserved (8 bits)
+  bit += 8;
+  // level_idc (8 bits)
+  bit += 8;
+  // seq_parameter_set_id
+  let r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+  // chroma_format_idc if profile is 100/110/122/244/44/83/86/118/128/138
+  if ([100,110,122,244,44,83,86,118,128,138].includes(profileIdc)) {
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // chroma_format_idc
+    if (r.val === 3) bit++; // separate_colour_plane_flag
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_luma_minus8
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_chroma_minus8
+    bit++; // qpprime_y_zero_transform_bypass_flag
+    const seqScalingMatrixPresent = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+    if (seqScalingMatrixPresent) return 0; // too complex to parse, bail
+  }
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // log2_max_frame_num_minus4
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_order_cnt_type
+  if (r.val === 0) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; } // log2_max_pic_order_cnt_lsb_minus4
+  else if (r.val === 1) {
+    bit++; // delta_pic_order_always_zero_flag
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // offset_for_non_ref_pic (SE, treat as UE for size)
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // offset_for_top_to_bottom_field
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // num_ref_frames_in_pic_order_cnt_cycle
+    for (let i = 0; i < r.val; i++) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
+  }
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // max_num_ref_frames
+  bit++; // gaps_in_frame_num_value_allowed_flag
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_width_in_mbs_minus1
+  const widthInMbs = r.val + 1;
+  return widthInMbs * 16;
+}
+
+function parseSpsHeight(payload) {
+  const start = _findSpsStart(payload);
+  if (start < 0 || start + 4 >= payload.length) return 0;
+  let bit = 0;
+  const profileIdc = payload[start];
+  bit = (start * 8) + 8 + 8 + 8;
+  let r = _readUEGolomb(payload, bit); bit = r.bitOffset; // seq_parameter_set_id
+  if ([100,110,122,244,44,83,86,118,128,138].includes(profileIdc)) {
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    if (r.val === 3) bit++;
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    bit++;
+    const sm = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+    if (sm) return 0;
+  }
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_order_cnt_type
+  if (r.val === 0) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
+  else if (r.val === 1) {
+    bit++;
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    for (let i = 0; i < r.val; i++) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
+  }
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // max_num_ref_frames
+  bit++;
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_width_in_mbs_minus1
+  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_height_in_map_units_minus1
+  const heightInMapUnits = r.val + 1;
+  // frame_mbs_only_flag
+  const frameMbsOnly = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+  const heightInMbs = frameMbsOnly ? heightInMapUnits : heightInMapUnits * 2;
+  let height = heightInMbs * 16;
+  // crop bottom
+  bit++; // direct_8x8_inference_flag if !frame_mbs_only — skip, approximate
+  const frameCroppingFlag = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+  if (frameCroppingFlag) {
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_left
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_right
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_top
+    const cropBottom = r.val; r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    height -= (cropBottom + r.val) * (frameMbsOnly ? 2 : 4);
+  }
+  return height;
+}
+
+/**
  * ScrcpyEngine — manages a scrcpy server session for one device.
  *
  * VIDEO MODE: scrcpy streams H264 over the video socket. We relay raw
@@ -395,8 +521,14 @@ class ScrcpyEngine extends EventEmitter {
         if (buf.length < DEVICE_HEADER_LEN) return;
 
         try {
-          const w = buf.readUInt32BE(68);
-          const h = buf.readUInt32BE(72);
+          // scrcpy 2.4 video socket header layout (77 bytes total):
+          //   [0]      dummy byte (0x00)
+          //   [1-4]    codec ID ASCII ("h264")
+          //   [5-68]   device name, 64 bytes null-padded
+          //   [69-72]  uint32 BE — negotiated encoder width
+          //   [73-76]  uint32 BE — negotiated encoder height
+          const w = buf.readUInt32BE(69);
+          const h = buf.readUInt32BE(73);
           if (w > 0 && h > 0 && w < 10000 && h < 10000) {
             this.videoWidth = w;
             this.videoHeight = h;
@@ -438,6 +570,20 @@ class ScrcpyEngine extends EventEmitter {
         if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
           logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
+
+          // Parse width/height from SPS NAL — the most authoritative source.
+          // If the header parse gave us wrong dimensions, this corrects them.
+          try {
+            const spsW = parseSpsWidth(payload);
+            const spsH = parseSpsHeight(payload);
+            if (spsW > 0 && spsH > 0) {
+              if (this.videoWidth !== spsW || this.videoHeight !== spsH) {
+                logger.info(`[ScrcpyEngine ${this.serial}] SPS resolution: ${spsW}x${spsH} (was ${this.videoWidth}x${this.videoHeight})`);
+              }
+              this.videoWidth  = spsW;
+              this.videoHeight = spsH;
+            }
+          } catch (_) {}
         }
 
         if (isIdr) {
