@@ -176,7 +176,7 @@ export default function SuperAdminDashboard() {
         {loading ? (
           <div>Loading devices...</div>
         ) : devices.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)' }}>No devices connected. Run `DeviceFarm-Agent-Setup.bat` on your computer to connect devices.</div>
+          <div style={{ color: 'var(--text-muted)' }}>No devices connected. Run `FlexPulse-Agent-Setup.bat` on your computer to connect devices.</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left' }}>

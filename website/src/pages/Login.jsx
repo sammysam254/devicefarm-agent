@@ -58,7 +58,7 @@ export default function Login() {
           }}>
             <Smartphone size={28} />
           </div>
-          <h2 style={{ fontSize: '24px', fontWeight: 800 }}>DeviceFarm Access</h2>
+          <h2 style={{ fontSize: '24px', fontWeight: 800 }}>FlexPulse Access</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
             {isSignUp ? 'Create a new account to join' : 'Log in to access your device dashboard'}
           </p>

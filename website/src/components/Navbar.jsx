@@ -39,7 +39,7 @@ export default function Navbar({ toggleSidebar }) {
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '18px' }}>
           <Smartphone size={22} color="var(--primary)" />
-          <span>DeviceFarm</span>
+          <span>FlexPulse</span>
         </div>
       </div>
 

@@ -1,0 +1,14 @@
+FlexPulse Logo Placeholder
+
+Upload your FlexPulse logo files here:
+- logo.png
+- logo.svg
+- logo-dark.png (optional, for dark theme)
+- logo-light.png (optional, for light theme)
+
+After uploading, update the imports in:
+- src/components/Navbar.jsx
+- src/layouts/DashboardLayout.jsx
+- Any other components using the logo
+
+The logo should be optimized for web (PNG: <100KB, SVG: <50KB)
