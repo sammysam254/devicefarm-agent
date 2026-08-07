@@ -88,41 +88,14 @@ function getLogDir() {
 
 const logDir = getLogDir();
 
-// Custom transport that encrypts log entries before writing
-class EncryptedFileTransport extends winston.Transport {
-  constructor(options) {
-    super(options);
-    this.options = options;
-    this.createStream();
-  }
-  
-  createStream() {
-    if (!fs.existsSync(this.options.dirname)) {
-      fs.mkdirSync(this.options.dirname, { recursive: true });
-    }
-    
-    const logFile = path.join(
-      this.options.dirname,
-      `agent-${new Date().toISOString().split('T')[0]}.log.enc`
-    );
-    
-    this.stream = fs.createWriteStream(logFile, { flags: 'a', encoding: 'utf8' });
-  }
-  
-  log(info, callback) {
-    // Sanitize and serialize the log entry
-    const message = sanitizeMessage(typeof info === 'string' ? info : JSON.stringify(info));
-    
-    // Encrypt before writing to file
-    const encrypted = logEncryptor.encrypt(message);
-    this.stream.write(encrypted + '\n', (err) => {
-      if (callback) callback(err);
-    });
-  }
-}
-
-const fileRotateTransport = new EncryptedFileTransport({
+// Use standard file transport for now (encryption can be added later if needed)
+const fileRotateTransport = new winston.transports.DailyRotateFile({
   dirname: logDir,
+  filename: 'agent-%DATE%.log',
+  datePattern: 'YYYY-MM-DD',
+  maxSize: '20m',
+  maxFiles: '14d',
+  zippedArchive: false,
 });
 
 const consoleTransport = new winston.transports.Console({
@@ -142,6 +115,16 @@ const logger = winston.createLogger({
   format: winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
     winston.format.errors({ stack: true }),
+    winston.format.printf(({ timestamp, level, message, ...meta }) => {
+      // Sanitize message before formatting to JSON
+      const sanitized = sanitizeMessage(String(message));
+      return JSON.stringify({
+        timestamp,
+        level,
+        message: sanitized,
+        ...meta
+      });
+    }),
   ),
   defaultMeta: { service: 'device-agent' },
   transports: [consoleTransport, fileRotateTransport],
