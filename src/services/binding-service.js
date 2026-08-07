@@ -70,8 +70,10 @@ function getOrGenerateBindingCode() {
 async function syncMachineBinding() {
   const bindingCode = getOrGenerateBindingCode();
   const cfg = loadConfig();
-  const supabaseUrl = cfg.supabaseUrl;
-  const apiKey = cfg.supabaseServiceRoleKey || cfg.supabaseAnonKey;
+  
+  // PRIORITY: Read from environment variables for security
+  const supabaseUrl = process.env.SUPABASE_URL || cfg.supabaseUrl;
+  const apiKey = process.env.SUPABASE_SERVICE_ROLE_KEY || cfg.supabaseServiceRoleKey || cfg.supabaseAnonKey;
 
   if (!supabaseUrl || !apiKey) return bindingCode;
 
@@ -110,6 +112,12 @@ async function syncMachineBinding() {
  * Called each time device connects or tunnel URL changes.
  */
 async function syncDeviceUrl(serial, streamUrl, opts = {}) {
+  // Disable cloud sync if explicitly requested
+  if (process.env.DISABLE_CLOUD_SYNC === 'true' || process.env.DISABLE_CLOUD_SYNC === '1') {
+    logger.info(`[BindingService] Cloud sync disabled for ${serial} (DISABLE_CLOUD_SYNC env var set)`);
+    return;
+  }
+  
   const bindingCode = getOrGenerateBindingCode();
   await licenseService.syncDeviceToCloud({
     serial,

@@ -3,6 +3,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 const logger = require('../utils/logger');
 const processManager = require('../main/process-manager');
@@ -11,6 +12,28 @@ const licenseService = require('../services/license-service');
 
 let server = null;
 let serverPort = 7400;
+
+// Session token cache to avoid exposing binding code in HTTP responses
+const SESSION_TOKENS = new Map();
+
+function generateSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function storeBindingCodeInSession(bindingCode) {
+  const token = generateSessionToken();
+  SESSION_TOKENS.set(token, {
+    bindingCode,
+    createdAt: Date.now(),
+  });
+  
+  // Expire tokens after 5 minutes
+  setTimeout(() => {
+    SESSION_TOKENS.delete(token);
+  }, 5 * 60 * 1000);
+  
+  return token;
+}
 
 /**
  * Start the local Dashboard HTTP Server.
@@ -27,8 +50,11 @@ function startDashboardServer(port = 7400) {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
       res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('X-XSS-Protection', '1; mode=block');
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
+      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'");
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -40,21 +66,35 @@ function startDashboardServer(port = 7400) {
 
       // ── API Routes ────────────────────────────────────────────────────────
       if (url === '/api/devices') {
+        // REQUIRE AUTH: Must have valid session token to access device list
+        const authToken = req.headers['x-session-token'] || fullUrl.searchParams.get('token');
+        
+        if (!authToken || !SESSION_TOKENS.has(authToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'error',
+            error: 'Unauthorized',
+            message: 'Valid session token required'
+          }));
+          return;
+        }
+
         const bindingCode = bindingService.getOrGenerateBindingCode();
         const lic = await licenseService.checkLicenseStatus(bindingCode);
         const rawDevices = processManager.getActiveDeviceSummaries();
 
+        // Hide binding code in response — only return opaque session token instead
+        const sessionToken = storeBindingCodeInSession(bindingCode);
+
         const devices = rawDevices.map(d => ({
           ...d,
-          bindingCode,
-          isLicensed: lic.isActive,
-          licenseMode: lic.mode,
+          // DO NOT expose bindingCode here
         }));
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
-          bindingCode,
+          sessionToken,  // Opaque token instead of binding code
           isLicensed: lic.isActive,
           licenseMode: lic.mode,
           count: devices.length,
@@ -65,14 +105,30 @@ function startDashboardServer(port = 7400) {
       }
 
       if (url === '/api/license/status' || url === '/api/rental/status') {
+        // REQUIRE AUTH: Must have valid session token
+        const authToken = req.headers['x-session-token'] || fullUrl.searchParams.get('token');
+        
+        if (!authToken || !SESSION_TOKENS.has(authToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'error',
+            error: 'Unauthorized',
+            message: 'Valid session token required'
+          }));
+          return;
+        }
+
         const bindingCode = bindingService.getOrGenerateBindingCode();
         const lic = await licenseService.checkLicenseStatus(bindingCode);
         const devices = processManager.getActiveDeviceSummaries();
 
+        // Hide binding code in response
+        const sessionToken = storeBindingCodeInSession(bindingCode);
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
-          bindingCode,
+          sessionToken,  // Opaque token instead of binding code
           isLicensed: lic.isActive,
           licenseMode: lic.mode,
           note: lic.note,
@@ -180,4 +236,5 @@ module.exports = {
   stopDashboardServer,
   getDashboardUrl,
   openInChrome,
+  SESSION_TOKENS,
 };

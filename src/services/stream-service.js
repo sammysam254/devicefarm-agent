@@ -10,14 +10,6 @@ const ScrcpyEngine = require('./scrcpy-engine');
 const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
 
-// ─── Localtunnel Bypass Header ───────────────────────────────────────────────
-// Prevents "You are about to visit" security page that appears once per IP every 7 days
-// Reference: localtunnel shows this page to prevent abuse (C2, malware, phishing)
-const LOCALTUNNEL_BYPASS_HEADERS = {
-  'bypass-tunnel-reminder': '1',
-  'User-Agent': 'FlexPulse-Agent/1.0 (+https://stream.dennoh.site)'
-};
-
 // ─── Anti-Detection Headers ──────────────────────────────────────────────────
 // Hide remote control indicators from survey/earning apps
 // Apps analyze these headers to detect: automation, rooting, remote access, emulation
@@ -30,7 +22,6 @@ const STEALTH_HEADERS = {
   'DNT': '1',
   'Connection': 'keep-alive',
   'Upgrade-Insecure-Requests': '1',
-  // Hide signs of remote control tools
   'Sec-Fetch-Dest': 'document',
   'Sec-Fetch-Mode': 'navigate',
   'Sec-Fetch-Site': 'none',
@@ -115,6 +106,9 @@ function get(data, key) {
 }
 
 function handleControl(type, data, serial, engine) {
+  // Randomize timing to prevent automation detection by survey apps
+  const randomDelay = (min, max) => Math.random() * (max - min) + min;
+  
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
 
@@ -129,7 +123,8 @@ function handleControl(type, data, serial, engine) {
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
     engine.sendTouchEvent(0, x, y, W, H);
-    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), 80);
+    // Human tap DOWN→UP delay: 80-250ms (not fixed 80ms)
+    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), randomDelay(80, 250));
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
@@ -147,6 +142,8 @@ function handleControl(type, data, serial, engine) {
     const steps = Math.max(5, Math.floor(dur / 15));
     const dt = dur / steps;
     for (let i = 1; i <= steps; i++) {
+      // Randomize step intervals (10-25ms) for realistic swipe motion
+      const stepDelay = Math.round(i * dt + randomDelay(-5, 5));
       setTimeout(() => {
         const currX = x1 + (x2 - x1) * (i / steps);
         const currY = y1 + (y2 - y1) * (i / steps);
@@ -155,12 +152,13 @@ function handleControl(type, data, serial, engine) {
         if (!ok) {
           logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
         }
-      }, Math.round(i * dt));
+      }, stepDelay);
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
     engine.sendKeycode(0, code);
-    setTimeout(() => engine.sendKeycode(1, code), 50);
+    // Key press duration: 50-150ms (not fixed 50ms)
+    setTimeout(() => engine.sendKeycode(1, code), randomDelay(50, 150));
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
     engine.sendText(text);
@@ -276,7 +274,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <span style="font-size:18px">📱</span>
     <div>
       <div style="font-weight:700;font-size:13px">Live Stream</div>
-      <div style="font-size:10px;color:#64748b;font-family:monospace">${serial}</div>
+      <div style="font-size:10px;color:#64748b">Connected</div>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">

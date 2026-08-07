@@ -2,9 +2,17 @@
 
 const path = require('path');
 const winston = require('winston');
+const crypto = require('crypto');
 require('winston-daily-rotate-file');
 
 const { app } = require('electron');
+
+// Hash device serials to prevent forensic enumeration if logs are compromised
+function hashSerial(serial) {
+  if (!serial || typeof serial !== 'string') return 'unknown';
+  const hash = crypto.createHash('sha256').update(serial).digest('hex');
+  return `[${hash.substring(0, 8)}]`; // Show first 8 chars of hash
+}
 
 function getLogDir() {
   try {
@@ -53,3 +61,4 @@ process.on('unhandledRejection', (reason) => {
 });
 
 module.exports = logger;
+module.exports.hashSerial = hashSerial;

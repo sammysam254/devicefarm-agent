@@ -27,14 +27,22 @@ function saveConfig(cfg) {
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
 const licenseCache = new Map();
-const CACHE_TTL_MS = 5 * 1000; // 5 sec for rapid web activation/revocation sync
+// Randomize cache TTL to prevent timing attacks (3000-8000ms instead of fixed 5000ms)
+const CACHE_TTL_MIN = process.env.CACHE_TTL_MIN ? parseInt(process.env.CACHE_TTL_MIN, 10) : 3000;
+const CACHE_TTL_MAX = process.env.CACHE_TTL_MAX ? parseInt(process.env.CACHE_TTL_MAX, 10) : 8000;
+
+function getRandomCacheTTL() {
+  return Math.floor(Math.random() * (CACHE_TTL_MAX - CACHE_TTL_MIN + 1)) + CACHE_TTL_MIN;
+}
 
 // ─── Supabase client ──────────────────────────────────────────────────────────
 
 function getSupabaseClient() {
-  const cfg = loadConfig();
-  const url = cfg.supabaseUrl;
-  const key = cfg.supabaseServiceRoleKey || cfg.supabaseAnonKey;
+  // PRIORITY: Read from environment variables for security
+  // Falls back to config.json only if env vars not set
+  const url = process.env.SUPABASE_URL || loadConfig().supabaseUrl;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || loadConfig().supabaseServiceRoleKey || loadConfig().supabaseAnonKey;
+  
   if (!url || !key) return null;
   return axios.create({
     baseURL: `${url.replace(/\/$/, '')}/rest/v1`,
@@ -55,7 +63,8 @@ function getSupabaseClient() {
  */
 async function checkLicenseStatus(bindingCode) {
   const cached = licenseCache.get(bindingCode);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+  const cacheTTL = getRandomCacheTTL();
+  if (cached && Date.now() - cached.at < cacheTTL) return cached.value;
 
   const client = getSupabaseClient();
 
