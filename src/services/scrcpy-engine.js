@@ -182,8 +182,9 @@ class ScrcpyEngine extends EventEmitter {
     this.videoPort     = null;
 
     // Device dimensions — populated by scrcpy stdout and video header
-    this.screenWidth  = 0;
-    this.screenHeight = 0;
+    // Initialize to common Android portrait defaults so commands don't fail before stream starts
+    this.screenWidth  = 1080;
+    this.screenHeight = 2340;
 
     // Connected WS clients receiving H264 stream & audio
     this.wsClients = new Set();
@@ -766,17 +767,17 @@ class ScrcpyEngine extends EventEmitter {
    *   [28-31] buttons i32BE (1 on DOWN/MOVE, 0 on UP)
    */
   sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
-    if (!this.controlSocket || this.controlSocket.destroyed) return false;
+    if (!this.controlSocket || this.controlSocket.destroyed) {
+      return false;
+    }
 
-    // Always use the dimensions scrcpy negotiated — videoWidth/videoHeight come from
-    // the video stream header (ground truth). screenWidth/screenHeight come from wm size
-    // and the scrcpy stdout Device: line. All of these are set by scrcpy itself, so the
-    // server will always accept the touch event without a size mismatch warning.
-    const targetW = this.videoWidth  || this.screenWidth  || 720;
-    const targetH = this.videoHeight || this.screenHeight || 1600;
-
-    // If we don't know the size yet, skip — don't send with wrong dimensions
-    if (!this.videoWidth && !this.screenWidth) return false;
+    // Use videoWidth (from SPS NAL, most reliable) → videoWidth from header → screenWidth from wm size → defaults
+    let targetW = this.videoWidth;
+    let targetH = this.videoHeight;
+    if (!targetW || !targetH) {
+      targetW = this.screenWidth || 1080;
+      targetH = this.screenHeight || 2340;
+    }
 
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;
@@ -793,14 +794,17 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(0, 24);              // action_button = 0 (clean touch event — prevents mouse button state conflict & screen shaking)
+    buf.writeInt32BE(0, 24);              // action_button = 0
     buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
     try {
       this.controlSocket.cork();
       this.controlSocket.write(buf);
       this.controlSocket.uncork();
       return true;
-    } catch (e) { logger.error(`[ScrcpyEngine ${this.serial}] touch write: ${e.message}`); return false; }
+    } catch (e) { 
+      logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message} (sock=${this.controlSocket ? 'exists' : 'null'}, destroyed=${this.controlSocket?.destroyed})`);
+      return false; 
+    }
   }
 
   /**

@@ -98,7 +98,8 @@ function handleControl(type, data, serial, engine) {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
-    if (!engine.isReady || !engine.sendTouchEvent(action, x, y, W, H)) {
+    const sent = engine.isReady && engine.sendTouchEvent(action, x, y, W, H);
+    if (!sent) {
       if (action === 0) {
         const rx = Math.round((x / W) * realW);
         const ry = Math.round((y / H) * realH);
@@ -109,37 +110,47 @@ function handleControl(type, data, serial, engine) {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
     const rx = Math.round((x / W) * realW);
     const ry = Math.round((y / H) * realH);
-    if (!engine.isReady || !engine.sendTouchEvent(0, x, y, W, H)) adbInput(serial, `input tap ${rx} ${ry}`);
-    else engine.sendTouchEvent(1, x, y, W, H);
+    const sent = engine.isReady && engine.sendTouchEvent(0, x, y, W, H);
+    if (!sent) {
+      adbInput(serial, `input tap ${rx} ${ry}`);
+    } else {
+      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), 80);
+    }
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 100;
     const rx1 = Math.round((x1 / W) * realW), ry1 = Math.round((y1 / H) * realH);
     const rx2 = Math.round((x2 / W) * realW), ry2 = Math.round((y2 / H) * realH);
-    if (!engine.isReady || !engine.sendTouchEvent(0, x1, y1, W, H)) {
+    const sent = engine.isReady && engine.sendTouchEvent(0, x1, y1, W, H);
+    if (!sent) {
+      // Fallback: use ADB swipe command (no scrcpy available)
       adbInput(serial, `input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`);
     } else {
+      // Scrcpy swipe: DOWN then interpolated MOVEs then UP
       const steps = Math.max(5, Math.floor(dur / 15));
       const dt = dur / steps;
       for (let i = 1; i <= steps; i++) {
         setTimeout(() => {
           const currX = x1 + (x2 - x1) * (i / steps);
           const currY = y1 + (y2 - y1) * (i / steps);
-          if (i === steps) {
-            engine.sendTouchEvent(1, currX, currY, W, H); // UP at final position
-          } else {
-            engine.sendTouchEvent(2, currX, currY, W, H); // MOVE for intermediate steps
-          }
+          const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
+          engine.sendTouchEvent(action, currX, currY, W, H);
         }, Math.round(i * dt));
       }
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    if (!engine.sendKeycode(0, code)) adbInput(serial, `input keyevent ${code}`);
-    else {
-      engine.sendKeycode(0, code);
+    const sent = engine.isReady && engine.sendKeycode(0, code);
+    if (sent) {
+      // Scrcpy succeeded — schedule UP event 50ms later
       setTimeout(() => engine.sendKeycode(1, code), 50);
+    } else if (engine.isReady) {
+      // Scrcpy socket exists but write failed — try fallback
+      adbInput(serial, `input keyevent ${code}`);
+    } else {
+      // Scrcpy not ready — use fallback immediately
+      adbInput(serial, `input keyevent ${code}`);
     }
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
