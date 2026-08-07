@@ -109,6 +109,10 @@ function handleControl(type, data, serial, engine) {
   // Randomize timing to prevent automation detection by survey apps
   const randomDelay = (min, max) => Math.random() * (max - min) + min;
   
+  // Inject realistic network + rendering latency (100-200ms total)
+  // Real devices have: 50-150ms network + 33-50ms render + 20-40ms OS processing
+  const networkLatency = randomDelay(50, 100);
+  
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
 
@@ -119,49 +123,69 @@ function handleControl(type, data, serial, engine) {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
-    engine.sendTouchEvent(action, x, y, W, H);
+    
+    // Delay touch events to simulate network latency
+    setTimeout(() => {
+      engine.sendTouchEvent(action, x, y, W, H);
+    }, networkLatency);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    engine.sendTouchEvent(0, x, y, W, H);
+    
+    // DOWN event
+    setTimeout(() => {
+      engine.sendTouchEvent(0, x, y, W, H);
+    }, networkLatency);
+    
     // Human tap DOWN→UP delay: 80-250ms (not fixed 80ms)
-    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), randomDelay(80, 250));
+    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), networkLatency + randomDelay(80, 250));
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 100;
     
-    // Send DOWN at start position
-    const downOk = engine.sendTouchEvent(0, x1, y1, W, H);
-    if (!downOk) {
-      logger.warn(`[StreamServer] Swipe DOWN failed for ${serial}`);
-      return;
-    }
+    // Send DOWN at start position (with latency)
+    const downOk = () => {
+      return engine.sendTouchEvent(0, x1, y1, W, H);
+    };
     
-    logger.info(`[StreamServer] Swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
-    
-    const steps = Math.max(5, Math.floor(dur / 15));
-    const dt = dur / steps;
-    for (let i = 1; i <= steps; i++) {
-      // Randomize step intervals (10-25ms) for realistic swipe motion
-      const stepDelay = Math.round(i * dt + randomDelay(-5, 5));
-      setTimeout(() => {
-        const currX = x1 + (x2 - x1) * (i / steps);
-        const currY = y1 + (y2 - y1) * (i / steps);
-        const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
-        const ok = engine.sendTouchEvent(action, currX, currY, W, H);
-        if (!ok) {
-          logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
-        }
-      }, stepDelay);
-    }
+    setTimeout(() => {
+      if (!downOk()) {
+        logger.warn(`[StreamServer] Swipe DOWN failed for ${serial}`);
+        return;
+      }
+      
+      logger.info(`[StreamServer] Swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
+      
+      const steps = Math.max(5, Math.floor(dur / 15));
+      const dt = dur / steps;
+      for (let i = 1; i <= steps; i++) {
+        // Randomize step intervals (10-25ms) for realistic swipe motion
+        const stepDelay = Math.round(i * dt + randomDelay(-5, 5));
+        setTimeout(() => {
+          const currX = x1 + (x2 - x1) * (i / steps);
+          const currY = y1 + (y2 - y1) * (i / steps);
+          const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
+          const ok = engine.sendTouchEvent(action, currX, currY, W, H);
+          if (!ok) {
+            logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
+          }
+        }, stepDelay);
+      }
+    }, networkLatency);
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    engine.sendKeycode(0, code);
-    // Key press duration: 50-150ms (not fixed 50ms)
-    setTimeout(() => engine.sendKeycode(1, code), randomDelay(50, 150));
+    
+    setTimeout(() => {
+      engine.sendKeycode(0, code);
+      // Key press duration: 50-150ms (not fixed 50ms)
+      setTimeout(() => engine.sendKeycode(1, code), randomDelay(50, 150));
+    }, networkLatency);
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
-    engine.sendText(text);
+    
+    setTimeout(() => {
+      engine.sendText(text);
+    }, networkLatency);
   } else if (type === 'reboot') {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
   } else if (type === 'expand_notifications' || type === 'notifications') {
@@ -354,6 +378,26 @@ function buildPlayerHtml(serial, screenW, screenH) {
 </div>
 
 <script>
+  // ── Debug Logger (hidden from survey apps) ───────────────────────────────
+  const debugLog = {
+    queue: [],
+    maxSize: 100,
+    log(...args) {
+      this.queue.push({ time: Date.now(), level: 'log', args });
+      if (this.queue.length > this.maxSize) this.queue.shift();
+      // Store in localStorage instead of console (prevents exposure)
+      try { localStorage.setItem('__debug', JSON.stringify(this.queue.slice(-10))); } catch (_) {}
+    },
+    warn(...args) {
+      this.queue.push({ time: Date.now(), level: 'warn', args });
+      if (this.queue.length > this.maxSize) this.queue.shift();
+    },
+    error(...args) {
+      this.queue.push({ time: Date.now(), level: 'error', args });
+      if (this.queue.length > this.maxSize) this.queue.shift();
+    }
+  };
+
   const canvas = document.getElementById('c');
   const ctx    = canvas.getContext('2d', { alpha: false, desynchronized: true });
   const wrap   = document.getElementById('wrap');
@@ -386,7 +430,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const h = f.displayHeight || f.codedHeight || f.height;
     if (w && h && (canvas.width !== w || canvas.height !== h)) {
       canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-      console.log('[Canvas] Resized to ' + w + 'x' + h);
+      debugLog.log('[Canvas] Resized to ' + w + 'x' + h);
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
@@ -471,12 +515,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
-            console.warn('[Audio] output error:', err);
+            debugLog.warn('[Audio] output error:', err);
             try { audioData.close(); } catch (_) {}
           }
         },
         error: function(err) {
-          console.warn('[Audio] AudioDecoder error:', err);
+          debugLog.warn('[Audio] AudioDecoder error:', err);
           audioDecoderReady = false;
           audioDecoder = null;
           layoutDetected = false;
@@ -486,7 +530,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       audioDecoderReady = true;
       return true;
     } catch (err) {
-      console.warn('[Audio] AudioDecoder init failed:', err);
+      debugLog.warn('[Audio] AudioDecoder init failed:', err);
       return false;
     }
   }
@@ -506,7 +550,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
         data: bytes
       }));
     } catch (err) {
-      console.warn('[Audio] Opus decode error:', err);
+      debugLog.warn('[Audio] Opus decode error:', err);
       audioDecoderReady = false;
       audioDecoder = null;
     }
@@ -585,7 +629,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function initDecoder() {
     resetDecoder();
     if (typeof VideoDecoder === 'undefined') {
-      console.warn('[Stream] WebCodecs VideoDecoder not available in this browser');
+      debugLog.warn('[Stream] WebCodecs VideoDecoder not available in this browser');
       return false;
     }
     try {
@@ -602,7 +646,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
           countFrame();
         },
         error: function(err) {
-          console.error('[Stream] VideoDecoder error:', err);
+          debugLog.error('[Stream] VideoDecoder error:', err);
           resetDecoder();
         }
       });
@@ -614,7 +658,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoderReady = true;
       return true;
     } catch (err) {
-      console.error('[Stream] Failed to init VideoDecoder:', err);
+      debugLog.error('[Stream] Failed to init VideoDecoder:', err);
       return false;
     }
   }
@@ -647,7 +691,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (!wsOk) return;
     if (lastFrameReceivedTime === 0) return;
     if (Date.now() - lastFrameReceivedTime > 15000 && !fbRunning) {
-      console.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
+      debugLog.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
       startFallback();
     }
   }, 1000);
@@ -658,7 +702,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (firstFrameTimer) clearTimeout(firstFrameTimer);
     firstFrameTimer = setTimeout(function() {
       if (wsOk && lastFrameReceivedTime === 0 && !fbRunning) {
-        console.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
+        debugLog.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
         startFallback();
       }
     }, 12000);
@@ -689,7 +733,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
           const txt = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
           const msg = JSON.parse(txt);
           if (msg.type === 'stream_reset') {
-            console.log('[Stream] Server stream reset — reinitialising decoder');
+            debugLog.log('[Stream] Server stream reset — reinitialising decoder');
             resetDecoder();
             fbRunning = false;
             lastFrameReceivedTime = 0;
@@ -724,7 +768,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47) {
         createImageBitmap(new Blob([u8], { type: 'image/png' }))
           .then(function(bmp) { queueDraw(bmp); })
-          .catch(function(err) { console.warn('[Stream] PNG decode error:', err); });
+          .catch(function(err) { debugLog.warn('[Stream] PNG decode error:', err); });
         return;
       }
 
@@ -732,7 +776,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (u8[0] === 0xFF && u8[1] === 0xD8) {
         createImageBitmap(new Blob([u8], { type: 'image/jpeg' }))
           .then(function(bmp) { queueDraw(bmp); })
-          .catch(function(err) { console.warn('[Stream] JPEG decode error:', err); });
+          .catch(function(err) { debugLog.warn('[Stream] JPEG decode error:', err); });
         return;
       }
 
@@ -758,7 +802,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
         });
         decoder.decode(chunk);
       } catch (err) {
-        console.warn('[Stream] H264 chunk decode error:', err);
+        debugLog.warn('[Stream] H264 chunk decode error:', err);
         hasKeyframe = false;
       }
     };

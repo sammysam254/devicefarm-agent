@@ -175,6 +175,57 @@ function parseSpsHeight(payload) {
   }
 }
 
+// ─── Realistic Touch Profile Simulation ───────────────────────────────────
+// Survey apps detect anomalies in touch patterns: constant pressure, impossible
+// velocities, missing micro-movements. This class simulates human touch behavior.
+
+class TouchProfileSimulator {
+  static generatePressureCurve(touchDuration) {
+    // Real human touch: pressure rises during DOWN (50-80ms), plateaus, then falls during UP
+    // Simulated as sigmoid curve with peak at random point during contact
+    const peakTime = Math.random() * (touchDuration * 0.4) + (touchDuration * 0.2);
+    
+    return (currentTime) => {
+      if (currentTime < 0 || currentTime > touchDuration) return 0;
+      
+      // Sigmoid ramp: smooth acceleration → plateau → deceleration
+      const rampUpTime = peakTime * 0.5;
+      const rampDownTime = (touchDuration - peakTime) * 0.5;
+      
+      if (currentTime < rampUpTime) {
+        // Accelerating: 0 → 1.0 over rampUpTime
+        return (currentTime / rampUpTime) ** 1.5; // Power curve for realism
+      } else if (currentTime < peakTime) {
+        return 0.8 + Math.random() * 0.2; // Plateau with micro-jitter
+      } else if (currentTime < peakTime + rampDownTime) {
+        // Decelerating: 1.0 → 0 over rampDownTime
+        const decayProgress = (currentTime - peakTime) / rampDownTime;
+        return (1 - decayProgress) ** 1.5;
+      }
+      return 0;
+    };
+  }
+  
+  static enforceVelocityConstraints(currPos, prevPos, deltaTime, maxVelocityPixelsPerSec = 400) {
+    if (!prevPos || deltaTime <= 0) return currPos;
+    
+    const dx = currPos.x - prevPos.x;
+    const dy = currPos.y - prevPos.y;
+    const distance = Math.hypot(dx, dy);
+    const actualVelocity = (distance / deltaTime) * 1000; // px/ms → px/s
+    
+    // If velocity exceeds max, clamp distance
+    if (actualVelocity > maxVelocityPixelsPerSec) {
+      const scale = maxVelocityPixelsPerSec / actualVelocity;
+      return {
+        x: prevPos.x + dx * scale,
+        y: prevPos.y + dy * scale
+      };
+    }
+    return currPos;
+  }
+}
+
 /**
  * ScrcpyEngine — manages a scrcpy server session for one device.
  *
@@ -488,7 +539,9 @@ class ScrcpyEngine extends EventEmitter {
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting control socket...`);
     this.controlSocket = await this._connectOne(this.videoPort);
     this.controlSocket.setNoDelay(true);
-    this.controlSocket.setKeepAlive(true, 1000);
+    // Randomize TCP keep-alive interval (5-20s) instead of fixed 1s (detectable)
+    const keepAliveInterval = Math.random() * 15000 + 5000; // 5000-20000ms
+    this.controlSocket.setKeepAlive(true, keepAliveInterval);
 
     this.controlSocket.on('close', () => {
       this.controlSocket = null;
@@ -701,6 +754,37 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload) {
+    // Simulate realistic frame drops (2-5% drop rate at 60fps = drop ~1-3 frames per second)
+    // Survey apps detect TOO SMOOTH streaming (perfect frame delivery is unnatural)
+    const FRAME_DROP_PROBABILITY = 0.03; // 3% frames dropped
+    const STUTTER_PROBABILITY = 0.005;   // 0.5% chance of brief stutter (frame delivered twice)
+    
+    if (Math.random() < FRAME_DROP_PROBABILITY) {
+      // Silently drop this frame (survives as missing frame in sequence)
+      return;
+    }
+    
+    // Occasional stutter: deliver frame twice with slight delay
+    if (Math.random() < STUTTER_PROBABILITY) {
+      for (const ws of this.wsClients) {
+        if (ws.readyState === 1) {
+          try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+        } else {
+          this.wsClients.delete(ws);
+        }
+      }
+      // Deliver again after 33ms delay (simulating frame held)
+      setTimeout(() => {
+        for (const ws of this.wsClients) {
+          if (ws.readyState === 1) {
+            try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+          }
+        }
+      }, 33);
+      return;
+    }
+    
+    // Normal frame broadcast
     for (const ws of this.wsClients) {
       if (ws.readyState === 1) {
         try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
@@ -803,12 +887,48 @@ class ScrcpyEngine extends EventEmitter {
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;
     
-    const scaledX = Math.round((x / srcW) * targetW);
-    const scaledY = Math.round((y / srcH) * targetH);
+    let scaledX = Math.round((x / srcW) * targetW);
+    let scaledY = Math.round((y / srcH) * targetH);
+    
+    // Enforce realistic velocity constraints (max 400px/s typical human swipe)
+    if (!this._lastTouchPos) {
+      this._lastTouchPos = { x: scaledX, y: scaledY };
+    } else if (action === 2) { // MOVE event
+      const constrained = TouchProfileSimulator.enforceVelocityConstraints(
+        { x: scaledX, y: scaledY },
+        this._lastTouchPos,
+        16.67, // ~60FPS frame interval (ms)
+        400    // max velocity px/s
+      );
+      scaledX = constrained.x;
+      scaledY = constrained.y;
+      this._lastTouchPos = { x: scaledX, y: scaledY };
+    }
+    
+    // Reset on UP to break velocity chain for next touch
+    if (action === 1) {
+      this._lastTouchPos = null;
+    }
 
     // Clamp to valid range
     const finalX = Math.max(0, Math.min(targetW - 1, scaledX));
     const finalY = Math.max(0, Math.min(targetH - 1, scaledY));
+
+    // Apply realistic pressure curve if DOWN/MOVE (not UP)
+    let finalPressure = pressure;
+    if (action !== 1 && this._pressureCurve) {
+      // Pressure varies based on touch lifecycle (not constant)
+      finalPressure = this._pressureCurve((Date.now() - this._touchStartTime) || 0);
+    } else if (action === 0) {
+      // Generate new pressure curve for this touch sequence
+      this._touchStartTime = Date.now();
+      this._pressureCurve = TouchProfileSimulator.generatePressureCurve(200); // ~200ms typical touch
+      finalPressure = 0.1; // Start with light pressure
+    } else if (action === 1) {
+      // Release pressure on UP
+      this._pressureCurve = null;
+      finalPressure = 0;
+    }
 
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
@@ -818,7 +938,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(finalY, 14);
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
-    buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
+    buf.writeUInt16BE(action === 1 ? 0 : Math.floor(finalPressure * 65535), 22);
     buf.writeInt32BE(0, 24);              // action_button = 0
     buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
     try {
@@ -827,7 +947,7 @@ class ScrcpyEngine extends EventEmitter {
       this.controlSocket.uncork();
       return true;
     } catch (e) { 
-      logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message}`);
+      logger.warn(`[VideoEngine] touch write failed: ${e.message}`);
       return false; 
     }
   }
@@ -876,7 +996,9 @@ class ScrcpyEngine extends EventEmitter {
     try {
       const cs = await this._connectOne(this.videoPort, 10);
       cs.setNoDelay(true);
-      cs.setKeepAlive(true, 1000);
+      // Randomize TCP keep-alive interval (5-20s)
+      const keepAliveInterval = Math.random() * 15000 + 5000; // 5000-20000ms
+      cs.setKeepAlive(true, keepAliveInterval);
       this.controlSocket = cs;
       cs.on('close', () => {
         this.controlSocket = null;
