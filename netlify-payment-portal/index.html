@@ -1011,6 +1011,14 @@
         const streamUrl = d.stream_url || `http://localhost:${d.local_port || 8100}`;
         const deviceName = `${d.device_brand || ''} ${d.device_model || 'Android'} (${d.serial_number})`;
 
+        // Pre-fetch with bypass headers if localtunnel URL to bypass security page
+        if (streamUrl.includes('loca.lt')) {
+          fetch(streamUrl, {
+            headers: { 'bypass-tunnel-reminder': '1', 'User-Agent': 'FlexPulse-Agent/1.0' },
+            mode: 'no-cors'
+          }).catch(() => {});
+        }
+
         return `
           <div class="cctv-card" onclick="openCctvFocusModal('${d.serial_number}', '${streamUrl}', '${deviceName.replace(/'/g, "\\'")}')">
             <div class="cctv-bar">
@@ -1032,7 +1040,26 @@
     function openCctvFocusModal(serial, streamUrl, title) {
       document.getElementById('focusDeviceTitle').innerText = title || 'Device Stream';
       document.getElementById('focusDeviceSerial').innerText = `Serial: ${serial}`;
-      document.getElementById('focusIframe').src = streamUrl;
+      
+      // Pre-fetch with bypass headers to bypass localtunnel security page
+      // This "warms up" the tunnel so iframe loads directly
+      if (streamUrl && streamUrl.includes('loca.lt')) {
+        fetch(streamUrl, {
+          headers: {
+            'bypass-tunnel-reminder': '1',
+            'User-Agent': 'FlexPulse-Agent/1.0'
+          },
+          mode: 'no-cors'
+        }).catch(() => {});
+        
+        // Wait 500ms for bypass to register, then load iframe
+        setTimeout(() => {
+          document.getElementById('focusIframe').src = streamUrl;
+        }, 500);
+      } else {
+        document.getElementById('focusIframe').src = streamUrl;
+      }
+      
       document.getElementById('cctvFocusModal').style.display = 'flex';
     }
 
