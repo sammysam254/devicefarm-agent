@@ -1046,9 +1046,11 @@ async function startStreamServer(serial, port) {
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 function buildStreamUrl(tunnelDomain, port, serial) {
+  // Do NOT include UDID in URL - it leaks device identity to survey apps and websites
+  // UDID will be handled internally via HTTP headers or session management
   const cleanDomain = tunnelDomain.replace(/\/+$/, '');
   const domain = cleanDomain.startsWith('http') ? cleanDomain : `https://${cleanDomain}`;
-  return `${domain}/?udid=${encodeURIComponent(serial)}`;
+  return `${domain}/`;
 }
 
 function killStreamServer(streamProcess) {
