@@ -127,9 +127,9 @@ function handleControl(type, data, serial, engine) {
           const currX = x1 + (x2 - x1) * (i / steps);
           const currY = y1 + (y2 - y1) * (i / steps);
           if (i === steps) {
-            engine.sendTouchEvent(1, currX, currY, W, H);
+            engine.sendTouchEvent(1, currX, currY, W, H); // UP at final position
           } else {
-            engine.sendTouchEvent(2, currX, currY, W, H);
+            engine.sendTouchEvent(2, currX, currY, W, H); // MOVE for intermediate steps
           }
         }, Math.round(i * dt));
       }
@@ -137,7 +137,10 @@ function handleControl(type, data, serial, engine) {
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
     if (!engine.sendKeycode(0, code)) adbInput(serial, `input keyevent ${code}`);
-    else engine.sendKeycode(1, code);
+    else {
+      engine.sendKeycode(0, code);
+      setTimeout(() => engine.sendKeycode(1, code), 50);
+    }
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
     if (!engine.sendText(text)) adbInput(serial, `input text "${text.replace(/"/g, '\\"')}"`);
