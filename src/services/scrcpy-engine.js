@@ -69,6 +69,8 @@ class ScrcpyEngine extends EventEmitter {
     this._screencapActive = false;
     this.enableAudio = true;
     this.audioSocket = null;
+    // Touch events queued before the negotiated stream resolution is known
+    this._pendingTouches = [];
   }
 
   get isReady() {
@@ -184,7 +186,18 @@ class ScrcpyEngine extends EventEmitter {
       this.serverProc.stdout.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
-        // scrcpy prints "Device:" once the encoder is initialised and the socket is open
+        // scrcpy prints "Device: <model> (<WxH>)" once the encoder is initialised.
+        // Parse the negotiated resolution so touch events use the exact same dimensions.
+        const dimMatch = msg.match(/\((\d+)x(\d+)\)/);
+        if (dimMatch) {
+          const sw = parseInt(dimMatch[1], 10);
+          const sh = parseInt(dimMatch[2], 10);
+          if (sw > 0 && sh > 0) {
+            this.videoWidth  = sw;
+            this.videoHeight = sh;
+            logger.info(`[ScrcpyEngine ${this.serial}] Server-negotiated resolution: ${sw}x${sh}`);
+          }
+        }
         if (msg.includes('Device:') || msg.includes('device:')) done();
       });
 
@@ -390,6 +403,14 @@ class ScrcpyEngine extends EventEmitter {
             this.videoWidth = w;
             this.videoHeight = h;
             logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy stream resolution: ${w}x${h}`);
+            // Flush any touch events that arrived before we knew the stream size
+            if (this._pendingTouches.length > 0) {
+              logger.info(`[ScrcpyEngine ${this.serial}] Flushing ${this._pendingTouches.length} queued touch events`);
+              for (const t of this._pendingTouches) {
+                this.sendTouchEvent(t.action, t.x, t.y, t.width, t.height, t.pressure);
+              }
+              this._pendingTouches = [];
+            }
           }
         } catch (_) {}
 
@@ -617,6 +638,16 @@ class ScrcpyEngine extends EventEmitter {
     // size reported by `wm size` only before the first video frame has arrived.
     const targetW = (this.videoWidth  > 0 ? this.videoWidth  : null) || this.screenWidth  || 720;
     const targetH = (this.videoHeight > 0 ? this.videoHeight : null) || this.screenHeight || 1600;
+
+    // If the stream resolution is not yet confirmed, queue the event rather than
+    // sending with wrong dimensions — which would cause the "different device size" warnings.
+    if (this.videoWidth === 0 || this.videoHeight === 0) {
+      // Only queue DOWN and MOVE — skip UP events for stale sequences
+      if (action !== 1 && this._pendingTouches.length < 16) {
+        this._pendingTouches.push({ action, x, y, width, height, pressure });
+      }
+      return false;
+    }
 
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;
