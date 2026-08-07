@@ -55,9 +55,9 @@ class ScrcpyEngine extends EventEmitter {
     this.isRunning     = false;
     this.videoPort     = null;
 
-    // Real device dimensions
-    this.screenWidth  = 720;
-    this.screenHeight = 1600;
+    // Device dimensions — populated by scrcpy stdout and video header
+    this.screenWidth  = 0;
+    this.screenHeight = 0;
 
     // Connected WS clients receiving H264 stream & audio
     this.wsClients = new Set();
@@ -69,8 +69,6 @@ class ScrcpyEngine extends EventEmitter {
     this._screencapActive = false;
     this.enableAudio = true;
     this.audioSocket = null;
-    // Touch events queued before the negotiated stream resolution is known
-    this._pendingTouches = [];
   }
 
   get isReady() {
@@ -403,14 +401,6 @@ class ScrcpyEngine extends EventEmitter {
             this.videoWidth = w;
             this.videoHeight = h;
             logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy stream resolution: ${w}x${h}`);
-            // Flush any touch events that arrived before we knew the stream size
-            if (this._pendingTouches.length > 0) {
-              logger.info(`[ScrcpyEngine ${this.serial}] Flushing ${this._pendingTouches.length} queued touch events`);
-              for (const t of this._pendingTouches) {
-                this.sendTouchEvent(t.action, t.x, t.y, t.width, t.height, t.pressure);
-              }
-              this._pendingTouches = [];
-            }
           }
         } catch (_) {}
 
@@ -632,22 +622,15 @@ class ScrcpyEngine extends EventEmitter {
   sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
 
-    // The scrcpy server validates that the width/height in the touch packet EXACTLY match the
-    // dimensions it negotiated with the encoder. Use the stream resolution (from the video
-    // header) when available — it is the authoritative value. Fall back to the physical screen
-    // size reported by `wm size` only before the first video frame has arrived.
-    const targetW = (this.videoWidth  > 0 ? this.videoWidth  : null) || this.screenWidth  || 720;
-    const targetH = (this.videoHeight > 0 ? this.videoHeight : null) || this.screenHeight || 1600;
+    // Always use the dimensions scrcpy negotiated — videoWidth/videoHeight come from
+    // the video stream header (ground truth). screenWidth/screenHeight come from wm size
+    // and the scrcpy stdout Device: line. All of these are set by scrcpy itself, so the
+    // server will always accept the touch event without a size mismatch warning.
+    const targetW = this.videoWidth  || this.screenWidth  || 720;
+    const targetH = this.videoHeight || this.screenHeight || 1600;
 
-    // If the stream resolution is not yet confirmed, queue the event rather than
-    // sending with wrong dimensions — which would cause the "different device size" warnings.
-    if (this.videoWidth === 0 || this.videoHeight === 0) {
-      // Only queue DOWN and MOVE — skip UP events for stale sequences
-      if (action !== 1 && this._pendingTouches.length < 16) {
-        this._pendingTouches.push({ action, x, y, width, height, pressure });
-      }
-      return false;
-    }
+    // If we don't know the size yet, skip — don't send with wrong dimensions
+    if (!this.videoWidth && !this.screenWidth) return false;
 
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;
