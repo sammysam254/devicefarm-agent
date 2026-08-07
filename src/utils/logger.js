@@ -43,41 +43,6 @@ function sanitizeMessage(message) {
     .replace(/\.jar(?!\s)/gi, '.lib');
 }
 
-// Encryption utility for log file protection
-class LogEncryptor {
-  constructor() {
-    // Use a static key derived from machine hardware + module path (not random)
-    // This ensures logs can be encrypted/decrypted consistently on same machine
-    const keyMaterial = require('os').hostname() + __dirname;
-    this.key = crypto.createHash('sha256').update(keyMaterial).digest();
-  }
-  
-  encrypt(plaintext) {
-    // Use random IV for each message to prevent pattern detection
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', this.key, iv);
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    // Return IV + encrypted data
-    return iv.toString('hex') + ':' + encrypted;
-  }
-  
-  decrypt(ciphertext) {
-    try {
-      const [ivHex, encrypted] = ciphertext.split(':');
-      const iv = Buffer.from(ivHex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-cbc', this.key, iv);
-      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-      decrypted += decipher.final('utf8');
-      return decrypted;
-    } catch (_) {
-      return ciphertext; // Return original if decrypt fails
-    }
-  }
-}
-
-const logEncryptor = new LogEncryptor();
-
 function getLogDir() {
   try {
     return path.join(app.getPath('userData'), 'logs');
@@ -137,4 +102,3 @@ process.on('unhandledRejection', (reason) => {
 module.exports = logger;
 module.exports.hashSerial = hashSerial;
 module.exports.sanitizeMessage = sanitizeMessage;
-module.exports.logEncryptor = logEncryptor;
