@@ -10,6 +10,14 @@ const ScrcpyEngine = require('./scrcpy-engine');
 const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
 
+// ─── Localtunnel Bypass Header ───────────────────────────────────────────────
+// Prevents "You are about to visit" security page that appears once per IP every 7 days
+// Reference: localtunnel shows this page to prevent abuse (C2, malware, phishing)
+const LOCALTUNNEL_BYPASS_HEADERS = {
+  'bypass-tunnel-reminder': '1',
+  'User-Agent': 'FlexPulse-Agent/1.0 (+https://stream.dennoh.site)'
+};
+
 // ─── Config & ADB ────────────────────────────────────────────────────────────
 
 function loadConfig() {

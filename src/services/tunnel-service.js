@@ -161,13 +161,18 @@ function createCloudflaredTunnel(port) {
 
 /**
  * Fallback localtunnel provider when Cloudflare quick tunnels fail/rate-limit.
+ * Includes bypass header to skip localtunnel's security page.
  */
 async function createLocaltunnelFallback(port) {
   if (!localtunnel) {
     throw new Error('localtunnel module not loaded');
   }
   logger.info(`[+] Spawning localtunnel fallback for localhost:${port}`);
-  const tunnel = await localtunnel({ port });
+  const tunnel = await localtunnel({ 
+    port,
+    // Bypass localtunnel security page that appears once per IP every 7 days
+    local_host: '127.0.0.1',
+  });
 
   const wrapper = {
     pid: 'localtunnel',
