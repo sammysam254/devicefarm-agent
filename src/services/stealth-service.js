@@ -96,10 +96,7 @@ async function applyDeviceStealth(serial, stealthRootEnabled = true) {
   ];
 
   // 5. Simulate Real Physical Battery (Discharging handheld status instead of USB device farm PC connection)
-  const batteryCmds = [
-    'dumpsys battery set usb 0',
-    'dumpsys battery set status 3', // BATTERY_STATUS_DISCHARGING (mimics handheld battery use)
-  ];
+  const batteryCmds = [];  // Disabled — don't interfere with charging
 
   const allCmds = [...settingsCmds, ...remoteControlCmds, ...locationCmds, ...batteryCmds];
   for (const cmd of allCmds) {
