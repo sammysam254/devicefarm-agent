@@ -70,92 +70,109 @@ function _readUEGolomb(data, bitOffset) {
 
 function parseSpsWidth(payload) {
   const start = _findSpsStart(payload);
-  if (start < 0 || start + 4 >= payload.length) return 0;
-  // RBSP: skip forbidden_zero_bit(1) + nal_ref_idc(2) + nal_unit_type(5) = already past NAL header
-  // SPS RBSP starts: profile_idc(8) + constraint_flags(8) + level_idc(8) + seq_parameter_set_id(UE)
-  let bit = 0;
-  // profile_idc
-  const profileIdc = payload[start];
-  bit = (start * 8) + 8;
-  // constraint_set flags + reserved (8 bits)
-  bit += 8;
-  // level_idc (8 bits)
-  bit += 8;
-  // seq_parameter_set_id
-  let r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-  // chroma_format_idc if profile is 100/110/122/244/44/83/86/118/128/138
-  if ([100,110,122,244,44,83,86,118,128,138].includes(profileIdc)) {
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // chroma_format_idc
-    if (r.val === 3) bit++; // separate_colour_plane_flag
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_luma_minus8
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_chroma_minus8
-    bit++; // qpprime_y_zero_transform_bypass_flag
-    const seqScalingMatrixPresent = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
-    if (seqScalingMatrixPresent) return 0; // too complex to parse, bail
+  if (start < 0 || start + 10 >= payload.length) return 0;
+  try {
+    let bit = 0;
+    const profileIdc = payload[start];
+    bit = (start * 8) + 8 + 8 + 8; // skip profile/constraints/level
+    
+    // seq_parameter_set_id (UE)
+    let r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+    
+    // For profile 100/110/122/244 — these need chroma/bit-depth parsing (skip for now)
+    const needsExtended = [100, 110, 122, 244, 44, 83, 86, 118, 128, 138].includes(profileIdc);
+    if (needsExtended && start + 20 >= payload.length) return 0;
+    
+    if (needsExtended) {
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // chroma_format_idc
+      if (r.val === 3) bit++; // separate_colour_plane_flag
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_luma_minus8
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_chroma_minus8
+      bit++; // qpprime_y_zero_transform_bypass_flag
+      const seqScalingMatrixPresent = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+      if (seqScalingMatrixPresent) return 0; // too complex
+    }
+    
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // log2_max_frame_num_minus4
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_order_cnt_type
+    if (r.val === 0) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
+    else if (r.val === 1) {
+      bit++; // delta_pic_order_always_zero_flag
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // offset_for_non_ref_pic
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // offset_for_top_to_bottom_field
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // num_ref_frames_in_pic_order_cnt_cycle
+      for (let i = 0; i < Math.min(r.val, 256); i++) { 
+        r = _readUEGolomb(payload, bit); bit = r.bitOffset; 
+      }
+    }
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // max_num_ref_frames
+    bit++; // gaps_in_frame_num_value_allowed_flag
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_width_in_mbs_minus1
+    const widthInMbs = r.val + 1;
+    return Math.max(16, widthInMbs * 16);
+  } catch (err) {
+    return 0;
   }
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // log2_max_frame_num_minus4
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_order_cnt_type
-  if (r.val === 0) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; } // log2_max_pic_order_cnt_lsb_minus4
-  else if (r.val === 1) {
-    bit++; // delta_pic_order_always_zero_flag
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // offset_for_non_ref_pic (SE, treat as UE for size)
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // offset_for_top_to_bottom_field
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // num_ref_frames_in_pic_order_cnt_cycle
-    for (let i = 0; i < r.val; i++) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
-  }
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // max_num_ref_frames
-  bit++; // gaps_in_frame_num_value_allowed_flag
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_width_in_mbs_minus1
-  const widthInMbs = r.val + 1;
-  return widthInMbs * 16;
 }
 
 function parseSpsHeight(payload) {
   const start = _findSpsStart(payload);
-  if (start < 0 || start + 4 >= payload.length) return 0;
-  let bit = 0;
-  const profileIdc = payload[start];
-  bit = (start * 8) + 8 + 8 + 8;
-  let r = _readUEGolomb(payload, bit); bit = r.bitOffset; // seq_parameter_set_id
-  if ([100,110,122,244,44,83,86,118,128,138].includes(profileIdc)) {
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-    if (r.val === 3) bit++;
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+  if (start < 0 || start + 10 >= payload.length) return 0;
+  try {
+    let bit = 0;
+    const profileIdc = payload[start];
+    bit = (start * 8) + 8 + 8 + 8;
+    
+    let r = _readUEGolomb(payload, bit); bit = r.bitOffset; // seq_parameter_set_id
+    
+    const needsExtended = [100, 110, 122, 244, 44, 83, 86, 118, 128, 138].includes(profileIdc);
+    if (needsExtended && start + 20 >= payload.length) return 0;
+    
+    if (needsExtended) {
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // chroma_format_idc
+      if (r.val === 3) bit++;
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_luma_minus8
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // bit_depth_chroma_minus8
+      bit++;
+      const sm = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+      if (sm) return 0;
+    }
+    
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // log2_max_frame_num_minus4
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_order_cnt_type
+    if (r.val === 0) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
+    else if (r.val === 1) {
+      bit++;
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+      for (let i = 0; i < Math.min(r.val, 256); i++) { 
+        r = _readUEGolomb(payload, bit); bit = r.bitOffset; 
+      }
+    }
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // max_num_ref_frames
     bit++;
-    const sm = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
-    if (sm) return 0;
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_width_in_mbs_minus1
+    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_height_in_map_units_minus1
+    const heightInMapUnits = r.val + 1;
+    const frameMbsOnly = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+    const heightInMbs = frameMbsOnly ? heightInMapUnits : heightInMapUnits * 2;
+    let height = heightInMbs * 16;
+    
+    // Parse frame cropping if present
+    bit++; // direct_8x8_inference_flag
+    const frameCroppingFlag = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
+    if (frameCroppingFlag && start + 30 < payload.length) {
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_left
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_right
+      r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_top
+      const cropBottom = r.val; r = _readUEGolomb(payload, bit); bit = r.bitOffset;
+      height -= (cropBottom + r.val) * (frameMbsOnly ? 2 : 4);
+    }
+    return Math.max(16, height);
+  } catch (err) {
+    return 0;
   }
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_order_cnt_type
-  if (r.val === 0) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
-  else if (r.val === 1) {
-    bit++;
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-    for (let i = 0; i < r.val; i++) { r = _readUEGolomb(payload, bit); bit = r.bitOffset; }
-  }
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // max_num_ref_frames
-  bit++;
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_width_in_mbs_minus1
-  r = _readUEGolomb(payload, bit); bit = r.bitOffset; // pic_height_in_map_units_minus1
-  const heightInMapUnits = r.val + 1;
-  // frame_mbs_only_flag
-  const frameMbsOnly = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
-  const heightInMbs = frameMbsOnly ? heightInMapUnits : heightInMapUnits * 2;
-  let height = heightInMbs * 16;
-  // crop bottom
-  bit++; // direct_8x8_inference_flag if !frame_mbs_only — skip, approximate
-  const frameCroppingFlag = (payload[bit >> 3] >> (7 - (bit & 7))) & 1; bit++;
-  if (frameCroppingFlag) {
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_left
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_right
-    r = _readUEGolomb(payload, bit); bit = r.bitOffset; // crop_top
-    const cropBottom = r.val; r = _readUEGolomb(payload, bit); bit = r.bitOffset;
-    height -= (cropBottom + r.val) * (frameMbsOnly ? 2 : 4);
-  }
-  return height;
 }
 
 /**
@@ -573,18 +590,22 @@ class ScrcpyEngine extends EventEmitter {
           logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
 
           // Parse width/height from SPS NAL — the most authoritative source.
-          // If the header parse gave us wrong dimensions, this corrects them.
+          // If parsing fails, keep the dimensions we already have.
           try {
             const spsW = parseSpsWidth(payload);
             const spsH = parseSpsHeight(payload);
-            if (spsW > 0 && spsH > 0) {
+            if (spsW > 16 && spsH > 16 && spsW < 10000 && spsH < 10000) {
               if (this.videoWidth !== spsW || this.videoHeight !== spsH) {
-                logger.info(`[ScrcpyEngine ${this.serial}] SPS resolution: ${spsW}x${spsH} (was ${this.videoWidth}x${this.videoHeight})`);
+                logger.info(`[ScrcpyEngine ${this.serial}] SPS resolution: ${spsW}x${spsH} (previously ${this.videoWidth}x${this.videoHeight})`);
               }
               this.videoWidth  = spsW;
               this.videoHeight = spsH;
+            } else {
+              logger.warn(`[ScrcpyEngine ${this.serial}] SPS parse gave invalid dims ${spsW}x${spsH}, keeping ${this.videoWidth}x${this.videoHeight}`);
             }
-          } catch (_) {}
+          } catch (err) {
+            logger.warn(`[ScrcpyEngine ${this.serial}] SPS parse error: ${err.message}`);
+          }
         }
 
         if (isIdr) {
