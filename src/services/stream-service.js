@@ -98,63 +98,33 @@ function handleControl(type, data, serial, engine) {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
-    const sent = engine.isReady && engine.sendTouchEvent(action, x, y, W, H);
-    if (!sent) {
-      if (action === 0) {
-        const rx = Math.round((x / W) * realW);
-        const ry = Math.round((y / H) * realH);
-        adbInput(serial, `input tap ${rx} ${ry}`);
-      }
-    }
+    engine.sendTouchEvent(action, x, y, W, H);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    const rx = Math.round((x / W) * realW);
-    const ry = Math.round((y / H) * realH);
-    const sent = engine.isReady && engine.sendTouchEvent(0, x, y, W, H);
-    if (!sent) {
-      adbInput(serial, `input tap ${rx} ${ry}`);
-    } else {
-      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), 80);
-    }
+    engine.sendTouchEvent(0, x, y, W, H);
+    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), 80);
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 100;
-    const rx1 = Math.round((x1 / W) * realW), ry1 = Math.round((y1 / H) * realH);
-    const rx2 = Math.round((x2 / W) * realW), ry2 = Math.round((y2 / H) * realH);
-    const sent = engine.isReady && engine.sendTouchEvent(0, x1, y1, W, H);
-    if (!sent) {
-      // Fallback: use ADB swipe command (no scrcpy available)
-      adbInput(serial, `input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`);
-    } else {
-      // Scrcpy swipe: DOWN then interpolated MOVEs then UP
-      const steps = Math.max(5, Math.floor(dur / 15));
-      const dt = dur / steps;
-      for (let i = 1; i <= steps; i++) {
-        setTimeout(() => {
-          const currX = x1 + (x2 - x1) * (i / steps);
-          const currY = y1 + (y2 - y1) * (i / steps);
-          const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
-          engine.sendTouchEvent(action, currX, currY, W, H);
-        }, Math.round(i * dt));
-      }
+    engine.sendTouchEvent(0, x1, y1, W, H);
+    const steps = Math.max(5, Math.floor(dur / 15));
+    const dt = dur / steps;
+    for (let i = 1; i <= steps; i++) {
+      setTimeout(() => {
+        const currX = x1 + (x2 - x1) * (i / steps);
+        const currY = y1 + (y2 - y1) * (i / steps);
+        const action = (i === steps) ? 1 : 2;
+        engine.sendTouchEvent(action, currX, currY, W, H);
+      }, Math.round(i * dt));
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    const sent = engine.isReady && engine.sendKeycode(0, code);
-    if (sent) {
-      // Scrcpy succeeded — schedule UP event 50ms later
-      setTimeout(() => engine.sendKeycode(1, code), 50);
-    } else if (engine.isReady) {
-      // Scrcpy socket exists but write failed — try fallback
-      adbInput(serial, `input keyevent ${code}`);
-    } else {
-      // Scrcpy not ready — use fallback immediately
-      adbInput(serial, `input keyevent ${code}`);
-    }
+    engine.sendKeycode(0, code);
+    setTimeout(() => engine.sendKeycode(1, code), 50);
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
-    if (!engine.sendText(text)) adbInput(serial, `input text "${text.replace(/"/g, '\\"')}"`);
+    engine.sendText(text);
   } else if (type === 'reboot') {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
   } else if (type === 'expand_notifications' || type === 'notifications') {
@@ -379,6 +349,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const h = f.displayHeight || f.codedHeight || f.height;
     if (w && h && (canvas.width !== w || canvas.height !== h)) {
       canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+      console.log('[Canvas] Resized to ' + w + 'x' + h);
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
@@ -767,22 +738,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   // ── HTTP screencap fallback ───────────────────────────────────────────────
-  // Used when WS is unavailable or frames have stalled. Polls /screen.jpg.
-  // Automatically stops when the WS recovers (ws.onmessage clears fbRunning).
+  // DISABLED — strict scrcpy H264 only, no fallback
   let fbRunning = false;
   function startFallback() {
-    if (fbRunning) return;
-    fbRunning = true;
-    modeText.textContent = 'SCREENCAP';
-    (function pull() {
-      if (!fbRunning) return;
-      const q = location.search ? location.search + '&t=' + Date.now() : '?t=' + Date.now();
-      fetch('/screen.jpg' + q)
-        .then(function(r) { return r.blob(); })
-        .then(function(b) { return createImageBitmap(b); })
-        .then(function(bmp) { queueDraw(bmp); setTimeout(pull, 67); })
-        .catch(function() { setTimeout(pull, 250); });
-    })();
+    // Disabled
   }
 
   // ── Control: WS-only, never fetch ───────────────────────────────────────
@@ -804,9 +763,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const r = canvas.getBoundingClientRect();
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    const w = canvas.width || nativeW || ${screenW};
+    const h = canvas.height || nativeH || ${screenH};
     return {
-      x: Math.round((cx - r.left) * (nativeW / r.width)),
-      y: Math.round((cy - r.top)  * (nativeH / r.height)),
+      x: Math.round(Math.max(0, Math.min(w, (cx - r.left) * (w / r.width)))),
+      y: Math.round(Math.max(0, Math.min(h, (cy - r.top)  * (h / r.height)))),
       cx, cy
     };
   }
