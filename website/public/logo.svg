@@ -1,0 +1,35 @@
+<svg viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Icon -->
+  <g transform="translate(10, 10)">
+    <!-- Orange background -->
+    <rect width="80" height="80" fill="#F59E0B" rx="16"/>
+    
+    <!-- Power button outline circles -->
+    <circle cx="40" cy="50" r="15" fill="none" stroke="white" stroke-width="4"/>
+    <circle cx="40" cy="50" r="23" fill="none" stroke="white" stroke-width="4"/>
+    
+    <!-- Center power button -->
+    <circle cx="40" cy="50" r="7" fill="white"/>
+    
+    <!-- Three upward arrows -->
+    <!-- Left arrow -->
+    <g transform="translate(25, 20)">
+      <path d="M 0 10 L 0 0 M -4 6 L 0 0 L 4 6" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </g>
+    
+    <!-- Center arrow -->
+    <g transform="translate(40, 10)">
+      <path d="M 0 12 L 0 0 M -5 7 L 0 0 L 5 7" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </g>
+    
+    <!-- Right arrow -->
+    <g transform="translate(55, 20)">
+      <path d="M 0 10 L 0 0 M -4 6 L 0 0 L 4 6" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </g>
+  </g>
+  
+  <!-- Text -->
+  <text x="110" y="60" font-family="system-ui, -apple-system, sans-serif" font-size="48" font-weight="800" fill="#1F2937">
+    FlexPulse
+  </text>
+</svg>
