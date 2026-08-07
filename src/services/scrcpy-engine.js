@@ -610,10 +610,13 @@ class ScrcpyEngine extends EventEmitter {
    */
   sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-    
-    // Scrcpy 2.4 server expects touch coordinates scaled to the real device physical screen size!
-    const targetW = this.screenWidth  || 720;
-    const targetH = this.screenHeight || 1600;
+
+    // The scrcpy server validates that the width/height in the touch packet EXACTLY match the
+    // dimensions it negotiated with the encoder. Use the stream resolution (from the video
+    // header) when available — it is the authoritative value. Fall back to the physical screen
+    // size reported by `wm size` only before the first video frame has arrived.
+    const targetW = (this.videoWidth  > 0 ? this.videoWidth  : null) || this.screenWidth  || 720;
+    const targetH = (this.videoHeight > 0 ? this.videoHeight : null) || this.screenHeight || 1600;
 
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;

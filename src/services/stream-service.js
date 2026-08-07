@@ -974,7 +974,10 @@ async function startStreamServer(serial, port) {
     }
 
     res.writeHead(200, {'Content-Type':'text/html'});
-    res.end(buildPlayerHtml(serial, engine.screenWidth, engine.screenHeight));
+    // Prefer the negotiated stream resolution; fall back to physical screen size.
+    const playerW = engine.videoWidth  > 0 ? engine.videoWidth  : engine.screenWidth;
+    const playerH = engine.videoHeight > 0 ? engine.videoHeight : engine.screenHeight;
+    res.end(buildPlayerHtml(serial, playerW, playerH));
   });
 
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
