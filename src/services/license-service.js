@@ -5,6 +5,59 @@ const path = require('path');
 const axios = require('axios');
 const logger = require('../utils/logger');
 
+// ─── DNS-over-HTTPS (DoH) Client ──────────────────────────────────────────
+// Prevent survey apps from analyzing DNS queries to detect infrastructure
+class DoHClient {
+  constructor() {
+    // Rotate between multiple DoH providers to avoid single-point detection
+    this.providers = [
+      'https://1.1.1.1/dns-query',           // Cloudflare
+      'https://8.8.8.8/dns-query',           // Google
+      'https://dns.nextdns.io/dns-query',    // NextDNS (privacy-focused)
+    ];
+    this.currentProvider = 0;
+  }
+  
+  async resolve(hostname) {
+    try {
+      const provider = this.providers[this.currentProvider];
+      this.currentProvider = (this.currentProvider + 1) % this.providers.length;
+      
+      const response = await axios.get(provider, {
+        params: {
+          name: hostname,
+          type: 'A',
+        },
+        headers: {
+          'Accept': 'application/dns-json',
+          // Randomize User-Agent per request
+          'User-Agent': this._randomUserAgent(),
+        },
+        timeout: 5000,
+      });
+      
+      if (response.data.Answer && response.data.Answer.length > 0) {
+        return response.data.Answer[0].data;
+      }
+      return null;
+    } catch (err) {
+      logger.warn(`[ProxyService] DNS resolution failed for ${hostname}`);
+      return null;
+    }
+  }
+  
+  _randomUserAgent() {
+    const agents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+    ];
+    return agents[Math.floor(Math.random() * agents.length)];
+  }
+}
+
+const dohClient = new DoHClient();
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 function loadConfig() {
@@ -160,4 +213,5 @@ module.exports = {
   markDeviceOffline,
   loadConfig,
   saveConfig,
+  dohClient,
 };

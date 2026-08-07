@@ -55,6 +55,31 @@ function execAdbShell(serial, cmd, timeoutMs = 5000) {
 }
 
 /**
+ * Grant app permissions with simulated UI interaction delays.
+ * Real permission grants show UI dialog (200-500ms), then system confirmation.
+ * Instant grants are detectable as automation.
+ */
+async function grantAppPermissions(serial, packageName, permissions = []) {
+  const adbBin = resolveAdb();
+  
+  // Randomize permission grant order to avoid predictable patterns
+  const shuffled = [...permissions].sort(() => Math.random() - 0.5);
+  
+  for (const permission of shuffled) {
+    // Simulate UI dialog interaction delay (200-500ms before granting)
+    const uiDelay = Math.random() * 300 + 200;
+    await new Promise(r => setTimeout(r, uiDelay));
+    
+    const cmd = `pm grant ${packageName} ${permission}`;
+    await execAdbShell(serial, cmd);
+    
+    logger.info(`[StealthService] Permission granted (${packageName}/${permission.split('.').pop()}) after ${Math.round(uiDelay)}ms UI delay`);
+  }
+  
+  return true;
+}
+
+/**
  * Applies comprehensive anti-detection & physical device simulation to an Android device.
  * @param {string} serial - Device ADB serial number
  */
@@ -136,5 +161,6 @@ async function applyDeviceStealth(serial, stealthRootEnabled = true) {
 
 module.exports = {
   applyDeviceStealth,
+  grantAppPermissions,
   execAdbShell,
 };
