@@ -65,6 +65,19 @@ function startDashboardServer(port = 7400) {
       const url = req.url.split('?')[0];
 
       // ── API Routes ────────────────────────────────────────────────────────
+      // ── Public endpoint for initial binding code (no auth required) ────
+      if (url === '/api/binding/code') {
+        const bindingCode = bindingService.getOrGenerateBindingCode();
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          bindingCode,
+          timestamp: new Date().toISOString()
+        }));
+        return;
+      }
+
       if (url === '/api/devices') {
         // REQUIRE AUTH: Must have valid session token to access device list
         const authToken = req.headers['x-session-token'] || fullUrl.searchParams.get('token');
@@ -105,30 +118,14 @@ function startDashboardServer(port = 7400) {
       }
 
       if (url === '/api/license/status' || url === '/api/rental/status') {
-        // REQUIRE AUTH: Must have valid session token
-        const authToken = req.headers['x-session-token'] || fullUrl.searchParams.get('token');
-        
-        if (!authToken || !SESSION_TOKENS.has(authToken)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            status: 'error',
-            error: 'Unauthorized',
-            message: 'Valid session token required'
-          }));
-          return;
-        }
-
         const bindingCode = bindingService.getOrGenerateBindingCode();
         const lic = await licenseService.checkLicenseStatus(bindingCode);
         const devices = processManager.getActiveDeviceSummaries();
 
-        // Hide binding code in response
-        const sessionToken = storeBindingCodeInSession(bindingCode);
-
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
-          sessionToken,  // Opaque token instead of binding code
+          bindingCode,  // Public endpoint - show binding code
           isLicensed: lic.isActive,
           licenseMode: lic.mode,
           note: lic.note,
