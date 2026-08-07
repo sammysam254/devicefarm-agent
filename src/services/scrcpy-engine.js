@@ -806,12 +806,16 @@ class ScrcpyEngine extends EventEmitter {
     const scaledX = Math.round((x / srcW) * targetW);
     const scaledY = Math.round((y / srcH) * targetH);
 
+    // Clamp to valid range
+    const finalX = Math.max(0, Math.min(targetW - 1, scaledX));
+    const finalY = Math.max(0, Math.min(targetH - 1, scaledY));
+
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
     buf.writeBigInt64BE(0n, 2);           // pointerId 0n (finger 0)
-    buf.writeInt32BE(Math.max(0, Math.min(targetW, scaledX)), 10);
-    buf.writeInt32BE(Math.max(0, Math.min(targetH, scaledY)), 14);
+    buf.writeInt32BE(finalX, 10);
+    buf.writeInt32BE(finalY, 14);
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
@@ -823,7 +827,7 @@ class ScrcpyEngine extends EventEmitter {
       this.controlSocket.uncork();
       return true;
     } catch (e) { 
-      logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message} (sock=${this.controlSocket ? 'exists' : 'null'}, destroyed=${this.controlSocket?.destroyed})`);
+      logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message}`);
       return false; 
     }
   }

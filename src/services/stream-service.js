@@ -107,15 +107,27 @@ function handleControl(type, data, serial, engine) {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 100;
-    engine.sendTouchEvent(0, x1, y1, W, H);
+    
+    // Send DOWN at start position
+    const downOk = engine.sendTouchEvent(0, x1, y1, W, H);
+    if (!downOk) {
+      logger.warn(`[StreamServer] Swipe DOWN failed for ${serial}`);
+      return;
+    }
+    
+    logger.info(`[StreamServer] Swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
+    
     const steps = Math.max(5, Math.floor(dur / 15));
     const dt = dur / steps;
     for (let i = 1; i <= steps; i++) {
       setTimeout(() => {
         const currX = x1 + (x2 - x1) * (i / steps);
         const currY = y1 + (y2 - y1) * (i / steps);
-        const action = (i === steps) ? 1 : 2;
-        engine.sendTouchEvent(action, currX, currY, W, H);
+        const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
+        const ok = engine.sendTouchEvent(action, currX, currY, W, H);
+        if (!ok) {
+          logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
+        }
       }, Math.round(i * dt));
     }
   } else if (type === 'code' || type === 'key') {
@@ -763,11 +775,24 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const r = canvas.getBoundingClientRect();
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    const w = canvas.width || nativeW || ${screenW};
-    const h = canvas.height || nativeH || ${screenH};
+    
+    // Use canvas size first (actual rendered), fall back to nativeW/H, then server defaults
+    const canvasW = canvas.width || nativeW || ${screenW};
+    const canvasH = canvas.height || nativeH || ${screenH};
+    
+    // rect dimensions (CSS pixels on screen)
+    const rectW = r.width || canvasW;
+    const rectH = r.height || canvasH;
+    
+    // Prevent division by zero
+    if (rectW === 0 || rectH === 0) return { x: 0, y: 0, cx, cy };
+    
+    const x = Math.round((cx - r.left) * (canvasW / rectW));
+    const y = Math.round((cy - r.top)  * (canvasH / rectH));
+    
     return {
-      x: Math.round(Math.max(0, Math.min(w, (cx - r.left) * (w / r.width)))),
-      y: Math.round(Math.max(0, Math.min(h, (cy - r.top)  * (h / r.height)))),
+      x: Math.max(0, Math.min(canvasW - 1, x)),
+      y: Math.max(0, Math.min(canvasH - 1, y)),
       cx, cy
     };
   }
