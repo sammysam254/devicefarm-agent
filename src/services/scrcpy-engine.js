@@ -355,7 +355,6 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=2500000',
       'max_fps=60',
       'i_frame_interval=2',
       'send_frame_meta=true',
@@ -754,37 +753,7 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload) {
-    // Simulate realistic frame drops (2-5% drop rate at 60fps = drop ~1-3 frames per second)
-    // Survey apps detect TOO SMOOTH streaming (perfect frame delivery is unnatural)
-    const FRAME_DROP_PROBABILITY = 0.03; // 3% frames dropped
-    const STUTTER_PROBABILITY = 0.005;   // 0.5% chance of brief stutter (frame delivered twice)
-    
-    if (Math.random() < FRAME_DROP_PROBABILITY) {
-      // Silently drop this frame (survives as missing frame in sequence)
-      return;
-    }
-    
-    // Occasional stutter: deliver frame twice with slight delay
-    if (Math.random() < STUTTER_PROBABILITY) {
-      for (const ws of this.wsClients) {
-        if (ws.readyState === 1) {
-          try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
-        } else {
-          this.wsClients.delete(ws);
-        }
-      }
-      // Deliver again after 33ms delay (simulating frame held)
-      setTimeout(() => {
-        for (const ws of this.wsClients) {
-          if (ws.readyState === 1) {
-            try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
-          }
-        }
-      }, 33);
-      return;
-    }
-    
-    // Normal frame broadcast
+    // Direct raw H264 frame broadcast (zero artificial frame drops or stutters)
     for (const ws of this.wsClients) {
       if (ws.readyState === 1) {
         try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
@@ -887,48 +856,14 @@ class ScrcpyEngine extends EventEmitter {
     const srcW = (width  > 10) ? width  : targetW;
     const srcH = (height > 10) ? height : targetH;
     
-    let scaledX = Math.round((x / srcW) * targetW);
-    let scaledY = Math.round((y / srcH) * targetH);
-    
-    // Enforce realistic velocity constraints (max 400px/s typical human swipe)
-    if (!this._lastTouchPos) {
-      this._lastTouchPos = { x: scaledX, y: scaledY };
-    } else if (action === 2) { // MOVE event
-      const constrained = TouchProfileSimulator.enforceVelocityConstraints(
-        { x: scaledX, y: scaledY },
-        this._lastTouchPos,
-        16.67, // ~60FPS frame interval (ms)
-        400    // max velocity px/s
-      );
-      scaledX = constrained.x;
-      scaledY = constrained.y;
-      this._lastTouchPos = { x: scaledX, y: scaledY };
-    }
-    
-    // Reset on UP to break velocity chain for next touch
-    if (action === 1) {
-      this._lastTouchPos = null;
-    }
+    const scaledX = Math.round((x / srcW) * targetW);
+    const scaledY = Math.round((y / srcH) * targetH);
 
     // Clamp to valid range
     const finalX = Math.max(0, Math.min(targetW - 1, scaledX));
     const finalY = Math.max(0, Math.min(targetH - 1, scaledY));
 
-    // Apply realistic pressure curve if DOWN/MOVE (not UP)
-    let finalPressure = pressure;
-    if (action !== 1 && this._pressureCurve) {
-      // Pressure varies based on touch lifecycle (not constant)
-      finalPressure = this._pressureCurve((Date.now() - this._touchStartTime) || 0);
-    } else if (action === 0) {
-      // Generate new pressure curve for this touch sequence
-      this._touchStartTime = Date.now();
-      this._pressureCurve = TouchProfileSimulator.generatePressureCurve(200); // ~200ms typical touch
-      finalPressure = 0.1; // Start with light pressure
-    } else if (action === 1) {
-      // Release pressure on UP
-      this._pressureCurve = null;
-      finalPressure = 0;
-    }
+    const finalPressure = action === 1 ? 0 : (typeof pressure === 'number' && pressure >= 0 ? pressure : 1.0);
 
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
@@ -938,7 +873,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(finalY, 14);
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
-    buf.writeUInt16BE(action === 1 ? 0 : Math.floor(finalPressure * 65535), 22);
+    buf.writeUInt16BE(Math.floor(finalPressure * 65535), 22);
     buf.writeInt32BE(0, 24);              // action_button = 0
     buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
     try {

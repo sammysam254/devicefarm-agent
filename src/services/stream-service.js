@@ -106,86 +106,65 @@ function get(data, key) {
 }
 
 function handleControl(type, data, serial, engine) {
-  // Randomize timing to prevent automation detection by survey apps
-  const randomDelay = (min, max) => Math.random() * (max - min) + min;
-  
-  // Inject realistic network + rendering latency (100-200ms total)
-  // Real devices have: 50-150ms network + 33-50ms render + 20-40ms OS processing
-  const networkLatency = randomDelay(50, 100);
-  
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
-
-  const realW = engine.screenWidth  || 720;
-  const realH = engine.screenHeight || 1600;
 
   if (type === 'touch') {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
-    
-    // Delay touch events to simulate network latency
-    setTimeout(() => {
-      engine.sendTouchEvent(action, x, y, W, H);
-    }, networkLatency);
+    const pressure = get(data, 'pressure') !== undefined ? parseFloat(get(data, 'pressure')) : (action === 1 ? 0 : 1.0);
+    engine.sendTouchEvent(action, x, y, W, H, pressure);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    
-    // DOWN event
+    // Immediate touch DOWN with realistic contact pressure
+    engine.sendTouchEvent(0, x, y, W, H, 0.4);
+    // Natural human tap hold duration (~60ms)
     setTimeout(() => {
-      engine.sendTouchEvent(0, x, y, W, H);
-    }, networkLatency);
-    
-    // Human tap DOWN→UP delay: 80-250ms (not fixed 80ms)
-    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), networkLatency + randomDelay(80, 250));
+      engine.sendTouchEvent(1, x, y, W, H, 0);
+    }, 60);
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = parseInt(get(data, 'duration'), 10) || 100;
-    
-    // Send DOWN at start position (with latency)
-    const downOk = () => {
-      return engine.sendTouchEvent(0, x1, y1, W, H);
-    };
-    
-    setTimeout(() => {
-      if (!downOk()) {
-        logger.warn(`[StreamServer] Swipe DOWN failed for ${serial}`);
-        return;
-      }
+    const dur = Math.max(80, parseInt(get(data, 'duration'), 10) || 160);
+
+    // Human Touch Swipe: Instant start + Smooth S-curve (Smoothstep easing) + Realistic Pressure Ramp
+    // 1. Instant DOWN at start coordinate (0ms delay)
+    const startPress = 0.25;
+    engine.sendTouchEvent(0, x1, y1, W, H, startPress);
+
+    // 2. Interpolate intermediate MOVE steps at ~60Hz (16ms per frame)
+    const stepCount = Math.max(4, Math.round(dur / 16));
+    const dt = dur / stepCount;
+
+    for (let i = 1; i <= stepCount; i++) {
+      const t = i / stepCount;
+      // Smoothstep (S-curve): acceleration -> peak speed -> deceleration (natural human finger momentum)
+      const ease = t * t * (3 - 2 * t);
+      const currX = x1 + (x2 - x1) * ease;
+      const currY = y1 + (y2 - y1) * ease;
       
-      logger.info(`[StreamServer] Swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
-      
-      const steps = Math.max(5, Math.floor(dur / 15));
-      const dt = dur / steps;
-      for (let i = 1; i <= steps; i++) {
-        // Randomize step intervals (10-25ms) for realistic swipe motion
-        const stepDelay = Math.round(i * dt + randomDelay(-5, 5));
-        setTimeout(() => {
-          const currX = x1 + (x2 - x1) * (i / steps);
-          const currY = y1 + (y2 - y1) * (i / steps);
-          const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
-          const ok = engine.sendTouchEvent(action, currX, currY, W, H);
-          if (!ok) {
-            logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
-          }
-        }, stepDelay);
-      }
-    }, networkLatency);
+      // Human pressure profile: light start -> firm mid-touch -> light release
+      const press = Math.sin(t * Math.PI) * 0.65 + 0.25;
+      const delayMs = Math.round(i * dt);
+
+      setTimeout(() => {
+        if (i === stepCount) {
+          // Final step: MOVE then UP
+          engine.sendTouchEvent(2, currX, currY, W, H, 0.2);
+          engine.sendTouchEvent(1, currX, currY, W, H, 0);
+        } else {
+          engine.sendTouchEvent(2, currX, currY, W, H, press);
+        }
+      }, delayMs);
+    }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    
-    setTimeout(() => {
-      engine.sendKeycode(0, code);
-      // Key press duration: 50-150ms (not fixed 50ms)
-      setTimeout(() => engine.sendKeycode(1, code), randomDelay(50, 150));
-    }, networkLatency);
+    engine.sendKeycode(0, code);
+    setTimeout(() => engine.sendKeycode(1, code), 50);
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
-    
-    setTimeout(() => {
-      engine.sendText(text);
-    }, networkLatency);
+    engine.sendText(text);
   } else if (type === 'reboot') {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
   } else if (type === 'expand_notifications' || type === 'notifications') {
@@ -213,7 +192,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
     .stage{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0}
     .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0;-webkit-tap-highlight-color:transparent}
-    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
+    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent;image-rendering:-webkit-optimize-contrast;image-rendering:crisp-edges;}
     .sidebar{display:flex;flex-direction:column;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:7px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0}
     .btn{width:36px;height:36px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .12s}
     .btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
