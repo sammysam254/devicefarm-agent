@@ -1,0 +1,118 @@
+'use strict';
+
+const { execFile } = require('child_process');
+const path = require('path');
+let logger;
+try {
+  logger = require('../utils/logger');
+} catch (_) {
+  logger = {
+    info: (...a) => console.log('[INFO]', ...a),
+    warn: (...a) => console.warn('[WARN]', ...a),
+    error: (...a) => console.error('[ERROR]', ...a)
+  };
+}
+
+/**
+ * Resolve absolute path to git executable on Windows/Linux.
+ */
+function resolveGitBin() {
+  const candidates = [
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'cmd', 'git.exe'),
+    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Git', 'cmd', 'git.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Git', 'cmd', 'git.exe'),
+    'git'
+  ];
+  for (const p of candidates) {
+    if (p !== 'git' && fs.existsSync(p)) return p;
+  }
+  return 'git';
+}
+
+/**
+ * Silently check GitHub repository for updates and pull them without
+ * restarting ADB, stopping WebSocket streams, or dropping active devices.
+ */
+function checkAndSyncGithub() {
+  return new Promise((resolve) => {
+    const gitBin = resolveGitBin();
+    logger.info('[AutoSync] Checking GitHub for updates (30-min background sync)...');
+
+    // 1. Fetch remote origin/main
+    execFile(gitBin, ['fetch', 'origin', 'main'], { cwd: process.cwd(), timeout: 45000 }, (fetchErr) => {
+      if (fetchErr) {
+        logger.warn(`[AutoSync] git fetch notice: ${fetchErr.message}`);
+        return resolve(false);
+      }
+
+      // 2. Compare local HEAD hash vs origin/main hash
+      execFile(gitBin, ['rev-parse', 'HEAD'], { cwd: process.cwd() }, (err1, localHead) => {
+        if (err1) return resolve(false);
+        execFile(gitBin, ['rev-parse', 'origin/main'], { cwd: process.cwd() }, (err2, remoteHead) => {
+          if (err2) return resolve(false);
+
+          const localHash = (localHead || '').trim();
+          const remoteHash = (remoteHead || '').trim();
+
+          if (localHash && remoteHash && localHash !== remoteHash) {
+            logger.info(`[AutoSync] New GitHub commit detected (${localHash.substring(0,7)} -> ${remoteHash.substring(0,7)}). Pulling changes silently...`);
+
+            // 3. Pull changes cleanly into working copy
+            execFile(gitBin, ['pull', '--ff-only', 'origin', 'main'], { cwd: process.cwd(), timeout: 45000 }, (pullErr) => {
+              if (pullErr) {
+                // Fallback to reset --hard origin/main if untracked changes exist
+                execFile(gitBin, ['reset', '--hard', 'origin/main'], { cwd: process.cwd() }, (resetErr) => {
+                  if (resetErr) {
+                    logger.warn(`[AutoSync] git reset notice: ${resetErr.message}`);
+                  } else {
+                    logger.info('[AutoSync] GitHub changes updated silently. Active device streams & rented sessions preserved without interruption.');
+                  }
+                  resolve(true);
+                });
+              } else {
+                logger.info('[AutoSync] GitHub changes updated silently. Active device streams & rented sessions preserved without interruption.');
+                resolve(true);
+              }
+            });
+          } else {
+            logger.info('[AutoSync] Agent code is up to date with origin/main. Active device streams running smoothly.');
+            resolve(false);
+          }
+        });
+      });
+    });
+  });
+}
+
+let syncTimer = null;
+
+/**
+ * Start recurring 30-minute auto-sync loop.
+ */
+function startAutoSync(intervalMs = 30 * 60 * 1000) {
+  if (syncTimer) clearInterval(syncTimer);
+
+  // Initial check after 30 seconds of uptime
+  setTimeout(() => {
+    checkAndSyncGithub().catch(() => {});
+  }, 30000);
+
+  // Recurring 30-minute interval check
+  syncTimer = setInterval(() => {
+    checkAndSyncGithub().catch(() => {});
+  }, intervalMs);
+
+  logger.info('[AutoSync] Automatic 30-minute silent GitHub background synchronization initialized');
+}
+
+/**
+ * Stop auto-sync loop.
+ */
+function stopAutoSync() {
+  if (syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = null;
+  }
+}
+
+module.exports = { startAutoSync, stopAutoSync, checkAndSyncGithub };

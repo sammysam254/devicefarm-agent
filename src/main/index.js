@@ -8,6 +8,7 @@ const processManager = require('./process-manager');
 const autoLaunch = require('./auto-launch');
 const adbTracker = require('../services/adb-tracker');
 const apiClient = require('../services/api-client');
+const autoSync = require('../services/auto-sync-service');
 const { isCloudflaredAvailable } = require('../services/tunnel-service');
 const { startDashboardServer, openInChrome, stopDashboardServer, getDashboardUrl } = require('../dashboard/server');
 
@@ -211,6 +212,7 @@ async function gracefulShutdown() {
   logger.info('Shutting down DeviceFarm Agent...');
 
   try {
+    autoSync.stopAutoSync();
     apiClient.stopHeartbeat();
     adbTracker.stopTracking();
     await processManager.stopAll();
@@ -283,6 +285,7 @@ app.whenReady().then(async () => {
 
   await adbTracker.startTracking();
   apiClient.startHeartbeat(() => processManager.getActiveSerials());
+  autoSync.startAutoSync(30 * 60 * 1000);
   startTrayRefreshInterval();
 
   try {

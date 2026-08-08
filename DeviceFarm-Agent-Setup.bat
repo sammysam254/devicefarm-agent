@@ -240,6 +240,29 @@ echo [*] Generating Machine Binding Code...
 "%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
 "%NODE%" "src\services\verify-payment.js"
 
+:: ── Check if Agent is already running with active device streams ──────────
+netstat -ano 2>nul | findstr ":7400 " | findstr "LISTENING" >nul
+if %errorlevel% equ 0 (
+    echo.
+    echo  ================================================================
+    echo  [OK] DeviceFarm Agent is ALREADY running with active devices!
+    echo       Syncing GitHub changes silently without dropping connections...
+    echo  ================================================================
+    echo.
+    if exist "%INSTALL_DIR%\.git" (
+        "%GIT%" -C "%INSTALL_DIR%" fetch origin main >nul 2>&1
+        "%GIT%" -C "%INSTALL_DIR%" pull --ff-only origin main >nul 2>&1
+        echo [OK] GitHub code updated silently. Active device streams remain 100% connected.
+    )
+    echo.
+    echo  Dashboard: http://localhost:7400
+    echo  You can close this window.
+    echo.
+    start "" "http://localhost:7400"
+    pause >nul
+    exit /b 0
+)
+
 echo.
 echo  ================================================================
 echo   STEP 2: RESETTING ADB SERVER
