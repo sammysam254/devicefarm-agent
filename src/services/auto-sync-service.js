@@ -29,6 +29,35 @@ function resolveGitBin() {
   return 'git';
 }
 
+const fs = require('fs');
+
+/**
+ * Invalidate Node module cache for service files so updated code takes
+ * effect instantly on incoming control events & stream connections without
+ * restarting active WebSocket connections or dropping device streams.
+ */
+function invalidateModuleCache() {
+  const targets = [
+    './stream-service',
+    './scrcpy-engine',
+    './stealth-service',
+    './api-client',
+    './binding-service',
+    './license-service',
+    './rental-payment-service',
+    './verify-payment'
+  ];
+
+  for (const t of targets) {
+    try {
+      const p = require.resolve(t);
+      if (require.cache[p]) {
+        delete require.cache[p];
+      }
+    } catch (_) {}
+  }
+}
+
 /**
  * Silently check GitHub repository for updates and pull them without
  * restarting ADB, stopping WebSocket streams, or dropping active devices.
@@ -65,12 +94,14 @@ function checkAndSyncGithub() {
                   if (resetErr) {
                     logger.warn(`[AutoSync] git reset notice: ${resetErr.message}`);
                   } else {
-                    logger.info('[AutoSync] GitHub changes updated silently. Active device streams & rented sessions preserved without interruption.');
+                    invalidateModuleCache();
+                    logger.info('[AutoSync] GitHub changes updated silently & hot-reloaded. Active device streams preserved without interruption.');
                   }
                   resolve(true);
                 });
               } else {
-                logger.info('[AutoSync] GitHub changes updated silently. Active device streams & rented sessions preserved without interruption.');
+                invalidateModuleCache();
+                logger.info('[AutoSync] GitHub changes updated silently & hot-reloaded. Active device streams preserved without interruption.');
                 resolve(true);
               }
             });
