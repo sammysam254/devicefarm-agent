@@ -845,7 +845,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Pointer & Drag Control (Smooth & Zero Shaking) ──────────────────────
+  // ── Pointer & Drag Control (Smooth & Zero Shaking, Human Touch Mechanics) ──
   let down = false;
   let activePointerId = null;
 
@@ -856,14 +856,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH });
+    // Human touch DOWN: start with realistic contact pressure (0.35)
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.35 });
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
     const c = coords(e);
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH });
+    // Human touch MOVE: firm contact pressure (0.70)
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.70 });
   });
 
   function releasePointer(e) {
@@ -874,7 +876,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH });
+    // Human touch UP: release pressure (0)
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
   }
 
   canvas.addEventListener('pointerup', releasePointer);
