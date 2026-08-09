@@ -101,33 +101,39 @@ function handleControl(type, data, serial, engine) {
     engine.sendTouchEvent(action, x, y, W, H);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    engine.sendTouchEvent(0, x, y, W, H);
-    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), 80);
+    engine.sendTouchEvent(0, x, y, W, H, 0.4);
+    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 80);
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = parseInt(get(data, 'duration'), 10) || 100;
+    const dur = parseInt(get(data, 'duration'), 10) || 150;
     
-    // Send DOWN at start position
-    const downOk = engine.sendTouchEvent(0, x1, y1, W, H);
+    // Send DOWN at start position with human touch pressure (0.28)
+    const downOk = engine.sendTouchEvent(0, x1, y1, W, H, 0.28);
     if (!downOk) {
       logger.warn(`[StreamServer] Swipe DOWN failed for ${serial}`);
       return;
     }
     
-    logger.info(`[StreamServer] Swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
+    logger.info(`[StreamServer] Human swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
     
-    const steps = Math.max(5, Math.floor(dur / 15));
+    // Human finger motion mechanics: smooth S-curve interpolation (acceleration -> peak speed -> deceleration)
+    // with realistic pressure envelope (light touch -> firm drag -> light release)
+    const steps = Math.max(6, Math.floor(dur / 16));
     const dt = dur / steps;
     for (let i = 1; i <= steps; i++) {
       setTimeout(() => {
-        const currX = x1 + (x2 - x1) * (i / steps);
-        const currY = y1 + (y2 - y1) * (i / steps);
-        const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
-        const ok = engine.sendTouchEvent(action, currX, currY, W, H);
-        if (!ok) {
-          logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
-        }
+        const progress = i / steps;
+        // Smoothstep easing (S-curve) matches natural human hand inertia
+        const ease = progress * progress * (3 - 2 * progress);
+        const currX = x1 + (x2 - x1) * ease;
+        const currY = y1 + (y2 - y1) * ease;
+        
+        // Human pressure profile: light touch-down -> firm mid-stroke contact -> light release
+        const pressure = Math.sin(progress * Math.PI) * 0.55 + 0.25;
+        const action = (i === steps) ? 1 : 2; // UP on final step, MOVE otherwise
+        const pVal = (action === 1) ? 0 : pressure;
+        engine.sendTouchEvent(action, currX, currY, W, H, pVal);
       }, Math.round(i * dt));
     }
   } else if (type === 'code' || type === 'key') {
@@ -808,14 +814,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH });
+    // Initial contact pressure (0.35 = realistic finger touch down)
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.35 });
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
     const c = coords(e);
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH });
+    // Active drag pressure (0.70 = firm finger drag)
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.70 });
   });
 
   function releasePointer(e) {
@@ -826,7 +834,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH });
+    // Release pressure (0.0 = finger lifted off screen)
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
   }
 
   canvas.addEventListener('pointerup', releasePointer);

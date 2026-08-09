@@ -104,12 +104,14 @@ async function applyDeviceStealth(serial, stealthRootEnabled = true) {
     'settings put system stay_awake 0',
   ];
 
-  // 3. Hide Remote Control & Accessibility Service flags
+  // 3. Hide Remote Control & Accessibility Service flags & Input Method automation signatures
   const remoteControlCmds = [
     'settings put secure accessibility_enabled 0',
     'settings put secure enabled_accessibility_services ""',
     'settings put global remote_control_enabled 0',
     'settings put secure remote_control_enabled 0',
+    'settings put secure touch_exploration_enabled 0',
+    'settings put secure set_accessibility_services_ready 1',
   ];
 
   // 4. Enforce Real Physical Location & Network Time Consistency
