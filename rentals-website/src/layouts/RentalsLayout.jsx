@@ -1,16 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Store, Smartphone, Shield, LogOut, User, Server } from 'lucide-react';
+import { Store, Smartphone, Shield, LogOut, User, Menu, X } from 'lucide-react';
 
 export default function RentalsLayout({ children }) {
   const { user, profile, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleLogout = async () => {
     await logout();
     navigate('/login');
+  };
+
+  const closeMobileMenu = () => {
+    setMobileMenuOpen(false);
   };
 
   const isSeedAdmin = profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com';
@@ -18,9 +23,35 @@ export default function RentalsLayout({ children }) {
 
   return (
     <div className="rentals-layout">
+      {/* Mobile Top Header */}
+      <header className="mobile-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'linear-gradient(135deg, #38bdf8, #a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#fff', fontSize: '16px' }}>
+            ⚡
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '15px', letterSpacing: '-0.3px', color: '#fff' }}>FlexPulse</div>
+            <div style={{ fontSize: '10px', color: 'var(--primary)', fontWeight: 700, lineHeight: 1 }}>RENTALS STORE</div>
+          </div>
+        </div>
+
+        <button 
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="mobile-hamburger-btn"
+          aria-label="Toggle menu"
+        >
+          {mobileMenuOpen ? <X size={22} color="#fff" /> : <Menu size={22} color="#fff" />}
+        </button>
+      </header>
+
+      {/* Mobile Backdrop */}
+      {mobileMenuOpen && (
+        <div className="sidebar-backdrop" onClick={closeMobileMenu} />
+      )}
+
       {/* Sidebar Navigation */}
-      <aside className="sidebar" style={{ padding: '24px 16px' }}>
-        <div style={{ padding: '0 8px 24px', borderBottom: '1px solid var(--border-color)', marginBottom: '20px' }}>
+      <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`} style={{ padding: '24px 16px' }}>
+        <div style={{ padding: '0 8px 24px', borderBottom: '1px solid var(--border-color)', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg, #38bdf8, #a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#fff', fontSize: '18px' }}>
               ⚡
@@ -30,12 +61,18 @@ export default function RentalsLayout({ children }) {
               <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 700 }}>RENTALS STORE</div>
             </div>
           </div>
+          {mobileMenuOpen && (
+            <button onClick={closeMobileMenu} className="btn btn-secondary" style={{ padding: '4px 8px' }}>
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         {/* Menu Items */}
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
           <Link 
             to="/store" 
+            onClick={closeMobileMenu}
             style={{ 
               display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderRadius: '12px',
               fontWeight: 700, fontSize: '14px',
@@ -50,6 +87,7 @@ export default function RentalsLayout({ children }) {
 
           <Link 
             to="/my-devices" 
+            onClick={closeMobileMenu}
             style={{ 
               display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderRadius: '12px',
               fontWeight: 700, fontSize: '14px',
@@ -65,6 +103,7 @@ export default function RentalsLayout({ children }) {
           {isSuperAdmin && (
             <Link 
               to="/admin-rentals" 
+              onClick={closeMobileMenu}
               style={{ 
                 display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderRadius: '12px',
                 fontWeight: 700, fontSize: '14px', marginTop: '12px',
@@ -92,7 +131,7 @@ export default function RentalsLayout({ children }) {
                 </div>
               </div>
               <button 
-                onClick={handleLogout}
+                onClick={() => { closeMobileMenu(); handleLogout(); }}
                 className="btn btn-secondary"
                 style={{ width: '100%', justifyContent: 'center', padding: '8px', fontSize: '12px' }}
               >
@@ -100,7 +139,7 @@ export default function RentalsLayout({ children }) {
               </button>
             </div>
           ) : (
-            <Link to="/login" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+            <Link to="/login" onClick={closeMobileMenu} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
               <User size={14} /> Sign In
             </Link>
           )}
