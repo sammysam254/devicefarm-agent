@@ -2,14 +2,16 @@ import React, { useEffect, useState } from 'react';
 import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw, Eye, EyeOff, AlertCircle, ArrowLeft, Video } from 'lucide-react';
+import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw, Eye, EyeOff, AlertCircle, ArrowLeft, Video, ShieldCheck } from 'lucide-react';
 
 export default function MyDevices() {
   const { user } = useAuth();
   const [rentedDevices, setRentedDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [revealedPasswords, setRevealedPasswords] = useState({});
-  const [focusDevice, setFocusDevice] = useState(null);
+  const [unlockModal, setUnlockModal] = useState(null);
+  const [inputPassword, setInputPassword] = useState('');
+  const [error, setError] = useState(null);
 
   const fetchMyRentedDevices = async (isInitial = false) => {
     if (!user) return;
@@ -35,6 +37,24 @@ export default function MyDevices() {
     return () => clearInterval(timer);
   }, [user]);
 
+  const handleUnlock = (e) => {
+    e.preventDefault();
+    setError(null);
+
+    if (inputPassword.trim() === unlockModal.access_password.trim()) {
+      const streamUrl = unlockModal.devices?.stream_url;
+      if (streamUrl) {
+        window.open(streamUrl, '_blank');
+      } else {
+        alert('Device stream link is currently generating or device is offline');
+      }
+      setUnlockModal(null);
+      setInputPassword('');
+    } else {
+      setError('Invalid access password. Please check your password above.');
+    }
+  };
+
   const togglePasswordReveal = (id) => {
     setRevealedPasswords(prev => ({
       ...prev,
@@ -42,19 +62,25 @@ export default function MyDevices() {
     }));
   };
 
+  const isDeviceOnline = (d) => {
+    if (!d || d.status !== 'online' || !d.stream_url || d.is_deleted_from_view) return false;
+    const lastTime = d.updated_at || d.last_seen ? new Date(d.updated_at || d.last_seen).getTime() : 0;
+    return (new Date().getTime() - lastTime) < 45000;
+  };
+
   return (
     <RentalsLayout>
       <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Smartphone size={26} color="var(--success)" />
+            <Smartphone size={26} color="var(--primary)" />
             <h1 style={{ fontSize: '26px', fontWeight: 800 }}>My Rented Devices</h1>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Devices you currently rent. Access real-time control streams and access passwords.
+            Devices assigned to you. Unlock with password to open the full interactive stream with stealth controls.
           </p>
         </div>
-        <button onClick={fetchMyRentedDevices} className="btn btn-secondary">
+        <button onClick={() => fetchMyRentedDevices(true)} className="btn btn-secondary">
           <RefreshCw size={16} /> Refresh Feeds
         </button>
       </div>
@@ -75,7 +101,7 @@ export default function MyDevices() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '22px' }}>
           {rentedDevices.map(a => {
             const dev = a.devices;
-            const isOnline = dev?.status === 'online' && dev?.stream_url && !dev?.is_deleted_from_view;
+            const online = isDeviceOnline(dev);
             const price = dev?.monthly_rental_price || 49;
             const isPasswordRevealed = revealedPasswords[a.id];
 
@@ -92,8 +118,8 @@ export default function MyDevices() {
                         SN: {dev?.serial}
                       </p>
                     </div>
-                    <span className={`badge ${isOnline ? 'badge-success' : 'badge-warning'}`}>
-                      {isOnline ? '🟢 Live Online' : '🟡 Device Offline'}
+                    <span className={`badge ${online ? 'badge-success' : 'badge-warning'}`}>
+                      {online ? '🟢 Live Online' : '🟡 Device Offline'}
                     </span>
                   </div>
 
@@ -119,63 +145,88 @@ export default function MyDevices() {
                     <button
                       onClick={() => togglePasswordReveal(a.id)}
                       className="btn btn-secondary"
-                      style={{ padding: '4px 8px', fontSize: '11px' }}
+                      style={{ padding: '6px 10px', fontSize: '12px' }}
+                      title={isPasswordRevealed ? 'Hide password' : 'Show password'}
                     >
-                      {isPasswordRevealed ? <EyeOff size={13} /> : <Eye size={13} />}
+                      {isPasswordRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
                       {isPasswordRevealed ? 'Hide' : 'Show'}
                     </button>
                   </div>
 
-                  {/* Rental info */}
+                  {/* Stream URL snippet */}
+                  {dev?.stream_url ? (
+                    <div style={{
+                      fontSize: '11px', fontFamily: 'monospace',
+                      color: 'var(--text-muted)', wordBreak: 'break-all',
+                      marginBottom: '14px', lineHeight: 1.5,
+                    }}>
+                      {dev.stream_url.substring(0, 55)}...
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', color: 'var(--text-dim)', fontSize: '12px' }}>
+                      <AlertCircle size={14} /> Stream URL generating / device offline
+                    </div>
+                  )}
+
+                  {/* Rental details */}
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
                     Rental Fee: <strong style={{ color: '#fff' }}>${price}/mo USD</strong>
                   </div>
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    disabled={!isOnline}
-                    onClick={() => setFocusDevice(dev)}
-                    className="btn btn-primary"
-                    style={{ flex: 1, justifyContent: 'center', opacity: isOnline ? 1 : 0.5 }}
-                  >
-                    <Video size={14} /> Open Live Stream
-                  </button>
-                </div>
+                <button
+                  disabled={!online}
+                  onClick={() => { setUnlockModal(a); setInputPassword(''); setError(null); }}
+                  className="btn btn-primary"
+                  style={{ width: '100%', justifyContent: 'center', padding: '12px', opacity: online ? 1 : 0.5 }}
+                >
+                  <Unlock size={16} />
+                  {online ? 'Unlock & Open Worker Stream' : 'Device Offline'}
+                  {online && <ExternalLink size={14} />}
+                </button>
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Focus Stream Modal */}
-      {focusDevice && (
-        <div className="modal-overlay" onClick={() => setFocusDevice(null)}>
-          <div 
-            className="modal-box" 
-            onClick={e => e.stopPropagation()} 
-            style={{ maxWidth: '560px', height: '90vh', maxHeight: '840px', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-          >
-            <div style={{ padding: '14px 20px', background: 'rgba(15, 23, 42, 0.95)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <strong style={{ color: '#fff', fontSize: '15px' }}>📱 {focusDevice.brand || ''} {focusDevice.model}</strong>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>SN: {focusDevice.serial}</div>
-              </div>
-              <button onClick={() => setFocusDevice(null)} className="btn btn-danger" style={{ padding: '6px 12px', fontSize: '12px' }}>
-                <ArrowLeft size={14} /> Back
-              </button>
-            </div>
+      {/* Password Unlock Modal */}
+      {unlockModal && (
+        <div className="modal-overlay" onClick={() => setUnlockModal(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Lock size={20} color="var(--primary)" /> Unlock Device Stream
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '16px' }}>
+              Enter the access password to open <b>{unlockModal.devices?.brand} {unlockModal.devices?.model}</b> stream with right-side controls.
+            </p>
 
-            <div style={{ flex: 1, background: '#000', position: 'relative' }}>
-              <iframe 
-                src={focusDevice.stream_url} 
-                style={{ width: '100%', height: '100%', border: 'none' }} 
-                title="Rented Device Stream"
-                referrerPolicy="no-referrer"
-                allow="autoplay; fullscreen"
+            {error && (
+              <div style={{ color: 'var(--danger)', fontSize: '13px', marginBottom: '12px', padding: '8px 12px', background: 'rgba(248,113,113,0.12)', borderRadius: '8px', border: '1px solid rgba(248,113,113,0.3)' }}>
+                {error}
+              </div>
+            )}
+
+            <form onSubmit={handleUnlock} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <input
+                type="password"
+                required
+                autoFocus
+                className="input-field"
+                placeholder="Enter Access Password"
+                value={inputPassword}
+                onChange={e => setInputPassword(e.target.value)}
               />
-            </div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
+                <button type="button" onClick={() => setUnlockModal(null)} className="btn btn-secondary">
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Unlock Stream <ExternalLink size={14} />
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
