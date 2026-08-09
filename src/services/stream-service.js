@@ -833,14 +833,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
   canvas.addEventListener('pointercancel', releasePointer);
   window.addEventListener('pointerup', releasePointer);
 
-  // wheel scroll
+  // wheel scroll — 300ms debounce throttle, 150ms natural swipe gesture
   let wheelT = null;
   canvas.addEventListener('wheel', (e) => {
-    e.preventDefault(); if (wheelT) return;
-    wheelT = setTimeout(() => wheelT = null, 30);
+    e.preventDefault();
+    if (wheelT) return;
+    wheelT = setTimeout(() => { wheelT = null; }, 300);
     const c = coords(e);
     const d = e.deltaY > 0 ? -400 : 400;
-    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50,Math.min(nativeH-50,c.y+d)), duration:80 });
+    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH - 50, c.y + d)), duration: 150 });
   }, { passive:false });
 
   // keyboard
