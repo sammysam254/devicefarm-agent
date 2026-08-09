@@ -419,15 +419,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── Audio — Opus only, fully decoupled from video pipeline ─────────────────
+  // ── Audio — Opus only, zero-queue direct decode, fully isolated from video ─
   var audioCtx = null;
   var audioDecoder = null;
   var audioDecoderReady = false;
   var audioNextPlayTime = 0;
   var isMuted = false;
   var gainNode = null;
-  var _audioQueue = [];
-  var _audioDraining = false;
+  // Monotonic packet counter for timestamps — AudioDecoder needs unique timestamps
+  var _audioPktTs = 0;
 
   function updateAudioPill() {
     var pill = document.getElementById('audioPill');
@@ -436,9 +436,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function _ensureAudioCtx() {
-    if (audioCtx) return !!audioCtx;
+    if (audioCtx) return true;
     try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 48000,
+        latencyHint: 'interactive'
+      });
       gainNode = audioCtx.createGain();
       gainNode.gain.value = isMuted ? 0 : 1;
       gainNode.connect(audioCtx.destination);
@@ -450,7 +453,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     _ensureAudioCtx();
     if (audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume().then(function() {
-        audioNextPlayTime = audioCtx.currentTime + 0.01;
+        audioNextPlayTime = 0; // reset so first packet starts cleanly
         updateAudioPill();
       }).catch(function() {});
     } else {
@@ -465,13 +468,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
     updateAudioPill();
   }
 
-  function _initOpusDecoder() {
+  function _ensureDecoder() {
     if (audioDecoderReady && audioDecoder && audioDecoder.state !== 'closed') return true;
-    audioDecoderReady = false; audioDecoder = null;
+    audioDecoderReady = false;
+    if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
     if (typeof AudioDecoder === 'undefined') return false;
     try {
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
+          // AudioDecoder output fires on its own internal thread — safe to call WebAudio here
           if (!audioCtx || !gainNode || audioCtx.state !== 'running') {
             try { audioData.close(); } catch (_) {}
             return;
@@ -480,33 +485,40 @@ function buildPlayerHtml(serial, screenW, screenH) {
             var nCh = audioData.numberOfChannels;
             var nFrames = audioData.numberOfFrames;
             var sr = audioData.sampleRate;
-            var webBuf = audioCtx.createBuffer(nCh, nFrames, sr);
+            var buf = audioCtx.createBuffer(nCh, nFrames, sr);
             for (var ch = 0; ch < nCh; ch++) {
               var plane = new Float32Array(nFrames);
               try {
                 audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
               } catch (_) {
+                // fallback: interleaved
                 var all = new Float32Array(nCh * nFrames);
                 audioData.copyTo(all, { planeIndex: 0, format: 'f32' });
                 for (var i = 0; i < nFrames; i++) plane[i] = all[i * nCh + ch];
               }
-              webBuf.copyToChannel(plane, ch);
+              buf.copyToChannel(plane, ch);
             }
             audioData.close();
+
             var src = audioCtx.createBufferSource();
-            src.buffer = webBuf;
+            src.buffer = buf;
             src.connect(gainNode);
+
             var now = audioCtx.currentTime;
-            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.4) {
-              audioNextPlayTime = now + 0.01;
+            // Reset play cursor if we fall behind or get too far ahead (max 120ms buffer)
+            if (audioNextPlayTime < now - 0.02 || audioNextPlayTime > now + 0.12) {
+              audioNextPlayTime = now + 0.005;
             }
             src.start(audioNextPlayTime);
-            audioNextPlayTime += webBuf.duration;
+            audioNextPlayTime += buf.duration;
           } catch (_) {
             try { audioData.close(); } catch (_) {}
           }
         },
-        error: function() { audioDecoderReady = false; audioDecoder = null; }
+        error: function() {
+          audioDecoderReady = false;
+          audioDecoder = null;
+        }
       });
       audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
       audioDecoderReady = true;
@@ -514,36 +526,22 @@ function buildPlayerHtml(serial, screenW, screenH) {
     } catch (_) { return false; }
   }
 
-  // Drain audio queue on animation frame — NEVER blocks video decode
-  function _scheduleDrain() {
-    if (_audioDraining) return;
-    _audioDraining = true;
-    requestAnimationFrame(function() {
-      _audioDraining = false;
-      if (!audioCtx || audioCtx.state !== 'running') { _audioQueue = []; return; }
-      // Drop old frames if backlogged (keeps latency tight)
-      if (_audioQueue.length > 8) _audioQueue.splice(0, _audioQueue.length - 4);
-      while (_audioQueue.length > 0) {
-        var pkt = _audioQueue.shift();
-        if (!_initOpusDecoder()) break;
-        try {
-          audioDecoder.decode(new EncodedAudioChunk({
-            type: 'key',
-            timestamp: (performance.now() * 1000) | 0,
-            data: pkt
-          }));
-        } catch (_) {}
-      }
-    });
-  }
-
+  // Called from setTimeout(..., 0) — runs in its own macrotask, NEVER in the video frame loop
   function playOpusPacket(bytes) {
     if (isMuted) return;
     if (!_ensureAudioCtx()) return;
-    // Silently drop if not allowed to play yet — never block
-    if (audioCtx.state === 'suspended') return;
-    _audioQueue.push(bytes);
-    _scheduleDrain();
+    // If AudioContext suspended (browser autoplay block), drop silently — never stall
+    if (audioCtx.state !== 'running') return;
+    if (!_ensureDecoder()) return;
+    try {
+      // AudioDecoder.decode() is non-blocking — it enqueues internally and fires output async
+      audioDecoder.decode(new EncodedAudioChunk({
+        type: 'key',
+        timestamp: _audioPktTs,
+        data: bytes
+      }));
+      _audioPktTs += 20000; // 20ms in microseconds — typical Opus frame duration
+    } catch (_) {}
   }
 
   // ── Mute toggle ──────────────────────────────────────────────────────────
@@ -561,19 +559,19 @@ function buildPlayerHtml(serial, screenW, screenH) {
     var iconM = document.getElementById('muteBtnMIcon');
     var btnM  = document.getElementById('muteBtnM');
     if (iconM) iconM.textContent = isMuted ? '🔇' : '🔊';
-    if (btnM)  {
+    if (btnM) {
       btnM.style.color = isMuted ? '#f87171' : '';
       btnM.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
     }
   }
 
-  // Resume AudioContext on first user gesture — passive, never blocks video
+  // Resume AudioContext on first user gesture — passive listeners, ZERO impact on video
   ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, function() {
       if (!audioCtx) _ensureAudioCtx();
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().then(function() {
-          audioNextPlayTime = audioCtx.currentTime + 0.01;
+          audioNextPlayTime = 0;
           updateAudioPill();
         }).catch(function() {});
       }
@@ -581,6 +579,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   });
 
   // ── WebCodecs H264 Decoder ───────────────────────────────────────────────
+
 
   let decoder = null;
   let decoderReady = false;
