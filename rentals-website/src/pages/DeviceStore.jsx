@@ -3,14 +3,14 @@ import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Store, Smartphone, CheckCircle, RefreshCw, ShoppingCart, Lock, DollarSign, Zap } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import PaymentModal from '../components/PaymentModal';
 
 export default function DeviceStore() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [storeDevices, setStoreDevices] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [rentingId, setRentingId] = useState(null);
+  const [paymentModalDevice, setPaymentModalDevice] = useState(null);
 
   const fetchStoreDevices = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -45,17 +45,18 @@ export default function DeviceStore() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleRentDevice = async (device) => {
+  const handleOpenPaymentModal = (device) => {
     if (!user) {
       alert('Please sign in to rent a device');
       return navigate('/login');
     }
+    setPaymentModalDevice(device);
+  };
 
-    const price = device.monthly_rental_price || 49;
-    const confirmRent = window.confirm(`Rent ${device.brand || ''} ${device.model || 'Device'} (${device.serial}) for $${price}/month USD?`);
-    if (!confirmRent) return;
+  const handlePaymentConfirmed = async (paymentRef) => {
+    if (!paymentModalDevice || !user) return;
+    const device = paymentModalDevice;
 
-    setRentingId(device.id);
     try {
       const autoPassword = Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -75,12 +76,11 @@ export default function DeviceStore() {
         access_password: autoPassword
       }]);
 
-      alert(`🎉 Device Rented Successfully! Access Password: ${autoPassword}\n\nRedirecting to My Devices...`);
+      setPaymentModalDevice(null);
+      alert(`🎉 Payment Verified & Device Rented Successfully! Access Password: ${autoPassword}\n\nRedirecting to My Devices...`);
       navigate('/my-devices');
     } catch (err) {
-      alert('Rental error: ' + err.message);
-    } finally {
-      setRentingId(null);
+      alert('Error finalizing rental: ' + err.message);
     }
   };
 
@@ -163,18 +163,27 @@ export default function DeviceStore() {
 
                 {/* Action Button */}
                 <button
-                  disabled={isRenting}
-                  onClick={() => handleRentDevice(d)}
+                  onClick={() => handleOpenPaymentModal(d)}
                   className="btn btn-primary"
                   style={{ width: '100%', justifyContent: 'center', padding: '12px', fontSize: '14px' }}
                 >
                   <ShoppingCart size={16} />
-                  {isRenting ? 'Processing Rental...' : `Rent Device ($${price}/mo)`}
+                  Rent Device (${price}/mo)
                 </button>
               </div>
             );
           })}
         </div>
+      )}
+
+      {/* In-App Payment Modal (Paystack & NOWPayments Crypto) */}
+      {paymentModalDevice && (
+        <PaymentModal
+          device={paymentModalDevice}
+          user={user}
+          onClose={() => setPaymentModalDevice(null)}
+          onPaymentSuccess={handlePaymentConfirmed}
+        />
       )}
     </RentalsLayout>
   );
