@@ -3,6 +3,7 @@ import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Store, Smartphone, CheckCircle, RefreshCw, ShoppingCart, Lock, DollarSign, Zap } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import PaymentModal from '../components/PaymentModal';
 
 export default function DeviceStore() {
