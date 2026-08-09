@@ -767,13 +767,9 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload) {
-    // Direct raw H264 frame broadcast — drop stale frames if buffer builds up to guarantee 100% real-time device sync
+    // Direct raw H264 frame broadcast — 100% complete frame delivery to prevent H264 delta frame corruption
     for (const ws of this.videoClients) {
       if (ws.readyState === 1) {
-        if (ws.bufferedAmount > 128 * 1024) {
-          // Drop frame if websocket socket queue is congested so client is ALWAYS 100% real-time synced with device
-          continue;
-        }
         try { ws.send(payload, { binary: true }); } catch (_) { this.videoClients.delete(ws); }
       } else {
         this.videoClients.delete(ws);

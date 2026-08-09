@@ -571,9 +571,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let decoder = null;
   let decoderReady = false;
   let hasKeyframe = false;
+  let frameTs = 0;
 
   function resetDecoder() {
     hasKeyframe = false;
+    frameTs = 0;
     if (decoder) {
       try { decoder.close(); } catch (_) {}
       decoder = null;
@@ -765,7 +767,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       try {
         const chunk = new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
-          timestamp: performance.now() * 1000,
+          timestamp: (frameTs += 16666),
           data: u8
         });
         decoder.decode(chunk);
