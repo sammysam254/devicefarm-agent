@@ -564,8 +564,64 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
+  let aacDecoder = null, aacDecoderReady = false;
+  function initAACDecoder() {
+    if (aacDecoderReady) return true;
+    if (typeof AudioDecoder === 'undefined') return false;
+    try {
+      aacDecoder = new AudioDecoder({
+        output: function(audioData) {
+          if (!audioCtx || !gainNode) { audioData.close(); return; }
+          try {
+            const nCh = audioData.numberOfChannels, nFrames = audioData.numberOfFrames, sr = audioData.sampleRate;
+            const webAudioBuf = audioCtx.createBuffer(nCh, nFrames, sr);
+            for (let ch = 0; ch < nCh; ch++) {
+              const plane = new Float32Array(nFrames);
+              audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
+              webAudioBuf.copyToChannel(plane, ch);
+            }
+            audioData.close();
+            const src = audioCtx.createBufferSource();
+            src.buffer = webAudioBuf;
+            src.connect(gainNode);
+            const now = audioCtx.currentTime;
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.035) audioNextPlayTime = now + 0.008;
+            src.start(audioNextPlayTime);
+            audioNextPlayTime += webAudioBuf.duration;
+          } catch (_) { try { audioData.close(); } catch (_) {} }
+        },
+        error: function(_) {}
+      });
+      aacDecoder.configure({ codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2 });
+      aacDecoderReady = true;
+      return true;
+    } catch (_) { return false; }
+  }
+
+  function playAACPacket(bytes) {
+    if (isMuted) return;
+    if (!audioCtx) initAudio();
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(function() {
+        audioNextPlayTime = audioCtx.currentTime + 0.008;
+        updateAudioPill();
+      }).catch(function(){});
+    }
+    if (!aacDecoderReady || !aacDecoder || aacDecoder.state === 'closed') {
+      if (!initAACDecoder()) return;
+    }
+    try {
+      aacDecoder.decode(new EncodedAudioChunk({
+        type: 'key',
+        timestamp: performance.now() * 1000,
+        data: bytes
+      }));
+    } catch (_) {}
+  }
+
   function playRawPcm(bytes) {
-    // Raw signed 16-bit LE stereo 48kHz PCM playback (pristine fallback)
+    // Raw PCM playback with DataView Format & Endianness Auto-Detection (0% static radio noise)
     if (isMuted) return;
     if (!audioCtx) initAudio();
     if (!audioCtx) return;
@@ -576,25 +632,46 @@ function buildPlayerHtml(serial, screenW, screenH) {
       }).catch(function(){});
     }
     try {
-      let int16;
-      if (bytes.byteOffset % 2 === 0) {
-        int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      // 1. Auto-detect 32-bit Float PCM vs 16-bit Int PCM
+      const isFloat = (bytes.byteLength >= 8 && bytes.byteLength % 8 === 0) && (function() {
+        try {
+          const sampleF = Math.abs(dv.getFloat32(0, true));
+          return sampleF > 0.00001 && sampleF <= 1.0;
+        } catch (_) { return false; }
+      })();
+
+      let L, R, sampleCount, buf;
+      if (isFloat) {
+        sampleCount = Math.floor(bytes.byteLength / 8);
+        if (sampleCount <= 0) return;
+        buf = audioCtx.createBuffer(2, sampleCount, 48000);
+        L = buf.getChannelData(0); R = buf.getChannelData(1);
+        for (let i = 0; i < sampleCount; i++) {
+          L[i] = dv.getFloat32(i * 8, true);
+          R[i] = dv.getFloat32(i * 8 + 4, true);
+        }
       } else {
-        // Safe byte copy for odd byte offsets to prevent RangeError
-        const copy = new Uint8Array(bytes.byteLength);
-        copy.set(bytes);
-        int16 = new Int16Array(copy.buffer, 0, Math.floor(copy.byteLength / 2));
-      }
+        // 2. 16-bit Int PCM: Auto-detect Big Endian vs Little Endian
+        sampleCount = Math.floor(bytes.byteLength / 4);
+        if (sampleCount <= 0) return;
+        buf = audioCtx.createBuffer(2, sampleCount, 48000);
+        L = buf.getChannelData(0); R = buf.getChannelData(1);
 
-      const sampleCount = Math.floor(int16.length / 2);
-      if (sampleCount <= 0) return;
+        let useBigEndian = false;
+        if (bytes.byteLength >= 4) {
+          try {
+            const sLE = Math.abs(dv.getInt16(0, true));
+            const sBE = Math.abs(dv.getInt16(0, false));
+            if (sBE < sLE && sLE > 8000) useBigEndian = true;
+          } catch (_) {}
+        }
 
-      const buf = audioCtx.createBuffer(2, sampleCount, 48000);
-      const L = buf.getChannelData(0), R = buf.getChannelData(1);
-
-      for (let i = 0; i < sampleCount; i++) {
-        L[i] = int16[i * 2]     / 32768.0;
-        R[i] = int16[i * 2 + 1] / 32768.0;
+        const little = !useBigEndian;
+        for (let i = 0; i < sampleCount; i++) {
+          L[i] = dv.getInt16(i * 4, little)     / 32768.0;
+          R[i] = dv.getInt16(i * 4 + 2, little) / 32768.0;
+        }
       }
 
       const src = audioCtx.createBufferSource();
@@ -782,14 +859,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
 
-      // Handle tagged Audio binary frames — [0x41]['O'=opus / 'R'=raw][...payload]
+      // Handle tagged Audio binary frames — [0x41]['O'=opus / 'A'=aac / 'R'=raw][...payload]
       if (rawU8[0] === 0x41) {
         if (rawU8.length < 3) return;
-        const codec = rawU8[1]; // 0x4F='O' opus, 0x52='R' raw
+        const codec = rawU8[1]; // 0x4F='O' opus, 0x41='A' aac, 0x52='R' raw
         const payload = rawU8.slice(2); // Detach slice from WS buffer
         // Asynchronous non-blocking dispatch — video stays locked at 60 FPS!
         setTimeout(function() {
           if (codec === 0x4F) playOpusPacket(payload);
+          else if (codec === 0x41) playAACPacket(payload);
           else playRawPcm(payload);
         }, 0);
         return;

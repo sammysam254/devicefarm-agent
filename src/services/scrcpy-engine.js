@@ -737,11 +737,16 @@ class ScrcpyEngine extends EventEmitter {
 
   _broadcastAudio(payload) {
     // Frame layout: [0x41][codec_byte][...payload]
-    // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
-    const codec = (this._audioCodec && this._audioCodec.includes('opus')) ? 0x4F : 0x52;
+    // codec_byte: 0x4F ('O') = opus, 0x41 ('A') = aac, 0x52 ('R') = raw PCM
+    let codecByte = 0x52; // default raw PCM ('R')
+    if (this._audioCodec) {
+      if (this._audioCodec.includes('opus')) codecByte = 0x4F; // 'O'
+      else if (this._audioCodec.includes('aac')) codecByte = 0x41; // 'A'
+    }
+
     const audioFrame = Buffer.allocUnsafe(2 + payload.length);
     audioFrame[0] = 0x41; // 'A' = audio frame tag
-    audioFrame[1] = codec; // 'O' = opus, 'R' = raw
+    audioFrame[1] = codecByte;
     payload.copy(audioFrame, 2);
 
     for (const ws of this.wsClients) {
