@@ -497,9 +497,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.buffer = buf;
             src.connect(gainNode);
             var now = audioCtx.currentTime;
-            // Smooth scheduling chain — 40ms lead offset, 300ms max jitter window
-            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.30) {
-              audioNextPlayTime = now + 0.040;
+            // Seamless zero-pop audio scheduling:
+            // If audioNextPlayTime is behind 'now', start IMMEDIATELY at 'now' (no 40ms silence gap = no pops).
+            // If audioNextPlayTime is >250ms ahead, smoothly re-align to now + 20ms.
+            if (audioNextPlayTime < now) {
+              audioNextPlayTime = now;
+            } else if (audioNextPlayTime > now + 0.25) {
+              audioNextPlayTime = now + 0.020;
             }
             src.start(audioNextPlayTime);
             audioNextPlayTime += buf.duration;

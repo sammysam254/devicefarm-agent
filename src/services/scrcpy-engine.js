@@ -275,9 +275,9 @@ class ScrcpyEngine extends EventEmitter {
   addVideoClient(ws) {
     this.videoClients.add(ws);
     this.wsClients.add(ws);
-    const initialPacket = this._keyframeBuffer || this._configPacket;
-    if (initialPacket && ws.readyState === 1) {
-      try { ws.send(initialPacket, { binary: true }); } catch (_) {}
+    // Send cached SPS/PPS header so decoder config initializes cleanly
+    if (this._configPacket && ws.readyState === 1) {
+      try { ws.send(this._configPacket, { binary: true }); } catch (_) {}
     }
   }
 
