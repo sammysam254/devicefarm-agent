@@ -30,6 +30,7 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
   const USD_TO_KES_RATE = 133;
   const priceInKES = Math.round(price * USD_TO_KES_RATE);
   const paystackSubunitKES = priceInKES * 100;
+  const paymentRef = `RENT-${device?.serial || 'DEV'}-${Date.now()}`;
 
   // Handle Paystack Popup (Card Payment in KES)
   const handlePaystackPayment = () => {
