@@ -419,13 +419,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── Audio — Opus, raw play-as-received, no queuing at any layer ───────────
+  // ── Audio — Opus, scheduling chain prevents packet-overlap pops, setTimeout keeps video unblocked
   var audioCtx = null;
   var audioDecoder = null;
   var audioDecoderReady = false;
+  var audioNextPlayTime = 0; // scheduling chain — prevents simultaneous overlapping playback
   var isMuted = false;
   var gainNode = null;
-  var _audioPktTs = 0; // monotonic counter so AudioDecoder gets unique timestamps
+  var _audioPktTs = 0;
 
   function updateAudioPill() {
     var pill = document.getElementById('audioPill');
@@ -447,7 +448,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function initAudio() {
     _ensureAudioCtx();
     if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().then(function() { updateAudioPill(); }).catch(function() {});
+      audioCtx.resume().then(function() { audioNextPlayTime = 0; updateAudioPill(); }).catch(function() {});
     } else {
       updateAudioPill();
     }
@@ -465,10 +466,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     audioDecoderReady = false;
     if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
     if (typeof AudioDecoder === 'undefined') return false;
+    _audioPktTs = 0;
     try {
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
-          // Play raw — no buffer chain, no scheduling queue, just play now+5ms
           if (!audioCtx || !gainNode || audioCtx.state !== 'running') {
             try { audioData.close(); } catch (_) {}
             return;
@@ -492,8 +493,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
             var src = audioCtx.createBufferSource();
             src.buffer = buf;
             src.connect(gainNode);
-            // Raw: start 5ms from now — no accumulated buffer chain
-            src.start(audioCtx.currentTime + 0.005);
+            var now = audioCtx.currentTime;
+            // Scheduling chain — essential when TCP batches multiple packets at once.
+            // Without this, 3-5 packets all start at 'now+5ms' simultaneously = pops.
+            // Reset if too far behind (underrun) or too far ahead (>80ms = latency)
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.08) {
+              audioNextPlayTime = now + 0.005;
+            }
+            src.start(audioNextPlayTime);
+            audioNextPlayTime += buf.duration;
           } catch (_) {
             try { audioData.close(); } catch (_) {}
           }
@@ -506,11 +514,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     } catch (_) { return false; }
   }
 
-  // Raw audio — called DIRECTLY from ws.onmessage, no setTimeout, no queue
-  // AudioDecoder.decode() returns immediately (internally async), so this is safe
+  // Audio decode dispatched via setTimeout(0) so it NEVER runs in the same task as video
   function playOpusPacket(bytes) {
     if (isMuted) return;
-    if (!audioCtx || audioCtx.state !== 'running') return; // drop if not ready
+    if (!audioCtx || audioCtx.state !== 'running') return;
     if (!_ensureDecoder()) return;
     try {
       audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: _audioPktTs, data: bytes }));
@@ -688,13 +695,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
 
-      // Handle tagged Audio binary frames — [0x41][codec_byte][...payload]
-      // Opus only. decode() called DIRECTLY — no setTimeout, no queue, raw as received.
+      // Handle audio frames — [0x41]['O'=opus][...payload]
+      // setTimeout(0) keeps audio in its own macrotask — video path is never blocked
       if (rawU8[0] === 0x41) {
-        if (rawU8.length >= 3 && rawU8[1] === 0x4F) { // 0x4F = 'O' = Opus
-          playOpusPacket(rawU8.slice(2));
+        if (rawU8.length >= 3 && rawU8[1] === 0x4F) {
+          var _ap = rawU8.slice(2);
+          setTimeout(function() { playOpusPacket(_ap); }, 0);
         }
-        return; // all audio frames handled — never fall through to video path
+        return;
       }
 
 
