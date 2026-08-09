@@ -572,10 +572,37 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let decoderReady = false;
   let hasKeyframe = false;
   let frameTs = 0;
+  let pendingFrame = null;
+  let animFrameId = null;
+
+  function renderPendingFrame() {
+    animFrameId = null;
+    if (!pendingFrame) return;
+    const frame = pendingFrame;
+    pendingFrame = null;
+    try {
+      const w = frame.displayWidth  || frame.codedWidth  || frame.width;
+      const h = frame.displayHeight || frame.codedHeight || frame.height;
+      if (w && h && (canvas.width !== w || canvas.height !== h)) {
+        canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+      }
+      ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+      countFrame();
+    } catch (_) {}
+    try { frame.close(); } catch (_) {}
+  }
 
   function resetDecoder() {
     hasKeyframe = false;
     frameTs = 0;
+    if (pendingFrame) {
+      try { pendingFrame.close(); } catch (_) {}
+      pendingFrame = null;
+    }
+    if (animFrameId) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+    }
     if (decoder) {
       try { decoder.close(); } catch (_) {}
       decoder = null;
@@ -593,14 +620,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
-          const h = frame.displayHeight || frame.codedHeight || frame.height;
-          if (w && h && (canvas.width !== w || canvas.height !== h)) {
-            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+          // Drop older decoded frames if a newer frame arrived before next repaint,
+          // keeping canvas ALWAYS 100% real-time synced with physical device!
+          if (pendingFrame) {
+            try { pendingFrame.close(); } catch (_) {}
           }
-          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-          frame.close();
-          countFrame();
+          pendingFrame = frame;
+          if (!animFrameId) {
+            animFrameId = requestAnimationFrame(renderPendingFrame);
+          }
         },
         error: function(err) {
           debugLog.error('[Stream] VideoDecoder error:', err);
@@ -875,14 +903,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
   canvas.addEventListener('pointercancel', releasePointer);
   window.addEventListener('pointerup', releasePointer);
 
-  // wheel scroll
+  // wheel scroll — 350ms human throttle, single smooth swipe gesture per wheel flick
   let wheelT = null;
   canvas.addEventListener('wheel', (e) => {
-    e.preventDefault(); if (wheelT) return;
-    wheelT = setTimeout(() => wheelT = null, 30);
+    e.preventDefault();
+    if (wheelT) return;
+    wheelT = setTimeout(function() { wheelT = null; }, 350);
     const c = coords(e);
-    const d = e.deltaY > 0 ? -400 : 400;
-    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50,Math.min(nativeH-50,c.y+d)), duration:80 });
+    const d = e.deltaY > 0 ? -450 : 450;
+    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH-50, c.y+d)), duration: 180 });
   }, { passive:false });
 
   // keyboard
