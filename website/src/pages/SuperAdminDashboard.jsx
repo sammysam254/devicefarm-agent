@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck } from 'lucide-react';
+import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2 } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 
 export default function SuperAdminDashboard() {
@@ -18,7 +18,7 @@ export default function SuperAdminDashboard() {
 
   const loadData = async () => {
     try {
-      const isSeed = profile?.role === 'seed_admin';
+      const isSeed = profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com';
       let bQuery = supabase.from('machine_bindings').select('*');
       if (!isSeed && profile?.id) {
         bQuery = bQuery.eq('super_admin_id', profile.id);
@@ -26,8 +26,12 @@ export default function SuperAdminDashboard() {
       const { data: bData } = await bQuery;
       setMyBindings(bData || []);
 
-      const { data: dData } = await supabase.from('devices').select('*');
-      setDevices(dData || []);
+      const { data: dData } = await supabase.from('devices').select('*').order('created_at', { ascending: false });
+      const visibleDevices = (dData || []).filter(d => {
+        if (!isSeed && d.is_deleted_from_view) return false;
+        return true;
+      });
+      setDevices(visibleDevices);
 
       // Fetch admins AND workers under this super admin (to block them)
       let aQuery = supabase.from('profiles').select('*').in('role', ['admin', 'worker']);
@@ -40,6 +44,19 @@ export default function SuperAdminDashboard() {
       console.error('Error loading super admin data:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteFromView = async (deviceId) => {
+    if (!window.confirm('Remove this device from view across all dashboards? Super Admins, Admins, and Workers will no longer see it.')) return;
+    try {
+      await supabase.from('devices').update({
+        is_deleted_from_view: true,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+      loadData();
+    } catch (err) {
+      alert('Error removing device from view: ' + err.message);
     }
   };
 
@@ -199,13 +216,25 @@ export default function SuperAdminDashboard() {
                       {d.stream_url || 'Generating Cloudflare link...'}
                     </td>
                     <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                      {d.stream_url ? (
-                        <a href={d.stream_url} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>
-                          Open Stream <ExternalLink size={12} />
-                        </a>
-                      ) : (
-                        <span className="badge badge-warning">Offline</span>
-                      )}
+                      <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+                        {(profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com') && (
+                          <button
+                            onClick={() => handleDeleteFromView(d.id)}
+                            className="btn btn-danger"
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                            title="Remove device from view across all dashboards"
+                          >
+                            <Trash2 size={12} /> Remove from View
+                          </button>
+                        )}
+                        {d.stream_url ? (
+                          <a href={d.stream_url} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>
+                            Open Stream <ExternalLink size={12} />
+                          </a>
+                        ) : (
+                          <span className="badge badge-warning">Offline</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

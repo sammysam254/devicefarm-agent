@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play } from 'lucide-react';
+import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2 } from 'lucide-react';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [devices, setDevices] = useState([]);
@@ -11,16 +11,18 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const fetchDevicesAndLockState = async (isInitial = false) => {
     if (isInitial) setLoading(true);
     try {
-      // 1. Fetch ONLY online devices whose streams are active and recent
+      // 1. Fetch ONLY online devices whose streams are active and recent and not deleted from view
       const { data: dData } = await supabase
         .from('devices')
         .select('*')
         .eq('status', 'online')
         .order('updated_at', { ascending: false });
 
-      // Filter out devices whose last_seen is older than 45 seconds to guarantee active online devices
+      // Filter out devices whose last_seen is older than 45 seconds to guarantee active online devices,
+      // and exclude any devices deleted from view by Seed Admin.
       const now = new Date().getTime();
       const activeOnlineDevices = (dData || []).filter(d => {
+        if (d.is_deleted_from_view) return false;
         if (!d.updated_at && !d.last_seen) return true;
         const lastTime = new Date(d.updated_at || d.last_seen).getTime();
         return (now - lastTime) < 45000;
@@ -45,6 +47,20 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     const interval = setInterval(() => fetchDevicesAndLockState(false), 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const deleteDeviceFromView = async (deviceId) => {
+    if (!window.confirm('Are you sure you want to delete this device from view in all dashboards?')) return;
+    try {
+      await supabase.from('devices').update({
+        is_deleted_from_view: true,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+
+      setDevices(prev => prev.filter(d => d.id !== deviceId));
+    } catch (err) {
+      alert('Error deleting device from view: ' + err.message);
+    }
+  };
 
   const toggleStealthRoot = async (deviceId, currentState) => {
     const nextState = !currentState;
@@ -193,13 +209,25 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                   >
                     {isStealthOn ? '🛡️ Stealth Root: ON' : '⚪ Stealth Root: OFF'}
                   </button>
-                  <button 
-                    onClick={() => setFocusDevice(d)}
-                    className="btn btn-primary"
-                    style={{ fontSize: '11px', padding: '4px 10px' }}
-                  >
-                    <Eye size={12} /> Focus View
-                  </button>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    {isSeedAdmin && (
+                      <button 
+                        onClick={() => deleteDeviceFromView(d.id)}
+                        className="btn btn-danger"
+                        style={{ fontSize: '11px', padding: '4px 8px' }}
+                        title="Delete device from view across all dashboards"
+                      >
+                        <Trash2 size={12} /> Delete
+                      </button>
+                    )}
+                    <button 
+                      onClick={() => setFocusDevice(d)}
+                      className="btn btn-primary"
+                      style={{ fontSize: '11px', padding: '4px 10px' }}
+                    >
+                      <Eye size={12} /> Focus View
+                    </button>
+                  </div>
                 </div>
               </div>
             );

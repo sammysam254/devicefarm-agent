@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck } from 'lucide-react';
+import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 
 export default function SeedAdminDashboard() {
   const { profile: myProfile } = useAuth();
   const [bindings, setBindings] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [blockingId, setBlockingId] = useState(null);
   const [blockReason, setBlockReason] = useState('');
@@ -19,8 +20,10 @@ export default function SeedAdminDashboard() {
     try {
       const { data: bData } = await supabase.from('machine_bindings').select('*');
       const { data: pData } = await supabase.from('profiles').select('*');
+      const { data: dData } = await supabase.from('devices').select('*').order('created_at', { ascending: false });
       setBindings(bData || []);
       setProfiles(pData || []);
+      setDevices(dData || []);
     } catch (e) {
       console.error('Error loading seed data:', e);
     } finally {
@@ -31,6 +34,31 @@ export default function SeedAdminDashboard() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleDeleteFromView = async (deviceId) => {
+    if (!window.confirm('Delete this device from view in all dashboards? Super Admins, Admins, and Workers will no longer see it.')) return;
+    try {
+      await supabase.from('devices').update({
+        is_deleted_from_view: true,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+      loadData();
+    } catch (err) {
+      alert('Error deleting device from view: ' + err.message);
+    }
+  };
+
+  const handleRestoreToView = async (deviceId) => {
+    try {
+      await supabase.from('devices').update({
+        is_deleted_from_view: false,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+      loadData();
+    } catch (err) {
+      alert('Error restoring device to view: ' + err.message);
+    }
+  };
 
   const toggleLicense = async (bindingCode, currentStatus) => {
     const nextStatus = !currentStatus;
@@ -113,7 +141,7 @@ export default function SeedAdminDashboard() {
       </div>
 
       {/* Stats Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '28px' }}>
         <div className="card">
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>TOTAL MACHINES BOUND</div>
           <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--primary)' }}>{bindings.length}</div>
@@ -128,17 +156,95 @@ export default function SeedAdminDashboard() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>TOTAL USERS</div>
           <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--accent)' }}>{profiles.length}</div>
         </div>
-
         <div className="card">
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>BLOCKED USERS</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>DEVICES DELETED FROM VIEW</div>
           <div style={{ fontSize: '32px', fontWeight: 800, marginTop: '4px', color: 'var(--danger)' }}>
-            {profiles.filter(p => p.is_blocked).length}
+            {devices.filter(d => d.is_deleted_from_view).length}
           </div>
         </div>
       </div>
 
       {/* Real-time Security CCTV Camera Wall */}
       <CctvWall currentUser={myProfile} isSeedAdmin={true} />
+
+      {/* Seed Admin Device Visibility & Delete from View Management */}
+      <div className="card" style={{ marginBottom: '32px' }}>
+        <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Smartphone size={18} color="var(--primary)" /> Seed Admin Device Visibility & Delete from View Control
+        </h3>
+
+        {loading ? (
+          <div>Loading devices...</div>
+        ) : devices.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)' }}>No devices registered yet.</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px' }}>
+                  <th style={{ padding: '12px' }}>DEVICE / MODEL</th>
+                  <th style={{ padding: '12px' }}>SERIAL</th>
+                  <th style={{ padding: '12px' }}>BINDING CODE</th>
+                  <th style={{ padding: '12px' }}>ONLINE STATUS</th>
+                  <th style={{ padding: '12px' }}>VISIBILITY STATUS</th>
+                  <th style={{ padding: '12px', textAlign: 'right' }}>SEED ADMIN ACTION</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.map(d => {
+                  const now = new Date().getTime();
+                  const lastTime = d.updated_at || d.last_seen ? new Date(d.updated_at || d.last_seen).getTime() : 0;
+                  const isOnline = d.status === 'online' && (now - lastTime < 45000);
+                  const isDeleted = Boolean(d.is_deleted_from_view);
+
+                  return (
+                    <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace', color: 'var(--primary)' }}>{d.binding_code || 'Unbound'}</td>
+                      <td style={{ padding: '14px 12px' }}>
+                        <span className={`badge ${isOnline ? 'badge-success' : 'badge-warning'}`}>
+                          {isOnline ? '🟢 Active Online' : '🟡 Offline'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        {isDeleted ? (
+                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <EyeOff size={11} /> DELETED FROM VIEW
+                          </span>
+                        ) : (
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <CheckCircle size={11} /> VISIBLE TO ALL
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                        {isDeleted ? (
+                          <button
+                            onClick={() => handleRestoreToView(d.id)}
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                          >
+                            <RotateCcw size={14} /> Restore to View
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteFromView(d.id)}
+                            className="btn btn-danger"
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                          >
+                            <Trash2 size={14} /> Delete from View
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Machine Bindings & License Management */}
       <div className="card" style={{ marginBottom: '32px' }}>

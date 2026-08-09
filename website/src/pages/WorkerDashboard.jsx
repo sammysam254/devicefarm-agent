@@ -20,7 +20,16 @@ export default function WorkerDashboard() {
         .from('device_assignments')
         .select('*, devices(*)')
         .eq('assigned_to_user_id', profile.id);
-      setAssignments(data || []);
+
+      const now = new Date().getTime();
+      const activeAssignments = (data || []).filter(a => {
+        if (!a.devices) return false;
+        if (a.devices.is_deleted_from_view) return false;
+        if (a.devices.status !== 'online') return false;
+        const lastTime = a.devices.updated_at || a.devices.last_seen ? new Date(a.devices.updated_at || a.devices.last_seen).getTime() : 0;
+        return (now - lastTime) < 45000;
+      });
+      setAssignments(activeAssignments);
     } catch (e) {
       console.error('Error loading worker assignments:', e);
     } finally {
@@ -71,7 +80,11 @@ export default function WorkerDashboard() {
     }));
   };
 
-  const isDeviceOnline = (d) => d?.status === 'online' && d?.stream_url;
+  const isDeviceOnline = (d) => {
+    if (!d || d.status !== 'online' || !d.stream_url || d.is_deleted_from_view) return false;
+    const lastTime = d.updated_at || d.last_seen ? new Date(d.updated_at || d.last_seen).getTime() : 0;
+    return (new Date().getTime() - lastTime) < 45000;
+  };
 
   return (
     <DashboardLayout>

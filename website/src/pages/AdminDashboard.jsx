@@ -20,17 +20,31 @@ export default function AdminDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Fetch devices
-      const { data: dData } = await supabase.from('devices').select('*');
-      setDevices(dData || []);
+      // Fetch active online devices (not deleted from view)
+      const { data: dData } = await supabase.from('devices').select('*').eq('status', 'online');
+      const now = new Date().getTime();
+      const activeOnlineDevices = (dData || []).filter(d => {
+        if (d.is_deleted_from_view) return false;
+        if (!d.updated_at && !d.last_seen) return true;
+        const lastTime = new Date(d.updated_at || d.last_seen).getTime();
+        return (now - lastTime) < 45000;
+      });
+      setDevices(activeOnlineDevices);
 
       // Fetch workers (only workers, not admins or above)
       const { data: wData } = await supabase.from('profiles').select('*').eq('role', 'worker');
       setWorkers(wData || []);
 
-      // Fetch current assignments
+      // Fetch current assignments for active online devices
       const { data: aData } = await supabase.from('device_assignments').select('*, devices(*), profiles!assigned_to_user_id(*)');
-      setAssignments(aData || []);
+      const activeAssignments = (aData || []).filter(a => {
+        if (!a.devices) return false;
+        if (a.devices.is_deleted_from_view) return false;
+        if (a.devices.status !== 'online') return false;
+        const lastTime = a.devices.updated_at || a.devices.last_seen ? new Date(a.devices.updated_at || a.devices.last_seen).getTime() : 0;
+        return (now - lastTime) < 45000;
+      });
+      setAssignments(activeAssignments);
     } catch (e) {
       console.error('Error loading admin allocations:', e);
     } finally {

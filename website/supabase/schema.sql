@@ -43,10 +43,14 @@ CREATE TABLE IF NOT EXISTS public.devices (
     port INT,
     binding_code TEXT REFERENCES public.machine_bindings(binding_code) ON DELETE CASCADE,
     status TEXT DEFAULT 'online',
+    is_deleted_from_view BOOLEAN DEFAULT FALSE,
     last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Ensure column exists even if table was created previously
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS is_deleted_from_view BOOLEAN DEFAULT FALSE;
 
 -- 4. DEVICE ASSIGNMENTS TABLE (Admin -> Worker assignments with auto-generated passwords)
 CREATE TABLE IF NOT EXISTS public.device_assignments (
@@ -115,21 +119,44 @@ ALTER TABLE public.machine_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.devices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.device_assignments ENABLE ROW LEVEL SECURITY;
 
--- Permissive policies for web application operation
+-- Permissive policies for web application operation (with DROP IF EXISTS for idempotency)
+DROP POLICY IF EXISTS "Allow public read profiles" ON public.profiles;
 CREATE POLICY "Allow public read profiles" ON public.profiles FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow authenticated update profiles" ON public.profiles;
 CREATE POLICY "Allow authenticated update profiles" ON public.profiles FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Allow public read machine_bindings" ON public.machine_bindings;
 CREATE POLICY "Allow public read machine_bindings" ON public.machine_bindings FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow all write machine_bindings" ON public.machine_bindings;
 CREATE POLICY "Allow all write machine_bindings" ON public.machine_bindings FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Allow public read devices" ON public.devices;
 CREATE POLICY "Allow public read devices" ON public.devices FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow all write devices" ON public.devices;
 CREATE POLICY "Allow all write devices" ON public.devices FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Allow public read device_assignments" ON public.device_assignments;
 CREATE POLICY "Allow public read device_assignments" ON public.device_assignments FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow all write device_assignments" ON public.device_assignments;
 CREATE POLICY "Allow all write device_assignments" ON public.device_assignments FOR ALL USING (true);
 
--- Enable Realtime broadcasting on devices and machine_bindings tables
-ALTER PUBLICATION supabase_realtime ADD TABLE public.devices;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.machine_bindings;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.device_assignments;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+-- Enable Realtime broadcasting on tables safely
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'devices') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.devices;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'machine_bindings') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.machine_bindings;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'device_assignments') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.device_assignments;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'profiles') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+  END IF;
+END $$;
