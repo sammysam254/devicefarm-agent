@@ -106,7 +106,10 @@ function handleControl(type, data, serial, engine) {
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = parseInt(get(data, 'duration'), 10) || 150;
+    const dur = parseInt(get(data, 'duration'), 10) || 160;
+
+    // Organic human finger micro-curve arc (1-3px natural lateral drift during swipe stroke)
+    const arcX = (Math.random() - 0.5) * 4;
     
     // Send DOWN at start position with human touch pressure (0.28)
     const downOk = engine.sendTouchEvent(0, x1, y1, W, H, 0.28);
@@ -118,7 +121,7 @@ function handleControl(type, data, serial, engine) {
     logger.info(`[StreamServer] Human swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
     
     // Human finger motion mechanics: smooth S-curve interpolation (acceleration -> peak speed -> deceleration)
-    // with realistic pressure envelope (light touch -> firm drag -> light release)
+    // with realistic pressure envelope (light touch -> firm drag -> light release) & organic arc
     const steps = Math.max(6, Math.floor(dur / 16));
     const dt = dur / steps;
     for (let i = 1; i <= steps; i++) {
@@ -126,7 +129,7 @@ function handleControl(type, data, serial, engine) {
         const progress = i / steps;
         // Smoothstep easing (S-curve) matches natural human hand inertia
         const ease = progress * progress * (3 - 2 * progress);
-        const currX = x1 + (x2 - x1) * ease;
+        const currX = x1 + (x2 - x1) * ease + Math.sin(progress * Math.PI) * arcX;
         const currY = y1 + (y2 - y1) * ease;
         
         // Human pressure profile: light touch-down -> firm mid-stroke contact -> light release
