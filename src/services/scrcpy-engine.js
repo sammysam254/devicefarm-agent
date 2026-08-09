@@ -175,57 +175,6 @@ function parseSpsHeight(payload) {
   }
 }
 
-// ─── Realistic Touch Profile Simulation ───────────────────────────────────
-// Survey apps detect anomalies in touch patterns: constant pressure, impossible
-// velocities, missing micro-movements. This class simulates human touch behavior.
-
-class TouchProfileSimulator {
-  static generatePressureCurve(touchDuration) {
-    // Real human touch: pressure rises during DOWN (50-80ms), plateaus, then falls during UP
-    // Simulated as sigmoid curve with peak at random point during contact
-    const peakTime = Math.random() * (touchDuration * 0.4) + (touchDuration * 0.2);
-    
-    return (currentTime) => {
-      if (currentTime < 0 || currentTime > touchDuration) return 0;
-      
-      // Sigmoid ramp: smooth acceleration → plateau → deceleration
-      const rampUpTime = peakTime * 0.5;
-      const rampDownTime = (touchDuration - peakTime) * 0.5;
-      
-      if (currentTime < rampUpTime) {
-        // Accelerating: 0 → 1.0 over rampUpTime
-        return (currentTime / rampUpTime) ** 1.5; // Power curve for realism
-      } else if (currentTime < peakTime) {
-        return 0.8 + Math.random() * 0.2; // Plateau with micro-jitter
-      } else if (currentTime < peakTime + rampDownTime) {
-        // Decelerating: 1.0 → 0 over rampDownTime
-        const decayProgress = (currentTime - peakTime) / rampDownTime;
-        return (1 - decayProgress) ** 1.5;
-      }
-      return 0;
-    };
-  }
-  
-  static enforceVelocityConstraints(currPos, prevPos, deltaTime, maxVelocityPixelsPerSec = 400) {
-    if (!prevPos || deltaTime <= 0) return currPos;
-    
-    const dx = currPos.x - prevPos.x;
-    const dy = currPos.y - prevPos.y;
-    const distance = Math.hypot(dx, dy);
-    const actualVelocity = (distance / deltaTime) * 1000; // px/ms → px/s
-    
-    // If velocity exceeds max, clamp distance
-    if (actualVelocity > maxVelocityPixelsPerSec) {
-      const scale = maxVelocityPixelsPerSec / actualVelocity;
-      return {
-        x: prevPos.x + dx * scale,
-        y: prevPos.y + dy * scale
-      };
-    }
-    return currPos;
-  }
-}
-
 /**
  * ScrcpyEngine — manages a scrcpy server session for one device.
  *
@@ -254,10 +203,8 @@ class ScrcpyEngine extends EventEmitter {
     this.screenWidth  = 1080;
     this.screenHeight = 2340;
 
-    // Connected WS clients receiving H264 video stream & audio independently
+    // Connected WS clients receiving H264 stream & audio
     this.wsClients = new Set();
-    this.videoClients = new Set();
-    this.audioClients = new Set();
     this._configPacket = null;
     this._keyframeBuffer = null;
     this.videoWidth = 0;
@@ -272,8 +219,11 @@ class ScrcpyEngine extends EventEmitter {
     return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
   }
 
-  addVideoClient(ws) {
-    this.videoClients.add(ws);
+  /**
+   * Register a WS client. We immediately flush the cached SPS/PPS + IDR keyframe
+   * so the WebCodecs decoder is initialised before any new delta frame arrives.
+   */
+  addClient(ws) {
     this.wsClients.add(ws);
     const initialPacket = this._keyframeBuffer || this._configPacket;
     if (initialPacket && ws.readyState === 1) {
@@ -281,18 +231,7 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  addAudioClient(ws) {
-    this.audioClients.add(ws);
-    this.wsClients.add(ws);
-  }
-
-  addClient(ws) {
-    this.addVideoClient(ws);
-  }
-
   removeClient(ws) {
-    this.videoClients.delete(ws);
-    this.audioClients.delete(ws);
     this.wsClients.delete(ws);
   }
 
@@ -365,7 +304,9 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
+      'video_bit_rate=2500000',
       'max_fps=60',
+      'i_frame_interval=2',
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=false',
@@ -547,9 +488,7 @@ class ScrcpyEngine extends EventEmitter {
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting control socket...`);
     this.controlSocket = await this._connectOne(this.videoPort);
     this.controlSocket.setNoDelay(true);
-    // Randomize TCP keep-alive interval (5-20s) instead of fixed 1s (detectable)
-    const keepAliveInterval = Math.random() * 15000 + 5000; // 5000-20000ms
-    this.controlSocket.setKeepAlive(true, keepAliveInterval);
+    this.controlSocket.setKeepAlive(true, 1000);
 
     this.controlSocket.on('close', () => {
       this.controlSocket = null;
@@ -728,8 +667,8 @@ class ScrcpyEngine extends EventEmitter {
       const META = 12; // 8-byte PTS + 4-byte size
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
-        if (pktSize === 0 || pktSize > 65536) { // max realistic Opus frame
-          buf = buf.subarray(1); // bad size, shift by 1 byte to resync
+        if (pktSize === 0 || pktSize > 512 * 1024) {
+          buf = buf.subarray(1);
           continue;
         }
         if (buf.length < META + pktSize) break;
@@ -746,32 +685,27 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastAudio(payload) {
-    let codecByte = 0x4F; // Opus ('O')
-    if (this._audioCodec) {
-      if (this._audioCodec.includes('opus')) codecByte = 0x4F;
-      else if (this._audioCodec.includes('aac')) codecByte = 0x41;
-      else if (this._audioCodec.includes('raw')) codecByte = 0x52;
-    }
-
+    // Frame layout: [0x41][codec_byte][...payload]
+    // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
+    const codec = (this._audioCodec === 'opus') ? 0x4F : 0x52;
     const audioFrame = Buffer.allocUnsafe(2 + payload.length);
     audioFrame[0] = 0x41; // 'A' = audio frame tag
-    audioFrame[1] = codecByte;
+    audioFrame[1] = codec; // 'O' = opus, 'R' = raw
     payload.copy(audioFrame, 2);
 
-    for (const ws of this.audioClients) {
-      if (ws.readyState === 1 && ws.bufferedAmount < 64 * 1024) {
-        try { ws.send(audioFrame, { binary: true }); } catch (_) { this.audioClients.delete(ws); }
+    for (const ws of this.wsClients) {
+      if (ws.readyState === 1 && ws.bufferedAmount < 128 * 1024) {
+        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
       }
     }
   }
 
   _broadcastVideo(payload) {
-    // Direct raw H264 frame broadcast — 100% complete frame delivery to prevent H264 delta frame corruption
-    for (const ws of this.videoClients) {
+    for (const ws of this.wsClients) {
       if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) { this.videoClients.delete(ws); }
+        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
       } else {
-        this.videoClients.delete(ws);
+        this.wsClients.delete(ws);
       }
     }
   }
@@ -876,8 +810,6 @@ class ScrcpyEngine extends EventEmitter {
     const finalX = Math.max(0, Math.min(targetW - 1, scaledX));
     const finalY = Math.max(0, Math.min(targetH - 1, scaledY));
 
-    const finalPressure = action === 1 ? 0 : (typeof pressure === 'number' && pressure >= 0 ? pressure : 1.0);
-
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
@@ -886,7 +818,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(finalY, 14);
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
-    buf.writeUInt16BE(Math.floor(finalPressure * 65535), 22);
+    buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
     buf.writeInt32BE(0, 24);              // action_button = 0
     buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
     try {
@@ -895,7 +827,7 @@ class ScrcpyEngine extends EventEmitter {
       this.controlSocket.uncork();
       return true;
     } catch (e) { 
-      logger.warn(`[VideoEngine] touch write failed: ${e.message}`);
+      logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message}`);
       return false; 
     }
   }
@@ -944,9 +876,7 @@ class ScrcpyEngine extends EventEmitter {
     try {
       const cs = await this._connectOne(this.videoPort, 10);
       cs.setNoDelay(true);
-      // Randomize TCP keep-alive interval (5-20s)
-      const keepAliveInterval = Math.random() * 15000 + 5000; // 5000-20000ms
-      cs.setKeepAlive(true, keepAliveInterval);
+      cs.setKeepAlive(true, 1000);
       this.controlSocket = cs;
       cs.on('close', () => {
         this.controlSocket = null;

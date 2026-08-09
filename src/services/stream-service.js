@@ -10,24 +10,6 @@ const ScrcpyEngine = require('./scrcpy-engine');
 const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
 
-// ─── Anti-Detection Headers ──────────────────────────────────────────────────
-// Hide remote control indicators from survey/earning apps
-// Apps analyze these headers to detect: automation, rooting, remote access, emulation
-const STEALTH_HEADERS = {
-  'X-Requested-With': 'com.android.chrome',  // Appear as Chrome browser
-  'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate',
-  'DNT': '1',
-  'Connection': 'keep-alive',
-  'Upgrade-Insecure-Requests': '1',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Cache-Control': 'max-age=0',
-};
-
 // ─── Config & ADB ────────────────────────────────────────────────────────────
 
 function loadConfig() {
@@ -106,57 +88,47 @@ function get(data, key) {
 }
 
 function handleControl(type, data, serial, engine) {
-  const W = engine.screenWidth  || parseFloat(get(data, 'width'))  || 1080;
-  const H = engine.screenHeight || parseFloat(get(data, 'height')) || 2340;
+  const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
+  const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
+
+  const realW = engine.screenWidth  || 720;
+  const realH = engine.screenHeight || 1600;
 
   if (type === 'touch') {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
-    const pressure = get(data, 'pressure') !== undefined ? parseFloat(get(data, 'pressure')) : (action === 1 ? 0 : 1.0);
-    engine.sendTouchEvent(action, x, y, W, H, pressure);
+    engine.sendTouchEvent(action, x, y, W, H);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    // Immediate touch DOWN with realistic contact pressure
-    engine.sendTouchEvent(0, x, y, W, H, 0.4);
-    // Natural human tap hold duration (~60ms)
-    setTimeout(() => {
-      engine.sendTouchEvent(1, x, y, W, H, 0);
-    }, 60);
+    engine.sendTouchEvent(0, x, y, W, H);
+    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H), 80);
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = Math.max(80, parseInt(get(data, 'duration'), 10) || 160);
-
-    // Human Touch Swipe: Instant start + Smooth S-curve (Smoothstep easing) + Realistic Pressure Ramp
-    // 1. Instant DOWN at start coordinate (0ms delay)
-    const startPress = 0.25;
-    engine.sendTouchEvent(0, x1, y1, W, H, startPress);
-
-    // 2. Interpolate intermediate MOVE steps at ~60Hz (16ms per frame)
-    const stepCount = Math.max(4, Math.round(dur / 16));
-    const dt = dur / stepCount;
-
-    for (let i = 1; i <= stepCount; i++) {
-      const t = i / stepCount;
-      // Smoothstep (S-curve): acceleration -> peak speed -> deceleration (natural human finger momentum)
-      const ease = t * t * (3 - 2 * t);
-      const currX = x1 + (x2 - x1) * ease;
-      const currY = y1 + (y2 - y1) * ease;
-      
-      // Human pressure profile: light start -> firm mid-touch -> light release
-      const press = Math.sin(t * Math.PI) * 0.65 + 0.25;
-      const delayMs = Math.round(i * dt);
-
+    const dur = parseInt(get(data, 'duration'), 10) || 100;
+    
+    // Send DOWN at start position
+    const downOk = engine.sendTouchEvent(0, x1, y1, W, H);
+    if (!downOk) {
+      logger.warn(`[StreamServer] Swipe DOWN failed for ${serial}`);
+      return;
+    }
+    
+    logger.info(`[StreamServer] Swipe started: (${x1},${y1}) → (${x2},${y2}) over ${dur}ms`);
+    
+    const steps = Math.max(5, Math.floor(dur / 15));
+    const dt = dur / steps;
+    for (let i = 1; i <= steps; i++) {
       setTimeout(() => {
-        if (i === stepCount) {
-          // Final step: MOVE then UP
-          engine.sendTouchEvent(2, currX, currY, W, H, 0.2);
-          engine.sendTouchEvent(1, currX, currY, W, H, 0);
-        } else {
-          engine.sendTouchEvent(2, currX, currY, W, H, press);
+        const currX = x1 + (x2 - x1) * (i / steps);
+        const currY = y1 + (y2 - y1) * (i / steps);
+        const action = (i === steps) ? 1 : 2; // UP on last step, MOVE otherwise
+        const ok = engine.sendTouchEvent(action, currX, currY, W, H);
+        if (!ok) {
+          logger.warn(`[StreamServer] Swipe step ${i}/${steps} failed`);
         }
-      }, delayMs);
+      }, Math.round(i * dt));
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
@@ -192,7 +164,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
     .stage{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0}
     .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0;-webkit-tap-highlight-color:transparent}
-    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent;image-rendering:-webkit-optimize-contrast;image-rendering:crisp-edges;}
+    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
     .sidebar{display:flex;flex-direction:column;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:7px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0}
     .btn{width:36px;height:36px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .12s}
     .btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
@@ -204,8 +176,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:360px}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
-    .audio-pill{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:100;background:linear-gradient(135deg,rgba(56,189,248,.95),rgba(129,140,248,.95));color:#0f172a;padding:8px 18px;border-radius:30px;font-size:12px;font-weight:800;display:flex;align-items:center;gap:6px;box-shadow:0 8px 25px rgba(56,189,248,.45);cursor:pointer;backdrop-filter:blur(8px);transition:all .3s ease;animation:pillPulse 2s infinite}
-    @keyframes pillPulse{0%,100%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(1.05)}}
 
     /* ── Mobile bottom navigation bar ─────────────────────────────────────── */
     .mobile-nav{
@@ -279,7 +249,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <span style="font-size:18px">📱</span>
     <div>
       <div style="font-weight:700;font-size:13px">Live Stream</div>
-      <div style="font-size:10px;color:#64748b">Connected</div>
+      <div style="font-size:10px;color:#64748b;font-family:monospace">${serial}</div>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
@@ -290,7 +260,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
 <div class="stage">
   <div class="wrap" id="wrap">
-    <div class="audio-pill" id="audioPill" onclick="resumeAudioExplicit()">🔊 Tap to Enable Audio</div>
     <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
   </div>
   <div class="sidebar">
@@ -360,26 +329,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
 </div>
 
 <script>
-  // ── Debug Logger (hidden from survey apps) ───────────────────────────────
-  const debugLog = {
-    queue: [],
-    maxSize: 100,
-    log(...args) {
-      this.queue.push({ time: Date.now(), level: 'log', args });
-      if (this.queue.length > this.maxSize) this.queue.shift();
-      // Store in localStorage instead of console (prevents exposure)
-      try { localStorage.setItem('__debug', JSON.stringify(this.queue.slice(-10))); } catch (_) {}
-    },
-    warn(...args) {
-      this.queue.push({ time: Date.now(), level: 'warn', args });
-      if (this.queue.length > this.maxSize) this.queue.shift();
-    },
-    error(...args) {
-      this.queue.push({ time: Date.now(), level: 'error', args });
-      if (this.queue.length > this.maxSize) this.queue.shift();
-    }
-  };
-
   const canvas = document.getElementById('c');
   const ctx    = canvas.getContext('2d', { alpha: false, desynchronized: true });
   const wrap   = document.getElementById('wrap');
@@ -412,121 +361,155 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const h = f.displayHeight || f.codedHeight || f.height;
     if (w && h && (canvas.width !== w || canvas.height !== h)) {
       canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-      debugLog.log('[Canvas] Resized to ' + w + 'x' + h);
+      console.log('[Canvas] Resized to ' + w + 'x' + h);
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
     countFrame();
   }
 
-  // ── Audio — Opus, scheduling chain, setTimeout keeps video path unblocked ──
-  var audioCtx = null;
-  var audioDecoder = null;
-  var audioDecoderReady = false;
-  var audioNextPlayTime = 0;
-  var isMuted = false;
-  var gainNode = null;
-  var _audioPktTs = 0;
+  // ── Audio — WebCodecs AudioDecoder (Opus) with raw PCM fallback ────────────
+  let audioCtx = null;
+  let audioDecoder = null;
+  let audioDecoderReady = false;
+  let audioNextPlayTime = 0;
+  let isMuted = false;
+  let gainNode = null;
 
-  function updateAudioPill() {
-    var pill = document.getElementById('audioPill');
-    if (!pill) return;
-    pill.style.display = (audioCtx && audioCtx.state === 'running' && !isMuted) ? 'none' : 'flex';
-  }
-
-  function _ensureAudioCtx() {
-    if (audioCtx) return true;
+  function initAudio() {
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
+      return;
+    }
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
       gainNode = audioCtx.createGain();
       gainNode.gain.value = isMuted ? 0 : 1;
       gainNode.connect(audioCtx.destination);
-      return true;
-    } catch (_) { return false; }
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
+    } catch (_) {}
   }
 
-  function initAudio() {
-    _ensureAudioCtx();
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().then(function() { audioNextPlayTime = 0; updateAudioPill(); }).catch(function() {});
-    } else {
-      updateAudioPill();
-    }
-  }
-
-  function resumeAudioExplicit() {
-    isMuted = false;
-    if (gainNode) gainNode.gain.value = 1;
-    initAudio();
-    updateAudioPill();
-  }
-
-  function _ensureDecoder() {
-    if (audioDecoderReady && audioDecoder && audioDecoder.state !== 'closed') return true;
-    audioDecoderReady = false;
-    if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
+  function initOpusDecoder() {
+    if (audioDecoderReady) return true;
     if (typeof AudioDecoder === 'undefined') return false;
-    _audioPktTs = 0;
-    audioNextPlayTime = 0;
     try {
+      let layoutDetected = false;
+      let isPlanar = false;
+
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
-          if (!audioCtx || !gainNode || audioCtx.state !== 'running') {
-            try { audioData.close(); } catch (_) {}
-            return;
-          }
+          if (!audioCtx || !gainNode) { audioData.close(); return; }
           try {
-            var nCh = audioData.numberOfChannels;
-            var nFrames = audioData.numberOfFrames;
-            var outCh = nCh === 1 ? 2 : nCh;
-            var buf = audioCtx.createBuffer(outCh, nFrames, audioData.sampleRate);
-            for (var ch = 0; ch < nCh; ch++) {
-              var plane = new Float32Array(nFrames);
-              try {
-                audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
-              } catch (_) {
-                var all = new Float32Array(nCh * nFrames);
-                audioData.copyTo(all, { planeIndex: 0, format: 'f32' });
-                for (var i = 0; i < nFrames; i++) plane[i] = all[i * nCh + ch];
+            const nCh     = audioData.numberOfChannels;
+            const nFrames = audioData.numberOfFrames;
+            const sr      = audioData.sampleRate;
+
+            // Detect planar vs interleaved once and cache it
+            if (!layoutDetected) {
+              if (nCh > 1) {
+                try { audioData.allocationSize({ planeIndex: 1, format: 'f32-planar' }); isPlanar = true; }
+                catch (_) { isPlanar = false; }
+              } else {
+                isPlanar = true;
               }
-              buf.copyToChannel(plane, ch);
-              if (nCh === 1) buf.copyToChannel(plane, 1);
+              layoutDetected = true;
             }
+
+            const webAudioBuf = audioCtx.createBuffer(nCh, nFrames, sr);
+
+            if (isPlanar) {
+              for (let ch = 0; ch < nCh; ch++) {
+                const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32-planar' });
+                const plane   = new Float32Array(byteLen / 4);
+                audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
+                webAudioBuf.copyToChannel(plane, ch);
+              }
+            } else {
+              const byteLen    = audioData.allocationSize({ planeIndex: 0, format: 'f32' });
+              const interleaved = new Float32Array(byteLen / 4);
+              audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
+              for (let ch = 0; ch < nCh; ch++) {
+                const chData = webAudioBuf.getChannelData(ch);
+                for (let i = 0; i < nFrames; i++) chData[i] = interleaved[i * nCh + ch];
+              }
+            }
+
             audioData.close();
-            var src = audioCtx.createBufferSource();
-            src.buffer = buf;
+
+            const src = audioCtx.createBufferSource();
+            src.buffer = webAudioBuf;
             src.connect(gainNode);
-            var now = audioCtx.currentTime;
-            // Seamless zero-pop audio scheduling:
-            // If audioNextPlayTime is behind 'now', start IMMEDIATELY at 'now' (no 40ms silence gap = no pops).
-            // If audioNextPlayTime is >250ms ahead, smoothly re-align to now + 20ms.
-            if (audioNextPlayTime < now) {
-              audioNextPlayTime = now;
-            } else if (audioNextPlayTime > now + 0.25) {
-              audioNextPlayTime = now + 0.020;
-            }
+
+            const now = audioCtx.currentTime;
+            if (audioNextPlayTime < now) audioNextPlayTime = now;
             src.start(audioNextPlayTime);
-            audioNextPlayTime += buf.duration;
-          } catch (_) {
+            audioNextPlayTime += webAudioBuf.duration;
+          } catch (err) {
+            console.warn('[Audio] output error:', err);
             try { audioData.close(); } catch (_) {}
           }
         },
-        error: function() { audioDecoderReady = false; audioDecoder = null; }
+        error: function(err) {
+          console.warn('[Audio] AudioDecoder error:', err);
+          audioDecoderReady = false;
+          audioDecoder = null;
+          layoutDetected = false;
+        }
       });
       audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
       audioDecoderReady = true;
       return true;
-    } catch (_) { return false; }
+    } catch (err) {
+      console.warn('[Audio] AudioDecoder init failed:', err);
+      return false;
+    }
   }
 
-  // setTimeout(0) keeps audio in its own macrotask — video frames are never blocked
   function playOpusPacket(bytes) {
     if (isMuted) return;
+    if (!audioCtx) initAudio();
     if (!audioCtx || audioCtx.state !== 'running') return;
-    if (!_ensureDecoder()) return;
+    if (!audioDecoderReady) {
+      if (!initOpusDecoder()) return;
+    }
+    if (!audioDecoder || audioDecoder.state === 'closed') { audioDecoderReady = false; return; }
     try {
-      audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: _audioPktTs, data: bytes }));
-      _audioPktTs += 20000;
+      audioDecoder.decode(new EncodedAudioChunk({
+        type: 'key',
+        timestamp: performance.now() * 1000,
+        data: bytes
+      }));
+    } catch (err) {
+      console.warn('[Audio] Opus decode error:', err);
+      audioDecoderReady = false;
+      audioDecoder = null;
+    }
+  }
+
+  function playRawPcm(bytes) {
+    // Fallback: raw signed 16-bit LE stereo 48kHz PCM
+    initAudio();
+    if (!audioCtx || !gainNode || isMuted) return;
+    if (audioCtx.state !== 'running') return;
+    try {
+      const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+      const sampleCount = Math.floor(int16.length / 2);
+      if (sampleCount <= 0) return;
+      const buf = audioCtx.createBuffer(2, sampleCount, 48000);
+      const L = buf.getChannelData(0), R = buf.getChannelData(1);
+      for (let i = 0; i < sampleCount; i++) {
+        L[i] = int16[i * 2]     / 32768.0;
+        R[i] = int16[i * 2 + 1] / 32768.0;
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(gainNode);
+      const now = audioCtx.currentTime;
+      if (audioNextPlayTime < now) audioNextPlayTime = now;
+      if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
+      src.start(audioNextPlayTime);
+      audioNextPlayTime += buf.duration;
     } catch (_) {}
   }
 
@@ -534,75 +517,39 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function toggleMute() {
     isMuted = !isMuted;
     if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
-    updateAudioPill();
-    var btn = document.getElementById('muteBtn');
+    if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
+      try { audioDecoder.flush().catch(function(){}); } catch (_) {}
+    }
+    // Sync desktop sidebar mute button
+    const btn = document.getElementById('muteBtn');
     if (btn) {
       btn.textContent = isMuted ? '🔇' : '🔊';
       btn.title = isMuted ? 'Unmute audio' : 'Mute audio';
       btn.style.color = isMuted ? '#f87171' : '';
       btn.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
     }
-    var iconM = document.getElementById('muteBtnMIcon');
-    var btnM  = document.getElementById('muteBtnM');
+    // Sync mobile bottom bar mute button
+    const iconM = document.getElementById('muteBtnMIcon');
+    const btnM  = document.getElementById('muteBtnM');
     if (iconM) iconM.textContent = isMuted ? '🔇' : '🔊';
-    if (btnM) {
+    if (btnM)  {
       btnM.style.color = isMuted ? '#f87171' : '';
       btnM.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
     }
   }
 
-  // Resume on first user gesture
+  // Resume AudioContext on first user gesture
   ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
-    window.addEventListener(evt, function() {
-      if (!audioCtx) _ensureAudioCtx();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().then(function() { audioNextPlayTime = 0; updateAudioPill(); }).catch(function() {});
-      }
-    }, { passive: true });
+    window.addEventListener(evt, initAudio, { passive: true });
   });
 
   // ── WebCodecs H264 Decoder ───────────────────────────────────────────────
-
-
-
-
-
-
   let decoder = null;
   let decoderReady = false;
   let hasKeyframe = false;
-  let frameTs = 0;
-  let pendingVideoFrame = null;
-  let animFrameId = null;
-
-  function renderPendingFrame() {
-    animFrameId = null;
-    if (!pendingVideoFrame) return;
-    const frame = pendingVideoFrame;
-    pendingVideoFrame = null;
-    try {
-      const w = frame.displayWidth  || frame.codedWidth  || frame.width;
-      const h = frame.displayHeight || frame.codedHeight || frame.height;
-      if (w && h && (canvas.width !== w || canvas.height !== h)) {
-        canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-      }
-      ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-      countFrame();
-    } catch (_) {}
-    try { frame.close(); } catch (_) {}
-  }
 
   function resetDecoder() {
     hasKeyframe = false;
-    frameTs = 0;
-    if (pendingVideoFrame) {
-      try { pendingVideoFrame.close(); } catch (_) {}
-      pendingVideoFrame = null;
-    }
-    if (animFrameId) {
-      cancelAnimationFrame(animFrameId);
-      animFrameId = null;
-    }
     if (decoder) {
       try { decoder.close(); } catch (_) {}
       decoder = null;
@@ -613,25 +560,24 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function initDecoder() {
     resetDecoder();
     if (typeof VideoDecoder === 'undefined') {
-      debugLog.warn('[Stream] WebCodecs VideoDecoder not available in this browser');
+      console.warn('[Stream] WebCodecs VideoDecoder not available in this browser');
       return false;
     }
     try {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          // Drop older decoded frames if a newer frame arrived before next repaint,
-          // keeping canvas ALWAYS 100% real-time synced with physical device!
-          if (pendingVideoFrame) {
-            try { pendingVideoFrame.close(); } catch (_) {}
+          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
+          const h = frame.displayHeight || frame.codedHeight || frame.height;
+          if (w && h && (canvas.width !== w || canvas.height !== h)) {
+            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
           }
-          pendingVideoFrame = frame;
-          if (!animFrameId) {
-            animFrameId = requestAnimationFrame(renderPendingFrame);
-          }
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          frame.close();
+          countFrame();
         },
         error: function(err) {
-          debugLog.error('[Stream] VideoDecoder error:', err);
+          console.error('[Stream] VideoDecoder error:', err);
           resetDecoder();
         }
       });
@@ -643,7 +589,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoderReady = true;
       return true;
     } catch (err) {
-      debugLog.error('[Stream] Failed to init VideoDecoder:', err);
+      console.error('[Stream] Failed to init VideoDecoder:', err);
       return false;
     }
   }
@@ -657,8 +603,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
         } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
           ntype = u8[i+4] & 0x1f;
         }
-        // NAL 5 (IDR keyframe) or NAL 7 (SPS config) initializes decoding
-        if (ntype === 5 || ntype === 7) return true;
+        // WebCodecs requires NAL unit 5 (IDR keyframe) to initialize decoding
+        if (ntype === 5) return true;
       }
     }
     return false;
@@ -676,7 +622,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (!wsOk) return;
     if (lastFrameReceivedTime === 0) return;
     if (Date.now() - lastFrameReceivedTime > 15000 && !fbRunning) {
-      debugLog.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
+      console.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
       startFallback();
     }
   }, 1000);
@@ -687,7 +633,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (firstFrameTimer) clearTimeout(firstFrameTimer);
     firstFrameTimer = setTimeout(function() {
       if (wsOk && lastFrameReceivedTime === 0 && !fbRunning) {
-        debugLog.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
+        console.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
         startFallback();
       }
     }, 12000);
@@ -718,7 +664,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
           const txt = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
           const msg = JSON.parse(txt);
           if (msg.type === 'stream_reset') {
-            debugLog.log('[Stream] Server stream reset — reinitialising decoder');
+            console.log('[Stream] Server stream reset — reinitialising decoder');
             resetDecoder();
             fbRunning = false;
             lastFrameReceivedTime = 0;
@@ -734,14 +680,18 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
 
-      // Handle audio frames — [0x41]['O'=opus][...payload]
+      // Handle tagged Audio binary frames — [0x41]['O'=opus / 'R'=raw][...payload]
       if (rawU8[0] === 0x41) {
-        if (rawU8.length >= 3 && rawU8[1] === 0x4F) {
-          playOpusPacket(rawU8.subarray(2));
+        if (rawU8.length < 3) return;
+        const codec = rawU8[1]; // 0x4F='O' opus, 0x52='R' raw
+        const payload = rawU8.subarray(2);
+        if (codec === 0x4F) {       // Opus
+          playOpusPacket(payload);
+        } else {                    // Raw PCM fallback
+          playRawPcm(payload);
         }
         return;
       }
-
 
       const u8 = (rawU8[0] === 0x56) ? rawU8.subarray(1) : rawU8;
 
@@ -749,7 +699,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47) {
         createImageBitmap(new Blob([u8], { type: 'image/png' }))
           .then(function(bmp) { queueDraw(bmp); })
-          .catch(function(err) { debugLog.warn('[Stream] PNG decode error:', err); });
+          .catch(function(err) { console.warn('[Stream] PNG decode error:', err); });
         return;
       }
 
@@ -757,7 +707,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (u8[0] === 0xFF && u8[1] === 0xD8) {
         createImageBitmap(new Blob([u8], { type: 'image/jpeg' }))
           .then(function(bmp) { queueDraw(bmp); })
-          .catch(function(err) { debugLog.warn('[Stream] JPEG decode error:', err); });
+          .catch(function(err) { console.warn('[Stream] JPEG decode error:', err); });
         return;
       }
 
@@ -778,12 +728,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
       try {
         const chunk = new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
-          timestamp: (frameTs += 16666),
+          timestamp: performance.now() * 1000,
           data: u8
         });
         decoder.decode(chunk);
       } catch (err) {
-        debugLog.warn('[Stream] H264 chunk decode error:', err);
+        console.warn('[Stream] H264 chunk decode error:', err);
         hasKeyframe = false;
       }
     };
@@ -847,7 +797,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Pointer & Drag Control (Smooth & Zero Shaking, Human Touch Mechanics) ──
+  // ── Pointer & Drag Control (Smooth & Zero Shaking) ──────────────────────
   let down = false;
   let activePointerId = null;
 
@@ -858,16 +808,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    // Human touch DOWN: start with realistic contact pressure (0.35)
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.35 });
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH });
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
     const c = coords(e);
-    // Human touch MOVE: firm contact pressure (0.70)
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.70 });
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH });
   });
 
   function releasePointer(e) {
@@ -878,23 +826,21 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    // Human touch UP: release pressure (0)
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH });
   }
 
   canvas.addEventListener('pointerup', releasePointer);
   canvas.addEventListener('pointercancel', releasePointer);
   window.addEventListener('pointerup', releasePointer);
 
-  // wheel scroll — 350ms human throttle, single smooth swipe gesture per wheel flick
+  // wheel scroll
   let wheelT = null;
   canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    if (wheelT) return;
-    wheelT = setTimeout(function() { wheelT = null; }, 350);
+    e.preventDefault(); if (wheelT) return;
+    wheelT = setTimeout(() => wheelT = null, 30);
     const c = coords(e);
-    const d = e.deltaY > 0 ? -450 : 450;
-    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH-50, c.y+d)), duration: 180 });
+    const d = e.deltaY > 0 ? -400 : 400;
+    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50,Math.min(nativeH-50,c.y+d)), duration:80 });
   }, { passive:false });
 
   // keyboard
@@ -1037,7 +983,7 @@ async function startStreamServer(serial, port) {
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
   const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
-  wss.on('connection', async (ws, req) => {
+  wss.on('connection', async (ws) => {
     const bindingCode = bindingService.getOrGenerateBindingCode();
     const lic = await licenseService.checkLicenseStatus(bindingCode);
 
@@ -1092,11 +1038,9 @@ async function startStreamServer(serial, port) {
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 function buildStreamUrl(tunnelDomain, port, serial) {
-  // Do NOT include UDID in URL - it leaks device identity to survey apps and websites
-  // UDID will be handled internally via HTTP headers or session management
   const cleanDomain = tunnelDomain.replace(/\/+$/, '');
   const domain = cleanDomain.startsWith('http') ? cleanDomain : `https://${cleanDomain}`;
-  return `${domain}/`;
+  return `${domain}/?udid=${encodeURIComponent(serial)}`;
 }
 
 function killStreamServer(streamProcess) {
