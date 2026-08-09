@@ -693,32 +693,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }, 12000);
   }
 
-  let audioWs = null;
-  function connectAudioWS() {
-    try {
-      if (audioWs) { audioWs.close(); audioWs = null; }
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const search = location.search ? (location.search + '&type=audio') : '?type=audio';
-      audioWs = new WebSocket(proto + '//' + location.host + '/ws' + search);
-      audioWs.binaryType = 'arraybuffer';
-      audioWs.onmessage = function(e) {
-        if (!(e.data instanceof ArrayBuffer)) return;
-        var rawU8 = new Uint8Array(e.data);
-        if (rawU8.length >= 3 && rawU8[0] === 0x41 && rawU8[1] === 0x4F) {
-          playOpusPacket(rawU8.subarray(2));
-        }
-      };
-      audioWs.onclose = function() {
-        setTimeout(connectAudioWS, 3000);
-      };
-    } catch (_) {}
-  }
-
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const search = location.search ? (location.search + '&type=video') : '?type=video';
-    ws = new WebSocket(proto + '//' + location.host + '/ws' + search);
+    ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
@@ -730,7 +708,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
       audioNextPlayTime = 0;
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
-      connectAudioWS();
       flushQueue();
     };
 
@@ -757,7 +734,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
 
-      if (rawU8[0] === 0x41) return; // Audio handled on dedicated audio WebSocket
+      // Handle audio frames — [0x41]['O'=opus][...payload]
+      if (rawU8[0] === 0x41) {
+        if (rawU8.length >= 3 && rawU8[1] === 0x4F) {
+          playOpusPacket(rawU8.subarray(2));
+        }
+        return;
+      }
 
 
       const u8 = (rawU8[0] === 0x56) ? rawU8.subarray(1) : rawU8;
@@ -1063,15 +1046,8 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    const reqUrl = new URL(req.url, 'http://localhost');
-    const streamType = reqUrl.searchParams.get('type') || 'video';
-
-    logger.info(`[StreamServer] WS connected (${streamType}) for ${serial}`);
-    if (streamType === 'audio') {
-      engine.addAudioClient(ws);
-    } else {
-      engine.addVideoClient(ws);
-    }
+    logger.info(`[StreamServer] WS connected for ${serial}`);
+    engine.addClient(ws);
 
     const licCheckTimer = setInterval(async () => {
       const currentLic = await licenseService.checkLicenseStatus(bindingCode);
