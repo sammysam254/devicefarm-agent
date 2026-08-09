@@ -786,12 +786,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (rawU8[0] === 0x41) {
         if (rawU8.length < 3) return;
         const codec = rawU8[1]; // 0x4F='O' opus, 0x52='R' raw
-        const payload = rawU8.subarray(2);
-        if (codec === 0x4F) {       // Opus
-          playOpusPacket(payload);
-        } else {                    // Raw PCM fallback
-          playRawPcm(payload);
-        }
+        const payload = rawU8.slice(2); // Detach slice from WS buffer
+        // Asynchronous non-blocking dispatch — video stays locked at 60 FPS!
+        setTimeout(function() {
+          if (codec === 0x4F) playOpusPacket(payload);
+          else playRawPcm(payload);
+        }, 0);
         return;
       }
 
