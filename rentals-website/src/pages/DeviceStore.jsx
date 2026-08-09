@@ -12,8 +12,8 @@ export default function DeviceStore() {
   const [loading, setLoading] = useState(true);
   const [rentingId, setRentingId] = useState(null);
 
-  const fetchStoreDevices = async () => {
-    setLoading(true);
+  const fetchStoreDevices = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
       // Query devices available for rental & unassigned/available
       const { data } = await supabase
@@ -35,13 +35,13 @@ export default function DeviceStore() {
     } catch (e) {
       console.error('Error fetching store devices:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchStoreDevices();
-    const interval = setInterval(fetchStoreDevices, 5000);
+    fetchStoreDevices(true);
+    const interval = setInterval(() => fetchStoreDevices(false), 5000);
     return () => clearInterval(interval);
   }, []);
 

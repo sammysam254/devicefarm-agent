@@ -11,9 +11,9 @@ export default function MyDevices() {
   const [revealedPasswords, setRevealedPasswords] = useState({});
   const [focusDevice, setFocusDevice] = useState(null);
 
-  const fetchMyRentedDevices = async () => {
+  const fetchMyRentedDevices = async (isInitial = false) => {
     if (!user) return;
-    setLoading(true);
+    if (isInitial) setLoading(true);
     try {
       // Query device assignments for this user
       const { data: aData } = await supabase
@@ -25,13 +25,13 @@ export default function MyDevices() {
     } catch (e) {
       console.error('Error fetching my rented devices:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchMyRentedDevices();
-    const timer = setInterval(fetchMyRentedDevices, 5000);
+    fetchMyRentedDevices(true);
+    const timer = setInterval(() => fetchMyRentedDevices(false), 5000);
     return () => clearInterval(timer);
   }, [user]);
 
