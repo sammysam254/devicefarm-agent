@@ -106,8 +106,8 @@ function get(data, key) {
 }
 
 function handleControl(type, data, serial, engine) {
-  const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
-  const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
+  const W = engine.screenWidth  || parseFloat(get(data, 'width'))  || 1080;
+  const H = engine.screenHeight || parseFloat(get(data, 'height')) || 2340;
 
   if (type === 'touch') {
     const action = parseInt(get(data, 'action'), 10);
