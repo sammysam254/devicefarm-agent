@@ -44,13 +44,23 @@ CREATE TABLE IF NOT EXISTS public.devices (
     binding_code TEXT REFERENCES public.machine_bindings(binding_code) ON DELETE CASCADE,
     status TEXT DEFAULT 'online',
     is_deleted_from_view BOOLEAN DEFAULT FALSE,
+    is_available_for_rental BOOLEAN DEFAULT FALSE,
+    monthly_rental_price NUMERIC(10,2) DEFAULT 49.00,
+    rented_by_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    rental_status TEXT DEFAULT 'available',
+    rented_at TIMESTAMP WITH TIME ZONE,
     last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Ensure column exists even if table was created previously
+-- Ensure columns exist even if table was created previously
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS is_deleted_from_view BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS is_available_for_rental BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS monthly_rental_price NUMERIC(10,2) DEFAULT 49.00;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_by_user_id UUID REFERENCES public.profiles(id);
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rental_status TEXT DEFAULT 'available';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_at TIMESTAMP WITH TIME ZONE;
 
 -- 4. DEVICE ASSIGNMENTS TABLE (Admin -> Worker assignments with auto-generated passwords)
 CREATE TABLE IF NOT EXISTS public.device_assignments (

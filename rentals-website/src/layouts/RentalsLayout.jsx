@@ -1,0 +1,116 @@
+import React from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { Store, Smartphone, Shield, LogOut, User, Server } from 'lucide-react';
+
+export default function RentalsLayout({ children }) {
+  const { user, profile, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
+
+  const isSeedAdmin = profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com';
+  const isSuperAdmin = profile?.role === 'super_admin' || isSeedAdmin;
+
+  return (
+    <div className="rentals-layout">
+      {/* Sidebar Navigation */}
+      <aside className="sidebar" style={{ padding: '24px 16px' }}>
+        <div style={{ padding: '0 8px 24px', borderBottom: '1px solid var(--border-color)', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg, #38bdf8, #a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#fff', fontSize: '18px' }}>
+              ⚡
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '16px', letterSpacing: '-0.3px' }}>FlexPulse</div>
+              <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 700 }}>RENTALS STORE</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Menu Items */}
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
+          <Link 
+            to="/store" 
+            style={{ 
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderRadius: '12px',
+              fontWeight: 700, fontSize: '14px',
+              color: location.pathname === '/store' || location.pathname === '/' ? '#fff' : 'var(--text-muted)',
+              background: location.pathname === '/store' || location.pathname === '/' ? 'linear-gradient(135deg, rgba(56,189,248,0.2), rgba(168,85,247,0.15))' : 'transparent',
+              border: location.pathname === '/store' || location.pathname === '/' ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent'
+            }}
+          >
+            <Store size={18} color={location.pathname === '/store' ? 'var(--primary)' : 'currentColor'} />
+            Device Store
+          </Link>
+
+          <Link 
+            to="/my-devices" 
+            style={{ 
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderRadius: '12px',
+              fontWeight: 700, fontSize: '14px',
+              color: location.pathname === '/my-devices' ? '#fff' : 'var(--text-muted)',
+              background: location.pathname === '/my-devices' ? 'linear-gradient(135deg, rgba(56,189,248,0.2), rgba(168,85,247,0.15))' : 'transparent',
+              border: location.pathname === '/my-devices' ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent'
+            }}
+          >
+            <Smartphone size={18} color={location.pathname === '/my-devices' ? 'var(--success)' : 'currentColor'} />
+            My Devices
+          </Link>
+
+          {isSuperAdmin && (
+            <Link 
+              to="/admin-rentals" 
+              style={{ 
+                display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderRadius: '12px',
+                fontWeight: 700, fontSize: '14px', marginTop: '12px',
+                color: location.pathname === '/admin-rentals' ? '#fff' : 'var(--warning)',
+                background: location.pathname === '/admin-rentals' ? 'rgba(251,191,36,0.15)' : 'rgba(251,191,36,0.05)',
+                border: '1px solid rgba(251,191,36,0.2)'
+              }}
+            >
+              <Shield size={18} />
+              Admin Rental Hub
+            </Link>
+          )}
+        </nav>
+
+        {/* User Footer Profile & Logout */}
+        <div style={{ paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+          {user ? (
+            <div>
+              <div style={{ padding: '8px 12px', marginBottom: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: '10px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {user.email}
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--text-dim)', textTransform: 'uppercase', marginTop: '2px' }}>
+                  Role: {profile?.role || 'Renter'}
+                </div>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="btn btn-secondary"
+                style={{ width: '100%', justifyContent: 'center', padding: '8px', fontSize: '12px' }}
+              >
+                <LogOut size={14} /> Sign Out
+              </button>
+            </div>
+          ) : (
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+              <User size={14} /> Sign In
+            </Link>
+          )}
+        </div>
+      </aside>
+
+      {/* Main Page Body */}
+      <main className="main-content">
+        {children}
+      </main>
+    </div>
+  );
+}

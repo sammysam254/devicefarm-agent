@@ -60,6 +60,36 @@ export default function SeedAdminDashboard() {
     }
   };
 
+  const toggleRentalStoreRelease = async (deviceId, currentVal) => {
+    const nextVal = !currentVal;
+    try {
+      await supabase.from('devices').update({
+        is_available_for_rental: nextVal,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+      loadData();
+    } catch (err) {
+      alert('Error updating rental availability: ' + err.message);
+    }
+  };
+
+  const handleSetRentalFee = async (deviceId, currentPrice) => {
+    const newPrice = prompt('Set Monthly Rental Fee ($ USD):', currentPrice || 49);
+    if (!newPrice) return;
+    const numPrice = parseFloat(newPrice);
+    if (isNaN(numPrice) || numPrice < 0) return alert('Invalid price');
+
+    try {
+      await supabase.from('devices').update({
+        monthly_rental_price: numPrice,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+      loadData();
+    } catch (err) {
+      alert('Error setting rental fee: ' + err.message);
+    }
+  };
+
   const toggleLicense = async (bindingCode, currentStatus) => {
     const nextStatus = !currentStatus;
     await supabase.from('machine_bindings')
@@ -184,8 +214,8 @@ export default function SeedAdminDashboard() {
                 <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px' }}>
                   <th style={{ padding: '12px' }}>DEVICE / MODEL</th>
                   <th style={{ padding: '12px' }}>SERIAL</th>
-                  <th style={{ padding: '12px' }}>BINDING CODE</th>
-                  <th style={{ padding: '12px' }}>ONLINE STATUS</th>
+                  <th style={{ padding: '12px' }}>MONTHLY FEE ($ USD)</th>
+                  <th style={{ padding: '12px' }}>RENTALS STORE RELEASE</th>
                   <th style={{ padding: '12px' }}>VISIBILITY STATUS</th>
                   <th style={{ padding: '12px', textAlign: 'right' }}>SEED ADMIN ACTION</th>
                 </tr>
@@ -196,16 +226,33 @@ export default function SeedAdminDashboard() {
                   const lastTime = d.updated_at || d.last_seen ? new Date(d.updated_at || d.last_seen).getTime() : 0;
                   const isOnline = d.status === 'online' && (now - lastTime < 45000);
                   const isDeleted = Boolean(d.is_deleted_from_view);
+                  const isAvailableRental = Boolean(d.is_available_for_rental);
+                  const price = d.monthly_rental_price || 49;
 
                   return (
                     <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                       <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
                       <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
-                      <td style={{ padding: '14px 12px', fontFamily: 'monospace', color: 'var(--primary)' }}>{d.binding_code || 'Unbound'}</td>
                       <td style={{ padding: '14px 12px' }}>
-                        <span className={`badge ${isOnline ? 'badge-success' : 'badge-warning'}`}>
-                          {isOnline ? '🟢 Active Online' : '🟡 Offline'}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontWeight: 800, color: 'var(--primary)' }}>${price}/mo</span>
+                          <button 
+                            onClick={() => handleSetRentalFee(d.id, price)} 
+                            className="btn btn-secondary" 
+                            style={{ padding: '2px 6px', fontSize: '10px' }}
+                          >
+                            Set Fee
+                          </button>
+                        </div>
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        <button
+                          onClick={() => toggleRentalStoreRelease(d.id, isAvailableRental)}
+                          className={`btn ${isAvailableRental ? 'btn-success' : 'btn-secondary'}`}
+                          style={{ padding: '4px 10px', fontSize: '11px' }}
+                        >
+                          {isAvailableRental ? '🛒 Released to Store' : '🔒 Hold in Inventory'}
+                        </button>
                       </td>
                       <td style={{ padding: '14px 12px' }}>
                         {isDeleted ? (
