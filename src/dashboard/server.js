@@ -62,7 +62,8 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
-      const url = req.url.split('?')[0];
+      const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      const url = fullUrl.pathname;
 
       // ── API Routes ────────────────────────────────────────────────────────
       // ── Public endpoint for initial binding code (no auth required) ────
@@ -152,7 +153,6 @@ function startDashboardServer(port = 7400) {
       }
 
       // ── Proxy Handling ──────────────────────────────────────────────────
-      const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const actionParam = fullUrl.searchParams.get('action');
       const udidParam = fullUrl.searchParams.get('udid');
       const remoteParam = fullUrl.searchParams.get('remote');

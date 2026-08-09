@@ -349,8 +349,7 @@ class ScrcpyEngine extends EventEmitter {
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
       'audio=' + (this.enableAudio ? 'true' : 'false'),
-      'audio_codec=opus',
-      'audio_bit_rate=128000',
+      'audio_codec=raw',
       'control=true',
       'cleanup=false',
       'send_dummy_byte=true',
@@ -739,7 +738,7 @@ class ScrcpyEngine extends EventEmitter {
   _broadcastAudio(payload) {
     // Frame layout: [0x41][codec_byte][...payload]
     // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
-    const codec = (this._audioCodec === 'opus') ? 0x4F : 0x52;
+    const codec = (this._audioCodec && this._audioCodec.includes('opus')) ? 0x4F : 0x52;
     const audioFrame = Buffer.allocUnsafe(2 + payload.length);
     audioFrame[0] = 0x41; // 'A' = audio frame tag
     audioFrame[1] = codec; // 'O' = opus, 'R' = raw

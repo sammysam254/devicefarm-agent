@@ -490,7 +490,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.connect(gainNode);
 
             const now = audioCtx.currentTime;
-            if (audioNextPlayTime < now) audioNextPlayTime = now;
+            if (audioNextPlayTime < now) {
+              audioNextPlayTime = now + 0.02;
+            } else if (audioNextPlayTime > now + 0.15) {
+              audioNextPlayTime = now + 0.02;
+            }
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -536,29 +540,49 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function playRawPcm(bytes) {
-    // Fallback: raw signed 16-bit LE stereo 48kHz PCM
+    // Raw signed 16-bit LE stereo 48kHz PCM playback (pristine audio)
     initAudio();
     if (!audioCtx || !gainNode || isMuted) return;
     if (audioCtx.state !== 'running') return;
     try {
-      const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+      let int16;
+      if (bytes.byteOffset % 2 === 0) {
+        int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+      } else {
+        // Safe byte copy for odd byte offsets to prevent RangeError
+        const copy = new Uint8Array(bytes.byteLength);
+        copy.set(bytes);
+        int16 = new Int16Array(copy.buffer, 0, Math.floor(copy.byteLength / 2));
+      }
+
       const sampleCount = Math.floor(int16.length / 2);
       if (sampleCount <= 0) return;
+
       const buf = audioCtx.createBuffer(2, sampleCount, 48000);
       const L = buf.getChannelData(0), R = buf.getChannelData(1);
+
       for (let i = 0; i < sampleCount; i++) {
         L[i] = int16[i * 2]     / 32768.0;
         R[i] = int16[i * 2 + 1] / 32768.0;
       }
+
       const src = audioCtx.createBufferSource();
       src.buffer = buf;
       src.connect(gainNode);
+
       const now = audioCtx.currentTime;
-      if (audioNextPlayTime < now) audioNextPlayTime = now;
-      if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
+      // Jitter buffer: smooth 20ms lead prevents underrun pops & crackling
+      if (audioNextPlayTime < now) {
+        audioNextPlayTime = now + 0.02;
+      } else if (audioNextPlayTime > now + 0.15) {
+        audioNextPlayTime = now + 0.02;
+      }
+
       src.start(audioNextPlayTime);
       audioNextPlayTime += buf.duration;
-    } catch (_) {}
+    } catch (err) {
+      debugLog.warn('[Audio] playRawPcm error:', err);
+    }
   }
 
   // ── Mute toggle ──────────────────────────────────────────────────────────
