@@ -419,15 +419,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── Audio — Opus only, zero-queue direct decode, fully isolated from video ─
+  // ── Audio — Opus, raw play-as-received, no queuing at any layer ───────────
   var audioCtx = null;
   var audioDecoder = null;
   var audioDecoderReady = false;
-  var audioNextPlayTime = 0;
   var isMuted = false;
   var gainNode = null;
-  // Monotonic packet counter for timestamps — AudioDecoder needs unique timestamps
-  var _audioPktTs = 0;
+  var _audioPktTs = 0; // monotonic counter so AudioDecoder gets unique timestamps
 
   function updateAudioPill() {
     var pill = document.getElementById('audioPill');
@@ -438,10 +436,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function _ensureAudioCtx() {
     if (audioCtx) return true;
     try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 48000,
-        latencyHint: 'interactive'
-      });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
       gainNode = audioCtx.createGain();
       gainNode.gain.value = isMuted ? 0 : 1;
       gainNode.connect(audioCtx.destination);
@@ -452,10 +447,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function initAudio() {
     _ensureAudioCtx();
     if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().then(function() {
-        audioNextPlayTime = 0; // reset so first packet starts cleanly
-        updateAudioPill();
-      }).catch(function() {});
+      audioCtx.resume().then(function() { updateAudioPill(); }).catch(function() {});
     } else {
       updateAudioPill();
     }
@@ -476,7 +468,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try {
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
-          // AudioDecoder output fires on its own internal thread — safe to call WebAudio here
+          // Play raw — no buffer chain, no scheduling queue, just play now+5ms
           if (!audioCtx || !gainNode || audioCtx.state !== 'running') {
             try { audioData.close(); } catch (_) {}
             return;
@@ -484,14 +476,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
           try {
             var nCh = audioData.numberOfChannels;
             var nFrames = audioData.numberOfFrames;
-            var sr = audioData.sampleRate;
-            var buf = audioCtx.createBuffer(nCh, nFrames, sr);
+            var buf = audioCtx.createBuffer(nCh, nFrames, audioData.sampleRate);
             for (var ch = 0; ch < nCh; ch++) {
               var plane = new Float32Array(nFrames);
               try {
                 audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
               } catch (_) {
-                // fallback: interleaved
                 var all = new Float32Array(nCh * nFrames);
                 audioData.copyTo(all, { planeIndex: 0, format: 'f32' });
                 for (var i = 0; i < nFrames; i++) plane[i] = all[i * nCh + ch];
@@ -499,26 +489,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
               buf.copyToChannel(plane, ch);
             }
             audioData.close();
-
             var src = audioCtx.createBufferSource();
             src.buffer = buf;
             src.connect(gainNode);
-
-            var now = audioCtx.currentTime;
-            // Reset play cursor if we fall behind or get too far ahead (max 120ms buffer)
-            if (audioNextPlayTime < now - 0.02 || audioNextPlayTime > now + 0.12) {
-              audioNextPlayTime = now + 0.005;
-            }
-            src.start(audioNextPlayTime);
-            audioNextPlayTime += buf.duration;
+            // Raw: start 5ms from now — no accumulated buffer chain
+            src.start(audioCtx.currentTime + 0.005);
           } catch (_) {
             try { audioData.close(); } catch (_) {}
           }
         },
-        error: function() {
-          audioDecoderReady = false;
-          audioDecoder = null;
-        }
+        error: function() { audioDecoderReady = false; audioDecoder = null; }
       });
       audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
       audioDecoderReady = true;
@@ -526,21 +506,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
     } catch (_) { return false; }
   }
 
-  // Called from setTimeout(..., 0) — runs in its own macrotask, NEVER in the video frame loop
+  // Raw audio — called DIRECTLY from ws.onmessage, no setTimeout, no queue
+  // AudioDecoder.decode() returns immediately (internally async), so this is safe
   function playOpusPacket(bytes) {
     if (isMuted) return;
-    if (!_ensureAudioCtx()) return;
-    // If AudioContext suspended (browser autoplay block), drop silently — never stall
-    if (audioCtx.state !== 'running') return;
+    if (!audioCtx || audioCtx.state !== 'running') return; // drop if not ready
     if (!_ensureDecoder()) return;
     try {
-      // AudioDecoder.decode() is non-blocking — it enqueues internally and fires output async
-      audioDecoder.decode(new EncodedAudioChunk({
-        type: 'key',
-        timestamp: _audioPktTs,
-        data: bytes
-      }));
-      _audioPktTs += 20000; // 20ms in microseconds — typical Opus frame duration
+      audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: _audioPktTs, data: bytes }));
+      _audioPktTs += 20000;
     } catch (_) {}
   }
 
@@ -565,15 +539,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  // Resume AudioContext on first user gesture — passive listeners, ZERO impact on video
+  // Resume AudioContext on first user gesture
   ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, function() {
       if (!audioCtx) _ensureAudioCtx();
       if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().then(function() {
-          audioNextPlayTime = 0;
-          updateAudioPill();
-        }).catch(function() {});
+        audioCtx.resume().then(function() { updateAudioPill(); }).catch(function() {});
       }
     }, { passive: true });
   });
@@ -718,16 +689,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (rawU8.length < 4) return;
 
       // Handle tagged Audio binary frames — [0x41][codec_byte][...payload]
-      // Only Opus (0x4F) is dispatched; all other codec bytes are dropped.
+      // Opus only. decode() called DIRECTLY — no setTimeout, no queue, raw as received.
       if (rawU8[0] === 0x41) {
-        if (rawU8.length < 3) return;
-        var _codec = rawU8[1];
-        var _payload = rawU8.slice(2); // detach from WS buffer before async
-        if (_codec === 0x4F) { // 'O' = Opus
-          setTimeout(function() { playOpusPacket(_payload); }, 0);
+        if (rawU8.length >= 3 && rawU8[1] === 0x4F) { // 0x4F = 'O' = Opus
+          playOpusPacket(rawU8.slice(2));
         }
-        // Drop raw/AAC frames silently — never block video
-        return;
+        return; // all audio frames handled — never fall through to video path
       }
 
 
