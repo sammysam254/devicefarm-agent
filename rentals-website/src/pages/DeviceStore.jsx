@@ -118,7 +118,6 @@ export default function DeviceStore() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '22px' }}>
           {storeDevices.map(d => {
             const price = d.monthly_rental_price || 49;
-            const isRenting = rentingId === d.id;
 
             return (
               <div key={d.id} className="card card-interactive" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
