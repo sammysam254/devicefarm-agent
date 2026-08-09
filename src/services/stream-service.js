@@ -478,7 +478,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
           try {
             var nCh = audioData.numberOfChannels;
             var nFrames = audioData.numberOfFrames;
-            var buf = audioCtx.createBuffer(nCh, nFrames, audioData.sampleRate);
+            var outCh = nCh === 1 ? 2 : nCh;
+            var buf = audioCtx.createBuffer(outCh, nFrames, audioData.sampleRate);
             for (var ch = 0; ch < nCh; ch++) {
               var plane = new Float32Array(nFrames);
               try {
@@ -489,16 +490,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
                 for (var i = 0; i < nFrames; i++) plane[i] = all[i * nCh + ch];
               }
               buf.copyToChannel(plane, ch);
+              if (nCh === 1) buf.copyToChannel(plane, 1);
             }
             audioData.close();
             var src = audioCtx.createBufferSource();
             src.buffer = buf;
             src.connect(gainNode);
             var now = audioCtx.currentTime;
-            // Smooth scheduling chain — 35ms lead offset, 250ms max jitter window
-            // Prevents packet overlap popping while smoothly bridging network jitter
-            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.25) {
-              audioNextPlayTime = now + 0.035;
+            // Smooth scheduling chain — 40ms lead offset, 300ms max jitter window
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.30) {
+              audioNextPlayTime = now + 0.040;
             }
             src.start(audioNextPlayTime);
             audioNextPlayTime += buf.duration;
@@ -658,10 +659,32 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }, 12000);
   }
 
+  let audioWs = null;
+  function connectAudioWS() {
+    try {
+      if (audioWs) { audioWs.close(); audioWs = null; }
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const search = location.search ? (location.search + '&type=audio') : '?type=audio';
+      audioWs = new WebSocket(proto + '//' + location.host + '/ws' + search);
+      audioWs.binaryType = 'arraybuffer';
+      audioWs.onmessage = function(e) {
+        if (!(e.data instanceof ArrayBuffer)) return;
+        var rawU8 = new Uint8Array(e.data);
+        if (rawU8.length >= 3 && rawU8[0] === 0x41 && rawU8[1] === 0x4F) {
+          playOpusPacket(rawU8.subarray(2));
+        }
+      };
+      audioWs.onclose = function() {
+        setTimeout(connectAudioWS, 3000);
+      };
+    } catch (_) {}
+  }
+
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
+    const search = location.search ? (location.search + '&type=video') : '?type=video';
+    ws = new WebSocket(proto + '//' + location.host + '/ws' + search);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
@@ -673,6 +696,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       audioNextPlayTime = 0;
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
+      connectAudioWS();
       flushQueue();
     };
 
@@ -699,15 +723,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
 
-      // Handle audio frames — [0x41]['O'=opus][...payload]
-      // setTimeout(0) keeps audio in its own macrotask — video path is never blocked
-      if (rawU8[0] === 0x41) {
-        if (rawU8.length >= 3 && rawU8[1] === 0x4F) {
-          var _ap = rawU8.slice(2);
-          setTimeout(function() { playOpusPacket(_ap); }, 0);
-        }
-        return;
-      }
+      if (rawU8[0] === 0x41) return; // Audio handled on dedicated audio WebSocket
 
 
       const u8 = (rawU8[0] === 0x56) ? rawU8.subarray(1) : rawU8;
@@ -1003,7 +1019,7 @@ async function startStreamServer(serial, port) {
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
   const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
-  wss.on('connection', async (ws) => {
+  wss.on('connection', async (ws, req) => {
     const bindingCode = bindingService.getOrGenerateBindingCode();
     const lic = await licenseService.checkLicenseStatus(bindingCode);
 
@@ -1012,8 +1028,15 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    logger.info(`[StreamServer] WS connected for ${serial}`);
-    engine.addClient(ws);
+    const reqUrl = new URL(req.url, 'http://localhost');
+    const streamType = reqUrl.searchParams.get('type') || 'video';
+
+    logger.info(`[StreamServer] WS connected (${streamType}) for ${serial}`);
+    if (streamType === 'audio') {
+      engine.addAudioClient(ws);
+    } else {
+      engine.addVideoClient(ws);
+    }
 
     const licCheckTimer = setInterval(async () => {
       const currentLic = await licenseService.checkLicenseStatus(bindingCode);

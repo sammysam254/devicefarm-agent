@@ -254,8 +254,10 @@ class ScrcpyEngine extends EventEmitter {
     this.screenWidth  = 1080;
     this.screenHeight = 2340;
 
-    // Connected WS clients receiving H264 stream & audio
-    this.wsClients = new Set();
+    // Connected WS clients receiving H264 video stream & audio independently
+    this.wsClients = new Set(); // fallback legacy set
+    this.videoClients = new Set();
+    this.audioClients = new Set();
     this._configPacket = null;
     this._keyframeBuffer = null;
     this.videoWidth = 0;
@@ -270,11 +272,8 @@ class ScrcpyEngine extends EventEmitter {
     return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
   }
 
-  /**
-   * Register a WS client. We immediately flush the cached SPS/PPS + IDR keyframe
-   * so the WebCodecs decoder is initialised before any new delta frame arrives.
-   */
-  addClient(ws) {
+  addVideoClient(ws) {
+    this.videoClients.add(ws);
     this.wsClients.add(ws);
     const initialPacket = this._keyframeBuffer || this._configPacket;
     if (initialPacket && ws.readyState === 1) {
@@ -282,7 +281,18 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
+  addAudioClient(ws) {
+    this.audioClients.add(ws);
+    this.wsClients.add(ws);
+  }
+
+  addClient(ws) {
+    this.addVideoClient(ws);
+  }
+
   removeClient(ws) {
+    this.videoClients.delete(ws);
+    this.audioClients.delete(ws);
     this.wsClients.delete(ws);
   }
 
@@ -737,12 +747,11 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastAudio(payload) {
-    // Frame layout: [0x41][codec_byte][...payload]
-    // codec_byte: 0x4F ('O') = opus, 0x41 ('A') = aac, 0x52 ('R') = raw PCM
-    let codecByte = 0x52; // default raw PCM ('R')
+    let codecByte = 0x4F; // Opus ('O')
     if (this._audioCodec) {
-      if (this._audioCodec.includes('opus')) codecByte = 0x4F; // 'O'
-      else if (this._audioCodec.includes('aac')) codecByte = 0x41; // 'A'
+      if (this._audioCodec.includes('opus')) codecByte = 0x4F;
+      else if (this._audioCodec.includes('aac')) codecByte = 0x41;
+      else if (this._audioCodec.includes('raw')) codecByte = 0x52;
     }
 
     const audioFrame = Buffer.allocUnsafe(2 + payload.length);
@@ -750,20 +759,20 @@ class ScrcpyEngine extends EventEmitter {
     audioFrame[1] = codecByte;
     payload.copy(audioFrame, 2);
 
-    for (const ws of this.wsClients) {
-      if (ws.readyState === 1 && ws.bufferedAmount < 128 * 1024) {
-        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
+    for (const ws of this.audioClients) {
+      if (ws.readyState === 1 && ws.bufferedAmount < 64 * 1024) {
+        try { ws.send(audioFrame, { binary: true }); } catch (_) { this.audioClients.delete(ws); }
       }
     }
   }
 
   _broadcastVideo(payload) {
-    // Direct raw H264 frame broadcast (zero artificial frame drops or stutters)
-    for (const ws of this.wsClients) {
+    // Direct raw H264 frame broadcast — 100% dedicated video websocket pool
+    for (const ws of this.videoClients) {
       if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+        try { ws.send(payload, { binary: true }); } catch (_) { this.videoClients.delete(ws); }
       } else {
-        this.wsClients.delete(ws);
+        this.videoClients.delete(ws);
       }
     }
   }
