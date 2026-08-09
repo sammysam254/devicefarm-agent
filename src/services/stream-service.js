@@ -572,14 +572,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let decoderReady = false;
   let hasKeyframe = false;
   let frameTs = 0;
-  let pendingFrame = null;
+  let pendingVideoFrame = null;
   let animFrameId = null;
 
   function renderPendingFrame() {
     animFrameId = null;
-    if (!pendingFrame) return;
-    const frame = pendingFrame;
-    pendingFrame = null;
+    if (!pendingVideoFrame) return;
+    const frame = pendingVideoFrame;
+    pendingVideoFrame = null;
     try {
       const w = frame.displayWidth  || frame.codedWidth  || frame.width;
       const h = frame.displayHeight || frame.codedHeight || frame.height;
@@ -595,9 +595,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function resetDecoder() {
     hasKeyframe = false;
     frameTs = 0;
-    if (pendingFrame) {
-      try { pendingFrame.close(); } catch (_) {}
-      pendingFrame = null;
+    if (pendingVideoFrame) {
+      try { pendingVideoFrame.close(); } catch (_) {}
+      pendingVideoFrame = null;
     }
     if (animFrameId) {
       cancelAnimationFrame(animFrameId);
@@ -622,10 +622,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
           lastFrameReceivedTime = Date.now();
           // Drop older decoded frames if a newer frame arrived before next repaint,
           // keeping canvas ALWAYS 100% real-time synced with physical device!
-          if (pendingFrame) {
-            try { pendingFrame.close(); } catch (_) {}
+          if (pendingVideoFrame) {
+            try { pendingVideoFrame.close(); } catch (_) {}
           }
-          pendingFrame = frame;
+          pendingVideoFrame = frame;
           if (!animFrameId) {
             animFrameId = requestAnimationFrame(renderPendingFrame);
           }

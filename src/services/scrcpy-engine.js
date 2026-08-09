@@ -254,8 +254,10 @@ class ScrcpyEngine extends EventEmitter {
     this.screenWidth  = 1080;
     this.screenHeight = 2340;
 
-    // Connected WS clients receiving H264 video stream & audio
+    // Connected WS clients receiving H264 video stream & audio independently
     this.wsClients = new Set();
+    this.videoClients = new Set();
+    this.audioClients = new Set();
     this._configPacket = null;
     this._keyframeBuffer = null;
     this.videoWidth = 0;
@@ -270,7 +272,8 @@ class ScrcpyEngine extends EventEmitter {
     return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
   }
 
-  addClient(ws) {
+  addVideoClient(ws) {
+    this.videoClients.add(ws);
     this.wsClients.add(ws);
     const initialPacket = this._keyframeBuffer || this._configPacket;
     if (initialPacket && ws.readyState === 1) {
@@ -278,10 +281,18 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  addVideoClient(ws) { this.addClient(ws); }
-  addAudioClient(ws) { this.addClient(ws); }
+  addAudioClient(ws) {
+    this.audioClients.add(ws);
+    this.wsClients.add(ws);
+  }
+
+  addClient(ws) {
+    this.addVideoClient(ws);
+  }
 
   removeClient(ws) {
+    this.videoClients.delete(ws);
+    this.audioClients.delete(ws);
     this.wsClients.delete(ws);
   }
 
@@ -747,20 +758,20 @@ class ScrcpyEngine extends EventEmitter {
     audioFrame[1] = codecByte;
     payload.copy(audioFrame, 2);
 
-    for (const ws of this.wsClients) {
+    for (const ws of this.audioClients) {
       if (ws.readyState === 1 && ws.bufferedAmount < 64 * 1024) {
-        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
+        try { ws.send(audioFrame, { binary: true }); } catch (_) { this.audioClients.delete(ws); }
       }
     }
   }
 
   _broadcastVideo(payload) {
     // Direct raw H264 frame broadcast — 100% complete frame delivery to prevent H264 delta frame corruption
-    for (const ws of this.wsClients) {
+    for (const ws of this.videoClients) {
       if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+        try { ws.send(payload, { binary: true }); } catch (_) { this.videoClients.delete(ws); }
       } else {
-        this.wsClients.delete(ws);
+        this.videoClients.delete(ws);
       }
     }
   }
