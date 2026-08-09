@@ -204,6 +204,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:360px}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
+    .audio-pill{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:100;background:linear-gradient(135deg,rgba(56,189,248,.95),rgba(129,140,248,.95));color:#0f172a;padding:8px 18px;border-radius:30px;font-size:12px;font-weight:800;display:flex;align-items:center;gap:6px;box-shadow:0 8px 25px rgba(56,189,248,.45);cursor:pointer;backdrop-filter:blur(8px);transition:all .3s ease;animation:pillPulse 2s infinite}
+    @keyframes pillPulse{0%,100%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(1.05)}}
 
     /* ── Mobile bottom navigation bar ─────────────────────────────────────── */
     .mobile-nav{
@@ -288,6 +290,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
 <div class="stage">
   <div class="wrap" id="wrap">
+    <div class="audio-pill" id="audioPill" onclick="resumeAudioExplicit()">🔊 Tap to Enable Audio</div>
     <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
   </div>
   <div class="sidebar">
@@ -424,18 +427,40 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let isMuted = false;
   let gainNode = null;
 
-  function initAudio() {
-    if (audioCtx) {
-      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
-      return;
+  function updateAudioPill() {
+    const pill = document.getElementById('audioPill');
+    if (!pill) return;
+    if (audioCtx && audioCtx.state === 'running' && !isMuted) {
+      pill.style.display = 'none';
+    } else {
+      pill.style.display = 'flex';
     }
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
-      gainNode = audioCtx.createGain();
-      gainNode.gain.value = isMuted ? 0 : 1;
-      gainNode.connect(audioCtx.destination);
-      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
-    } catch (_) {}
+  }
+
+  function initAudio() {
+    if (!audioCtx) {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+        gainNode = audioCtx.createGain();
+        gainNode.gain.value = isMuted ? 0 : 1;
+        gainNode.connect(audioCtx.destination);
+      } catch (_) {}
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().then(function() {
+        audioNextPlayTime = audioCtx.currentTime + 0.008;
+        updateAudioPill();
+      }).catch(function() {});
+    } else {
+      updateAudioPill();
+    }
+  }
+
+  function resumeAudioExplicit() {
+    isMuted = false;
+    if (gainNode) gainNode.gain.value = 1;
+    initAudio();
+    updateAudioPill();
   }
 
   function initOpusDecoder() {
@@ -490,10 +515,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.connect(gainNode);
 
             const now = audioCtx.currentTime;
-            if (audioNextPlayTime < now) {
-              audioNextPlayTime = now + 0.02;
-            } else if (audioNextPlayTime > now + 0.15) {
-              audioNextPlayTime = now + 0.02;
+            // Ultra-low latency lip-sync: 8ms lead, max 35ms drift
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.035) {
+              audioNextPlayTime = now + 0.008;
             }
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
@@ -504,8 +528,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
         },
         error: function(err) {
           debugLog.warn('[Audio] AudioDecoder error:', err);
-          audioDecoderReady = false;
-          audioDecoder = null;
           layoutDetected = false;
         }
       });
@@ -521,11 +543,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function playOpusPacket(bytes) {
     if (isMuted) return;
     if (!audioCtx) initAudio();
-    if (!audioCtx || audioCtx.state !== 'running') return;
-    if (!audioDecoderReady) {
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(function() {
+        audioNextPlayTime = audioCtx.currentTime + 0.008;
+        updateAudioPill();
+      }).catch(function(){});
+    }
+    if (!audioDecoderReady || !audioDecoder || audioDecoder.state === 'closed') {
       if (!initOpusDecoder()) return;
     }
-    if (!audioDecoder || audioDecoder.state === 'closed') { audioDecoderReady = false; return; }
     try {
       audioDecoder.decode(new EncodedAudioChunk({
         type: 'key',
@@ -533,17 +560,21 @@ function buildPlayerHtml(serial, screenW, screenH) {
         data: bytes
       }));
     } catch (err) {
-      debugLog.warn('[Audio] Opus decode error:', err);
-      audioDecoderReady = false;
-      audioDecoder = null;
+      debugLog.warn('[Audio] Opus decode packet notice:', err);
     }
   }
 
   function playRawPcm(bytes) {
-    // Raw signed 16-bit LE stereo 48kHz PCM playback (pristine audio)
-    initAudio();
-    if (!audioCtx || !gainNode || isMuted) return;
-    if (audioCtx.state !== 'running') return;
+    // Raw signed 16-bit LE stereo 48kHz PCM playback (pristine fallback)
+    if (isMuted) return;
+    if (!audioCtx) initAudio();
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(function() {
+        audioNextPlayTime = audioCtx.currentTime + 0.008;
+        updateAudioPill();
+      }).catch(function(){});
+    }
     try {
       let int16;
       if (bytes.byteOffset % 2 === 0) {
@@ -571,11 +602,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       src.connect(gainNode);
 
       const now = audioCtx.currentTime;
-      // Jitter buffer: smooth 20ms lead prevents underrun pops & crackling
-      if (audioNextPlayTime < now) {
-        audioNextPlayTime = now + 0.02;
-      } else if (audioNextPlayTime > now + 0.15) {
-        audioNextPlayTime = now + 0.02;
+      // Ultra-low latency lip-sync: 8ms lead, max 35ms drift
+      if (audioNextPlayTime < now || audioNextPlayTime > now + 0.035) {
+        audioNextPlayTime = now + 0.008;
       }
 
       src.start(audioNextPlayTime);
@@ -592,6 +621,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
       try { audioDecoder.flush().catch(function(){}); } catch (_) {}
     }
+    updateAudioPill();
     // Sync desktop sidebar mute button
     const btn = document.getElementById('muteBtn');
     if (btn) {
@@ -610,7 +640,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  // Resume AudioContext on first user gesture
+  // Resume AudioContext on user gesture
   ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, initAudio, { passive: true });
   });
