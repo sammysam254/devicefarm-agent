@@ -718,22 +718,13 @@ class ScrcpyEngine extends EventEmitter {
 
       const META = 12; // 8-byte PTS + 4-byte size
       while (buf.length >= META) {
-        // Read PTS as two 32-bit halves (BigInt not needed)
-        const ptsHi = buf.readUInt32BE(0);
-        // Bit 63 of PTS = config/codec packet flag in scrcpy 2.x — skip these, not audio frames
-        if (ptsHi & 0x80000000) {
-          const cfgSize = buf.readUInt32BE(8);
-          if (buf.length < META + cfgSize) break;
-          buf = buf.subarray(META + cfgSize); // drop config packet entirely
-          continue;
-        }
         const pktSize = buf.readUInt32BE(8);
         if (pktSize === 0 || pktSize > 65536) { // max realistic Opus frame
-          buf = buf.subarray(META); // skip this bad header, realign
+          buf = buf.subarray(1); // bad size, shift by 1 byte to resync
           continue;
         }
         if (buf.length < META + pktSize) break;
-        const payload = buf.slice(META, META + pktSize); // .slice makes a copy (safe)
+        const payload = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);
         this._broadcastAudio(payload);
       }

@@ -495,10 +495,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.buffer = buf;
             src.connect(gainNode);
             var now = audioCtx.currentTime;
-            // Scheduling chain — prevents TCP-batched packets from overlapping and popping
-            // Reset if behind (underrun) or too far ahead (>60ms)
-            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.06) {
-              audioNextPlayTime = now + 0.005;
+            // Smooth scheduling chain — 35ms lead offset, 250ms max jitter window
+            // Prevents packet overlap popping while smoothly bridging network jitter
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.25) {
+              audioNextPlayTime = now + 0.035;
             }
             src.start(audioNextPlayTime);
             audioNextPlayTime += buf.duration;
