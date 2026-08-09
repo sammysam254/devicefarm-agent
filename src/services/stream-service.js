@@ -419,64 +419,19 @@ function buildPlayerHtml(serial, screenW, screenH) {
     countFrame();
   }
 
-  // ── Audio — AudioWorklet ring-buffer (audio thread), zero main-thread overhead ──
-  // The AudioWorklet runs on a dedicated audio rendering thread, completely separate
-  // from the main JS thread. Main thread only does a zero-copy postMessage per packet.
-  var _WORKLET = [
-    'class OpusRing extends AudioWorkletProcessor {',
-    '  constructor() {',
-    '    super();',
-    '    this._ring = new Float32Array(192000);', // 2s stereo interleaved at 48kHz
-    '    this._w = 0; this._r = 0; this._n = 0;',
-    '    this.port.onmessage = function(e) {',
-    '      var d = new Float32Array(e.data), sz = this._ring.length;',
-    '      for (var i = 0; i < d.length; i++) {',
-    '        this._ring[this._w % sz] = d[i]; this._w++; this._n++;',
-    '      }',
-    '    }.bind(this);',
-    '  }',
-    '  process(inputs, outputs) {',
-    '    var L = outputs[0][0], R = outputs[0][1];',
-    '    var frames = L ? L.length : 128, need = frames * 2, sz = this._ring.length;',
-    '    if (this._n < need) { if(L) L.fill(0); if(R) R.fill(0); return true; }',
-    '    for (var i = 0; i < frames; i++) {',
-    '      if(L) L[i] = this._ring[this._r % sz]; this._r++; this._n--;',
-    '      if(R) R[i] = this._ring[this._r % sz]; this._r++; this._n--;',
-    '    }',
-    '    return true;',
-    '  }',
-    '}',
-    'registerProcessor("opus-ring", OpusRing);'
-  ].join('\n');
-
+  // ── Audio — Opus, scheduling chain, setTimeout keeps video path unblocked ──
   var audioCtx = null;
   var audioDecoder = null;
   var audioDecoderReady = false;
-  var audioNextPlayTime = 0; // kept for ws.onopen compat
+  var audioNextPlayTime = 0;
   var isMuted = false;
   var gainNode = null;
-  var workletNode = null;
-  var workletReady = false;
   var _audioPktTs = 0;
 
   function updateAudioPill() {
     var pill = document.getElementById('audioPill');
     if (!pill) return;
     pill.style.display = (audioCtx && audioCtx.state === 'running' && !isMuted) ? 'none' : 'flex';
-  }
-
-  function _loadWorklet() {
-    if (!audioCtx || !audioCtx.audioWorklet) return;
-    var blob = new Blob([_WORKLET], { type: 'application/javascript' });
-    var url = URL.createObjectURL(blob);
-    audioCtx.audioWorklet.addModule(url).then(function() {
-      URL.revokeObjectURL(url);
-      workletNode = new AudioWorkletNode(audioCtx, 'opus-ring');
-      workletNode.connect(gainNode);
-      workletReady = true;
-    }).catch(function() {
-      workletReady = false; // fallback will not be used — just drop audio if no worklet
-    });
   }
 
   function _ensureAudioCtx() {
@@ -486,7 +441,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
       gainNode = audioCtx.createGain();
       gainNode.gain.value = isMuted ? 0 : 1;
       gainNode.connect(audioCtx.destination);
-      _loadWorklet();
       return true;
     } catch (_) { return false; }
   }
@@ -513,35 +467,41 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
     if (typeof AudioDecoder === 'undefined') return false;
     _audioPktTs = 0;
+    audioNextPlayTime = 0;
     try {
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
-          // ALL expensive work happens here — but we minimize it to just copyTo + postMessage.
-          // postMessage with transferable ArrayBuffer is a zero-copy pointer transfer (~5µs).
-          // Actual audio rendering happens in the AudioWorklet thread — NOT here.
-          if (!workletReady || !workletNode || !audioCtx || audioCtx.state !== 'running') {
+          if (!audioCtx || !gainNode || audioCtx.state !== 'running') {
             try { audioData.close(); } catch (_) {}
             return;
           }
           try {
             var nCh = audioData.numberOfChannels;
             var nFrames = audioData.numberOfFrames;
-            // Build stereo interleaved Float32Array for the worklet ring buffer
-            var out = new Float32Array(nFrames * 2);
-            if (nCh >= 2) {
-              var L = new Float32Array(nFrames);
-              var R = new Float32Array(nFrames);
-              audioData.copyTo(L, { planeIndex: 0, format: 'f32-planar' });
-              audioData.copyTo(R, { planeIndex: 1, format: 'f32-planar' });
-              for (var i = 0; i < nFrames; i++) { out[i * 2] = L[i]; out[i * 2 + 1] = R[i]; }
-            } else {
-              var M = new Float32Array(nFrames);
-              audioData.copyTo(M, { planeIndex: 0, format: 'f32-planar' });
-              for (var i = 0; i < nFrames; i++) { out[i * 2] = out[i * 2 + 1] = M[i]; }
+            var buf = audioCtx.createBuffer(nCh, nFrames, audioData.sampleRate);
+            for (var ch = 0; ch < nCh; ch++) {
+              var plane = new Float32Array(nFrames);
+              try {
+                audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
+              } catch (_) {
+                var all = new Float32Array(nCh * nFrames);
+                audioData.copyTo(all, { planeIndex: 0, format: 'f32' });
+                for (var i = 0; i < nFrames; i++) plane[i] = all[i * nCh + ch];
+              }
+              buf.copyToChannel(plane, ch);
             }
             audioData.close();
-            // Zero-copy transfer — ArrayBuffer ownership moves to audio thread
-            workletNode.port.postMessage(out.buffer, [out.buffer]);
+            var src = audioCtx.createBufferSource();
+            src.buffer = buf;
+            src.connect(gainNode);
+            var now = audioCtx.currentTime;
+            // Scheduling chain — prevents TCP-batched packets from overlapping and popping
+            // Reset if behind (underrun) or too far ahead (>60ms)
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.06) {
+              audioNextPlayTime = now + 0.005;
+            }
+            src.start(audioNextPlayTime);
+            audioNextPlayTime += buf.duration;
           } catch (_) {
             try { audioData.close(); } catch (_) {}
           }
@@ -554,11 +514,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     } catch (_) { return false; }
   }
 
-  // Audio packet received — dispatched via setTimeout(0) so video frames process first
+  // setTimeout(0) keeps audio in its own macrotask — video frames are never blocked
   function playOpusPacket(bytes) {
     if (isMuted) return;
     if (!audioCtx || audioCtx.state !== 'running') return;
-    if (!workletReady) return; // don't decode until worklet is ready
     if (!_ensureDecoder()) return;
     try {
       audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: _audioPktTs, data: bytes }));
@@ -587,21 +546,19 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  // Resume AudioContext on first user gesture — then reload worklet if needed
+  // Resume on first user gesture
   ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
     window.addEventListener(evt, function() {
       if (!audioCtx) _ensureAudioCtx();
       if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().then(function() {
-          audioNextPlayTime = 0;
-          if (!workletReady) _loadWorklet();
-          updateAudioPill();
-        }).catch(function() {});
+        audioCtx.resume().then(function() { audioNextPlayTime = 0; updateAudioPill(); }).catch(function() {});
       }
     }, { passive: true });
   });
 
   // ── WebCodecs H264 Decoder ───────────────────────────────────────────────
+
+
 
 
 
