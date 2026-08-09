@@ -128,12 +128,16 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
     }
   };
 
-  // Live Blockchain Status Check via NOWPayments API Key
-  const checkLivePaymentStatus = async () => {
-    if (!livePaymentData?.payment_id) return;
-    setPollCount(prev => prev + 1);
+  // Strict Live Blockchain Status Check via NOWPayments API Key
+  const checkLivePaymentStatus = async (isManualCheck = false) => {
+    if (!livePaymentData?.payment_id) {
+      if (isManualCheck) {
+        alert('Payment session not initialized. Please click "Generate Live QR & Deposit Address" first.');
+      }
+      return;
+    }
 
-    if (String(livePaymentData.payment_id).startsWith('NOWPAY-')) return;
+    setPollCount(prev => prev + 1);
 
     try {
       const res = await fetch(`https://api.nowpayments.io/v1/payment/${livePaymentData.payment_id}`, {
@@ -142,15 +146,34 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
         }
       });
       const data = await res.json();
-      if (data.payment_status) {
+      console.log('NOWPayments API status query:', data);
+
+      if (data && data.payment_status) {
         setLivePaymentData(prev => ({ ...prev, payment_status: data.payment_status }));
-        if (['finished', 'confirmed', 'sending'].includes(data.payment_status)) {
+        
+        // ONLY accept payment if NOWPayments confirms receipt!
+        if (['finished', 'confirmed'].includes(data.payment_status)) {
           setPaymentStatus('confirmed');
           onPaymentSuccess(paymentRef);
+        } else if (['confirming', 'sending'].includes(data.payment_status)) {
+          if (isManualCheck) {
+            alert(`🔵 Payment detected on blockchain! Confirming blocks (${data.payment_status}). Device will be assigned automatically in a few moments.`);
+          }
+        } else {
+          if (isManualCheck) {
+            alert(`⚠️ Payment not confirmed yet by NOWPayments. Current Status: "${data.payment_status.toUpperCase()}".\n\nPlease transfer ${livePaymentData.pay_amount || price} ${selectedNetwork.symbol} to the deposit address and wait 1-2 minutes for blockchain propagation.`);
+          }
+        }
+      } else {
+        if (isManualCheck) {
+          alert('Could not verify payment status with NOWPayments API. Please try again in a few seconds.');
         }
       }
     } catch (err) {
       console.error('Error polling NOWPayments live status:', err);
+      if (isManualCheck) {
+        alert('Error connecting to NOWPayments API: ' + err.message);
+      }
     }
   };
 
@@ -158,18 +181,13 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
   useEffect(() => {
     let timer;
     if (method === 'nowpayments' && paymentStatus === 'awaiting') {
-      timer = setInterval(checkLivePaymentStatus, 5000);
+      timer = setInterval(() => checkLivePaymentStatus(false), 5000);
     }
     return () => clearInterval(timer);
   }, [method, paymentStatus, livePaymentData]);
 
-  const handleManualCheckPayment = () => {
-    setPaymentStatus('verifying');
-    checkLivePaymentStatus();
-    setTimeout(() => {
-      setPaymentStatus('confirmed');
-      onPaymentSuccess(paymentRef);
-    }, 2000);
+  const handleManualCheckPayment = async () => {
+    await checkLivePaymentStatus(true);
   };
 
   const copyToClipboard = (text, fieldName) => {
