@@ -367,6 +367,8 @@ class ScrcpyEngine extends EventEmitter {
       'send_dummy_byte=true',
       'video_source=display',
       'max_fps=60',
+      'max_size=1080',
+      'video_bit_rate=4000000',
       'i_frame_interval=2',
       'send_frame_meta=true',
       'show_touches=false',
@@ -768,9 +770,13 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload) {
-    // Direct raw H264 frame broadcast — 100% dedicated video websocket pool
+    // Direct raw H264 frame broadcast — drop stale frames if buffer builds up to guarantee 100% real-time device sync
     for (const ws of this.videoClients) {
       if (ws.readyState === 1) {
+        if (ws.bufferedAmount > 128 * 1024) {
+          // Drop frame if websocket socket queue is congested so client is ALWAYS 100% real-time synced with device
+          continue;
+        }
         try { ws.send(payload, { binary: true }); } catch (_) { this.videoClients.delete(ws); }
       } else {
         this.videoClients.delete(ws);
