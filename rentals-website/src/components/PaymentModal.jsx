@@ -27,9 +27,11 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
   const [apiError, setApiError] = useState(null);
 
   const price = device?.monthly_rental_price || 49;
-  const paymentRef = `RENT-${device.serial}-${Date.now()}`;
+  const USD_TO_KES_RATE = 133;
+  const priceInKES = Math.round(price * USD_TO_KES_RATE);
+  const paystackSubunitKES = priceInKES * 100;
 
-  // Handle Paystack Popup (Card Payment)
+  // Handle Paystack Popup (Card Payment in KES)
   const handlePaystackPayment = () => {
     if (typeof window.PaystackPop === 'undefined') {
       alert('Paystack SDK is loading. Please try again in a moment.');
@@ -42,8 +44,8 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
       const handler = window.PaystackPop.setup({
         key: PAYSTACK_PUBLIC_KEY,
         email: user.email,
-        amount: Math.round(price * 100),
-        currency: 'USD',
+        amount: paystackSubunitKES,
+        currency: 'KES',
         ref: paymentRef,
         callback: (response) => {
           setPaymentStatus('verifying');
@@ -278,18 +280,37 @@ export default function PaymentModal({ device, user, onClose, onPaymentSuccess }
           </div>
         )}
 
-        {/* CARD METHOD BODY (Paystack) */}
+        {/* CARD METHOD BODY (Paystack in KES) */}
         {method === 'paystack' && paymentStatus === 'idle' && (
           <div style={{ textAlign: 'center', padding: '10px 0' }}>
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px' }}>
-              Click below to initiate in-app Card payment popup. Accepts Debit/Credit cards, Apple Pay, and Mobile Money.
+            <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              Click below to initiate in-app Card payment popup. Accepts Debit/Credit cards, M-Pesa, and Mobile Money.
             </div>
+            
+            <div style={{
+              background: 'rgba(56,189,248,0.06)',
+              border: '1px solid rgba(56,189,248,0.2)',
+              borderRadius: '12px',
+              padding: '12px 14px',
+              marginBottom: '20px',
+              fontSize: '12px',
+              color: 'var(--text-main)',
+              display: 'flex',
+              alignItems: 'center',
+              justify: 'space-between'
+            }}>
+              <span>Paystack Charge Amount:</span>
+              <strong style={{ color: 'var(--primary)', fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
+                KES {priceInKES.toLocaleString()} <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>(1 USD = 133 KES)</span>
+              </strong>
+            </div>
+
             <button
               onClick={handlePaystackPayment}
               className="btn btn-primary"
               style={{ width: '100%', justifyContent: 'center', padding: '14px', fontSize: '15px' }}
             >
-              Pay ${price}.00 USD via Card <ArrowRight size={18} />
+              Pay KES {priceInKES.toLocaleString()} (${price} USD) via Card <ArrowRight size={18} />
             </button>
           </div>
         )}
