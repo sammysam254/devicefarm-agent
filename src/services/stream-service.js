@@ -925,6 +925,7 @@ async function startStreamServer(serial, port) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:;");
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const bindingCode = bindingService.getOrGenerateBindingCode();

@@ -54,7 +54,7 @@ function startDashboardServer(port = 7400) {
       res.setHeader('X-XSS-Protection', '1; mode=block');
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
-      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'");
+      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:;");
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -179,6 +179,52 @@ function startDashboardServer(port = 7400) {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(data);
       });
+    });
+
+    server.on('upgrade', (req, socket, head) => {
+      const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      const actionParam = fullUrl.searchParams.get('action');
+      const udidParam = fullUrl.searchParams.get('udid');
+      const remoteParam = fullUrl.searchParams.get('remote');
+      const serial = udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null);
+
+      const devices = processManager.getActiveDeviceSummaries();
+      const targetDev = (serial ? devices.find(d => d.serial === serial) : null) || devices[0];
+
+      if (targetDev && targetDev.port) {
+        const proxyReq = http.request({
+          hostname: '127.0.0.1',
+          port: targetDev.port,
+          path: req.url,
+          method: 'GET',
+          headers: req.headers,
+        });
+
+        proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+          socket.write(
+            `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n` +
+            Object.keys(proxyRes.headers)
+              .map(k => `${k}: ${proxyRes.headers[k]}`)
+              .join('\r\n') +
+            '\r\n\r\n'
+          );
+
+          if (proxyHead && proxyHead.length) socket.write(proxyHead);
+          if (head && head.length) proxySocket.write(head);
+
+          proxySocket.pipe(socket);
+          socket.pipe(proxySocket);
+        });
+
+        proxyReq.on('error', (err) => {
+          logger.warn(`[DashboardServer] WS Proxy error: ${err.message}`);
+          socket.destroy();
+        });
+
+        proxyReq.end();
+      } else {
+        socket.destroy();
+      }
     });
 
     server.listen(port, '0.0.0.0', () => {
