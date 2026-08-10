@@ -134,13 +134,9 @@ function createCloudflaredTunnel(port) {
     logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
     try {
-      if (process.platform === 'win32') {
-        try { execSync('taskkill /F /IM cloudflared.exe /IM svchost.tmp >nul 2>&1', { windowsHide: true }); } catch (_) {}
-      }
       const tunnelProcess = spawn(binPath, [
         'tunnel',
         '--url', `http://127.0.0.1:${port}`,
-        '--protocol', 'http2',
         '--no-autoupdate'
       ], {
         stdio: ['ignore', 'pipe', 'pipe'],
