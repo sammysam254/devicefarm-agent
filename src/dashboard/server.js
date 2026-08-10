@@ -80,21 +80,6 @@ function startDashboardServer(port = 7400) {
       }
 
       if (url === '/api/devices') {
-        const remoteIp = req.socket.remoteAddress || '';
-        const hostHeader = req.headers.host || '';
-        const isLocalHost = remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1');
-        const authToken = req.headers['x-session-token'] || fullUrl.searchParams.get('token');
-        
-        if (!isLocalHost && (!authToken || !SESSION_TOKENS.has(authToken))) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            status: 'error',
-            error: 'Unauthorized',
-            message: 'Valid session token required'
-          }));
-          return;
-        }
-
         const bindingCode = bindingService.getOrGenerateBindingCode();
         const lic = await licenseService.checkLicenseStatus(bindingCode);
         const rawDevices = processManager.getActiveDeviceSummaries();
@@ -102,6 +87,7 @@ function startDashboardServer(port = 7400) {
 
         const devices = rawDevices.map(d => ({
           ...d,
+          streamUrl: d.streamUrl ? `${d.streamUrl}&token=${sessionToken}` : d.streamUrl,
         }));
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
