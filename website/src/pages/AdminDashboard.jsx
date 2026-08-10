@@ -2,16 +2,13 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Users, Smartphone, Key, Lock, CheckCircle, RefreshCw, UserX, UserCheck } from 'lucide-react';
+import { Users, RefreshCw, UserX, UserCheck } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
+import DeviceAllocationSection from '../components/DeviceAllocationSection';
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
-  const [devices, setDevices] = useState([]);
   const [workers, setWorkers] = useState([]);
-  const [assignments, setAssignments] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState('');
-  const [selectedWorker, setSelectedWorker] = useState('');
   const [loading, setLoading] = useState(true);
   const [blockingId, setBlockingId] = useState(null);
   const [blockReasonModal, setBlockReasonModal] = useState(null);
@@ -20,33 +17,11 @@ export default function AdminDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Fetch active online devices (not deleted from view)
-      const { data: dData } = await supabase.from('devices').select('*').eq('status', 'online');
-      const now = new Date().getTime();
-      const activeOnlineDevices = (dData || []).filter(d => {
-        if (d.is_deleted_from_view) return false;
-        if (!d.updated_at && !d.last_seen) return true;
-        const lastTime = new Date(d.updated_at || d.last_seen).getTime();
-        return (now - lastTime) < 45000;
-      });
-      setDevices(activeOnlineDevices);
-
-      // Fetch workers (only workers, not admins or above)
-      const { data: wData } = await supabase.from('profiles').select('*').eq('role', 'worker');
+      // Fetch workers (workers and admins for management)
+      const { data: wData } = await supabase.from('profiles').select('*').eq('role', 'worker').order('email', { ascending: true });
       setWorkers(wData || []);
-
-      // Fetch current assignments for active online devices
-      const { data: aData } = await supabase.from('device_assignments').select('*, devices(*), profiles!assigned_to_user_id(*)');
-      const activeAssignments = (aData || []).filter(a => {
-        if (!a.devices) return false;
-        if (a.devices.is_deleted_from_view) return false;
-        if (a.devices.status !== 'online') return false;
-        const lastTime = a.devices.updated_at || a.devices.last_seen ? new Date(a.devices.updated_at || a.devices.last_seen).getTime() : 0;
-        return (now - lastTime) < 45000;
-      });
-      setAssignments(activeAssignments);
     } catch (e) {
-      console.error('Error loading admin allocations:', e);
+      console.error('Error loading admin worker data:', e);
     } finally {
       setLoading(false);
     }
@@ -55,33 +30,6 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadData();
   }, []);
-
-  const generatePassword = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  };
-
-  const handleAssign = async (e) => {
-    e.preventDefault();
-    if (!selectedDevice || !selectedWorker) return alert('Pick both a device and worker');
-
-    const autoPassword = generatePassword();
-
-    try {
-      await supabase.from('device_assignments').insert([{
-        device_id: selectedDevice,
-        assigned_to_user_id: selectedWorker,
-        assigned_by_user_id: profile.id,
-        access_password: autoPassword
-      }]);
-
-      alert(`Device assigned successfully! Generated password: ${autoPassword}`);
-      setSelectedDevice('');
-      setSelectedWorker('');
-      loadData();
-    } catch (err) {
-      alert('Assignment error: ' + err.message);
-    }
-  };
 
   const handleBlockUser = async (e) => {
     e.preventDefault();
@@ -130,7 +78,7 @@ export default function AdminDashboard() {
             <h1 style={{ fontSize: '24px', fontWeight: 800 }}>Admin Allocation Hub</h1>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Assign device stream links to workers with auto-generated passwords for password-protected access.
+            Assign device stream links to workers and admins with auto-generated passwords for password-protected access.
           </p>
         </div>
         <button onClick={loadData} className="btn btn-secondary">
@@ -141,87 +89,9 @@ export default function AdminDashboard() {
       {/* Real-time Security CCTV Camera Wall */}
       <CctvWall currentUser={profile} isSuperAdmin={false} />
 
-      {/* Assign Device Form */}
-      <div className="card" style={{ marginBottom: '28px' }}>
-        <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Key size={18} color="var(--primary)" /> Assign Device to Worker / Self
-        </h3>
-
-        <form onSubmit={handleAssign} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', alignItems: 'end' }}>
-          <div>
-            <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>SELECT DEVICE</label>
-            <select 
-              className="input-field" 
-              value={selectedDevice} 
-              onChange={e => setSelectedDevice(e.target.value)}
-              required
-            >
-              <option value="">-- Choose Device --</option>
-              {devices.map(d => (
-                <option key={d.id} value={d.id}>{d.brand} {d.model} ({d.serial})</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>SELECT WORKER / ADMIN</label>
-            <select 
-              className="input-field" 
-              value={selectedWorker} 
-              onChange={e => setSelectedWorker(e.target.value)}
-              required
-            >
-              <option value="">-- Choose User --</option>
-              {workers.map(w => (
-                <option key={w.id} value={w.id}>{w.email} ({w.role})</option>
-              ))}
-            </select>
-          </div>
-
-          <button type="submit" className="btn btn-primary">
-            <CheckCircle size={16} /> Assign & Auto-Generate Password
-          </button>
-        </form>
-      </div>
-
-      {/* Active Assignments */}
-      <div className="card" style={{ marginBottom: '28px' }}>
-        <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Lock size={18} color="var(--success)" /> Password-Protected Worker Allocations
-        </h3>
-
-        {loading ? (
-          <div>Loading assignments...</div>
-        ) : assignments.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)' }}>No device assignments created yet.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px' }}>
-                  <th style={{ padding: '12px' }}>DEVICE</th>
-                  <th style={{ padding: '12px' }}>ASSIGNED WORKER</th>
-                  <th style={{ padding: '12px' }}>ACCESS PASSWORD</th>
-                  <th style={{ padding: '12px' }}>STREAM URL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {assignments.map(a => (
-                  <tr key={a.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '14px 12px', fontWeight: 700 }}>{a.devices?.brand} {a.devices?.model}</td>
-                    <td style={{ padding: '14px 12px' }}>{a.profiles?.email}</td>
-                    <td style={{ padding: '14px 12px', fontFamily: 'monospace', fontWeight: 800, color: 'var(--primary)' }}>
-                      🔑 {a.access_password}
-                    </td>
-                    <td style={{ padding: '14px 12px', fontSize: '12px', fontFamily: 'monospace' }}>
-                      {a.devices?.stream_url || 'Offline'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {/* Device Allocation Section */}
+      <div style={{ marginBottom: '28px' }}>
+        <DeviceAllocationSection currentUser={profile} />
       </div>
 
       {/* Worker Block Management */}

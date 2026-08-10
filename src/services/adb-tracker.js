@@ -254,13 +254,51 @@ async function startTracking() {
 
     // Start background enrollment guard (catches rebooted/silently-reconnected devices)
     enrollmentGuard.startEnrollmentGuard(handleDeviceAdd, handleDeviceRemove, 12000);
+
+    // Start periodic cloud heartbeat for all active connected devices
+    startCloudHeartbeat();
   } catch (err) {
     logger.error(`Failed to start ADB tracker: ${err.message} — retry in 5s`);
     setTimeout(startTracking, 5000);
   }
 }
 
+let cloudHeartbeatTimer = null;
+
+function startCloudHeartbeat() {
+  if (cloudHeartbeatTimer) clearInterval(cloudHeartbeatTimer);
+  cloudHeartbeatTimer = setInterval(async () => {
+    try {
+      const activeDevices = processManager.getActiveDeviceSummaries();
+      if (!activeDevices || activeDevices.length === 0) return;
+
+      const defaultBinding = bindingService.getOrGenerateBindingCode();
+
+      for (const dev of activeDevices) {
+        await licenseService.syncDeviceToCloud({
+          serial: dev.serial,
+          model: dev.deviceModel || dev.model,
+          brand: dev.deviceBrand || dev.brand,
+          streamUrl: dev.streamUrl,
+          localUrl: dev.localUrl,
+          port: dev.port,
+          bindingCode: dev.bindingCode || defaultBinding,
+          status: 'online',
+        });
+      }
+    } catch (_) {}
+  }, 10000);
+}
+
+function stopCloudHeartbeat() {
+  if (cloudHeartbeatTimer) {
+    clearInterval(cloudHeartbeatTimer);
+    cloudHeartbeatTimer = null;
+  }
+}
+
 function stopTracking() {
+  stopCloudHeartbeat();
   enrollmentGuard.stopEnrollmentGuard();
   if (tracker) {
     try { tracker.end(); tracker = null; logger.info('ADB tracker stopped'); }

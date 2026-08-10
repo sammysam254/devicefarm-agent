@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2 } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
+import DeviceAllocationSection from '../components/DeviceAllocationSection';
 
 export default function SuperAdminDashboard() {
   const { profile } = useAuth();
@@ -183,6 +184,11 @@ export default function SuperAdminDashboard() {
 
       {/* Real-time Security CCTV Camera Wall */}
       <CctvWall currentUser={profile} isSuperAdmin={true} />
+
+      {/* Device Allocation Section */}
+      <div style={{ marginBottom: '28px' }}>
+        <DeviceAllocationSection currentUser={profile} />
+      </div>
 
       {/* Connected Devices Table */}
       <div className="card" style={{ marginBottom: '28px' }}>

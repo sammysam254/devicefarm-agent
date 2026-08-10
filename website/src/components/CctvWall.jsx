@@ -18,14 +18,14 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
         .eq('status', 'online')
         .order('updated_at', { ascending: false });
 
-      // Filter out devices whose last_seen is older than 45 seconds to guarantee active online devices,
+      // Filter out devices whose last_seen is older than 3 minutes to guarantee active online devices,
       // and exclude any devices deleted from view by Seed Admin.
       const now = new Date().getTime();
       const activeOnlineDevices = (dData || []).filter(d => {
         if (d.is_deleted_from_view) return false;
         if (!d.updated_at && !d.last_seen) return true;
         const lastTime = new Date(d.updated_at || d.last_seen).getTime();
-        return (now - lastTime) < 45000;
+        return (now - lastTime) < 180000;
       });
 
       setDevices(activeOnlineDevices);

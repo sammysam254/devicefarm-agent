@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
+import DeviceAllocationSection from '../components/DeviceAllocationSection';
 
 export default function SeedAdminDashboard() {
   const { profile: myProfile } = useAuth();
@@ -197,6 +198,11 @@ export default function SeedAdminDashboard() {
       {/* Real-time Security CCTV Camera Wall */}
       <CctvWall currentUser={myProfile} isSeedAdmin={true} />
 
+      {/* Device Allocation Section */}
+      <div style={{ marginBottom: '32px' }}>
+        <DeviceAllocationSection currentUser={myProfile} />
+      </div>
+
       {/* Seed Admin Device Visibility & Delete from View Management */}
       <div className="card" style={{ marginBottom: '32px' }}>
         <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -224,7 +230,7 @@ export default function SeedAdminDashboard() {
                 {devices.map(d => {
                   const now = new Date().getTime();
                   const lastTime = d.updated_at || d.last_seen ? new Date(d.updated_at || d.last_seen).getTime() : 0;
-                  const isOnline = d.status === 'online' && (now - lastTime < 45000);
+                  const isOnline = d.status === 'online' && (!d.last_seen || (now - lastTime < 180000));
                   const isDeleted = Boolean(d.is_deleted_from_view);
                   const isAvailableRental = Boolean(d.is_available_for_rental);
                   const price = d.monthly_rental_price || 49;
