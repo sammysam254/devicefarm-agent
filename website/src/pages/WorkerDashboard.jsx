@@ -63,7 +63,13 @@ export default function WorkerDashboard() {
     setError(null);
 
     if (inputPassword.trim() === unlockModal.access_password.trim()) {
-      window.open(unlockModal.devices?.stream_url, '_blank');
+      let streamUrl = unlockModal.devices?.stream_url;
+      if (streamUrl) {
+        if (!streamUrl.includes('pin=')) {
+          streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(unlockModal.access_password.trim());
+        }
+        window.open(streamUrl, '_blank');
+      }
       setUnlockModal(null);
       setInputPassword('');
     } else {

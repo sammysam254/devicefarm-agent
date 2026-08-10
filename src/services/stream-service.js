@@ -962,6 +962,27 @@ async function startStreamServer(serial, port) {
     const hostHeader = req.headers.host || '';
     const isLocalHost = remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1');
 
+    const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status');
+    if (linkStatus === 'suspended' || linkStatus === 'revoked') {
+      res.writeHead(403, { 'Content-Type': 'text/html' });
+      res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Stream Link Suspended</title></head>
+        <body style="background:#090d16; color:#f8fafc; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center;">
+          <div style="max-width:440px; padding:32px; background:#0f172a; border:1px solid rgba(239,68,68,0.3); border-radius:16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
+            <div style="font-size:48px; margin-bottom:16px;">⛔</div>
+            <h2 style="color:#ef4444; margin-bottom:8px;">Stream Link Suspended</h2>
+            <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
+              This stream link has been suspended or revoked by an Administrator. Contact your Seed Owner or Super Admin for an active link.
+            </p>
+          </div>
+        </body>
+        </html>
+      `);
+      return;
+    }
+
     const dashboardServer = require('../dashboard/server');
     
     // Check PIN parameter or session token
@@ -974,15 +995,32 @@ async function startStreamServer(serial, port) {
       res.end(`
         <!DOCTYPE html>
         <html>
-        <head><title>Stream PIN Authorization Required</title></head>
+        <head>
+          <title>Stream PIN Authorization Required</title>
+          <script>
+            (function() {
+              const serial = '${serial}';
+              const key = 'device_pin_auth_' + serial;
+              try {
+                const saved = JSON.parse(localStorage.getItem(key));
+                // 12 Hours cache check (12 * 60 * 60 * 1000 = 43200000 ms)
+                if (saved && saved.pin && saved.ts && (Date.now() - saved.ts < 43200000)) {
+                  const u = new URL(window.location.href);
+                  u.searchParams.set('pin', saved.pin);
+                  window.location.href = u.toString();
+                }
+              } catch (_) {}
+            })();
+          </script>
+        </head>
         <body style="background:#090d16; color:#f8fafc; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center;">
           <div style="max-width:440px; padding:32px; background:#0f172a; border:1px solid rgba(56,189,248,0.3); border-radius:16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
             <div style="font-size:48px; margin-bottom:16px;">🔐</div>
             <h2 style="color:#38bdf8; margin-bottom:8px;">Stream PIN Required</h2>
             <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
-              This device stream is protected. Enter your assigned <strong>PIN Code</strong> or session token to access the live stream.
+              This device stream is protected. Enter your assigned <strong>PIN Code</strong> to unlock this device (remembered for 12 hours).
             </p>
-            <form style="margin-top:20px;" onsubmit="event.preventDefault(); const p=document.getElementById('pinInput').value; if(p) location.search='?udid=${serial}&pin='+p;">
+            <form style="margin-top:20px;" onsubmit="event.preventDefault(); const p=document.getElementById('pinInput').value; if(p) { try { localStorage.setItem('device_pin_auth_${serial}', JSON.stringify({ pin: p, ts: Date.now() })); } catch(_) {} const u = new URL(window.location.href); u.searchParams.set('pin', p); window.location.href = u.toString(); }">
               <input id="pinInput" type="password" placeholder="Enter PIN Code" maxlength="12" style="width:100%; padding:12px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(15,23,42,0.8); color:#fff; margin-bottom:14px; font-size:16px; text-align:center; letter-spacing:3px; box-sizing:border-box;" />
               <button type="submit" style="width:100%; padding:12px; border-radius:8px; border:none; background:#38bdf8; color:#0f172a; font-weight:bold; font-size:15px; cursor:pointer;">Unlock & Watch Stream</button>
             </form>

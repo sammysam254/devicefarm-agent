@@ -42,8 +42,11 @@ export default function MyDevices() {
     setError(null);
 
     if (inputPassword.trim() === unlockModal.access_password.trim()) {
-      const streamUrl = unlockModal.devices?.stream_url;
+      let streamUrl = unlockModal.devices?.stream_url;
       if (streamUrl) {
+        if (!streamUrl.includes('pin=')) {
+          streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(unlockModal.access_password.trim());
+        }
         window.open(streamUrl, '_blank');
       } else {
         alert('Device stream link is currently generating or device is offline');

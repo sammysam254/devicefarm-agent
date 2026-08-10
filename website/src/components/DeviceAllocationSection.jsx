@@ -102,6 +102,24 @@ export default function DeviceAllocationSection({ currentUser }) {
     }
   };
 
+  const handleReKeyAssignment = async (assignmentId, deviceName, userEmail) => {
+    if (!window.confirm(`Re-key access password for ${deviceName} assigned to ${userEmail}? This will instantly invalidate the current stream link.`)) return;
+
+    const newPassword = generatePassword();
+    try {
+      const { error } = await supabase.from('device_assignments').update({
+        access_password: newPassword,
+      }).eq('id', assignmentId);
+
+      if (error) throw error;
+
+      alert(`✅ Stream link re-keyed successfully!\n\nNew Access Password: ${newPassword}`);
+      loadAllocationData();
+    } catch (err) {
+      alert('Error re-keying link: ' + err.message);
+    }
+  };
+
   const handleRevokeAssignment = async (assignmentId, deviceName, userEmail) => {
     if (!window.confirm(`Revoke device allocation for ${deviceName} assigned to ${userEmail}?`)) return;
 
@@ -238,14 +256,24 @@ export default function DeviceAllocationSection({ currentUser }) {
                         )}
                       </td>
                       <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                        <button
-                          onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail)}
-                          disabled={unassigningId === a.id}
-                          className="btn btn-danger"
-                          style={{ padding: '6px 12px', fontSize: '12px' }}
-                        >
-                          <Trash2 size={12} /> {unassigningId === a.id ? 'Revoking...' : 'Revoke'}
-                        </button>
+                        <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleReKeyAssignment(a.id, deviceName, userEmail)}
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title="Invalidate current password and issue a new stream link key"
+                          >
+                            <Key size={12} /> Re-Key Link
+                          </button>
+                          <button
+                            onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail)}
+                            disabled={unassigningId === a.id}
+                            className="btn btn-danger"
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                          >
+                            <Trash2 size={12} /> {unassigningId === a.id ? 'Revoking...' : 'Revoke'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

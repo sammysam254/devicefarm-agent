@@ -155,8 +155,16 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
-          {devices.map(d => {
-            const streamUrl = d.stream_url || `http://localhost:${d.local_port || 8100}`;
+            const rawStreamUrl = d.stream_url;
+            let streamUrl = rawStreamUrl;
+            if (!streamUrl || streamUrl.includes('localhost')) {
+              streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
+            } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && streamUrl.startsWith('http:')) {
+              streamUrl = streamUrl.replace(/^http:/, 'https:');
+            }
+            if (d.serial && !streamUrl.includes('udid=')) {
+              streamUrl += (streamUrl.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(d.serial)}`;
+            }
             const isStealthOn = d.stealth_root_enabled !== false;
 
             return (
@@ -264,7 +272,13 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             {/* Interactive Stream Frame */}
             <div style={{ flex: 1, background: '#000', position: 'relative' }}>
               <iframe 
-                src={focusDevice.stream_url || `http://localhost:${focusDevice.local_port || 8100}`} 
+                src={(() => {
+                  let u = focusDevice.stream_url;
+                  if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                  else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
+                  if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
+                  return u;
+                })()} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
                 referrerPolicy="no-referrer"
