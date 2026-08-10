@@ -133,12 +133,13 @@ function createCloudflaredTunnel(port) {
 
     logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
+    const token = config.cloudflareToken || config.cloudflaredToken || config.token;
+    const args = token 
+      ? ['tunnel', 'run', '--token', token]
+      : ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
+
     try {
-      const tunnelProcess = spawn(binPath, [
-        'tunnel',
-        '--url', `http://127.0.0.1:${port}`,
-        '--no-autoupdate'
-      ], {
+      const tunnelProcess = spawn(binPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
