@@ -955,30 +955,35 @@ async function startStreamServer(serial, port) {
 
     const url = new URL(req.url, `http://localhost:${port}`);
     const p   = url.pathname;
+    const pinParam   = url.searchParams.get('pin');
     const tokenParam = url.searchParams.get('token') || req.headers['x-session-token'];
     const remoteIp = req.socket.remoteAddress || '';
     const hostHeader = req.headers.host || '';
     const isLocalHost = remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1');
 
     const dashboardServer = require('../dashboard/server');
-    const isValidSession = isLocalHost || (tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam));
+    
+    // Check PIN parameter or session token
+    const isPinValid = pinParam && (pinParam === bindingCode || pinParam === bindingCode.slice(-4));
+    const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
+    const isValidSession = isLocalHost || isPinValid || isTokenValid;
 
     if (!isValidSession) {
       res.writeHead(401, { 'Content-Type': 'text/html' });
       res.end(`
         <!DOCTYPE html>
         <html>
-        <head><title>Stream Access Authentication Required</title></head>
+        <head><title>Stream PIN Authorization Required</title></head>
         <body style="background:#090d16; color:#f8fafc; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center;">
           <div style="max-width:440px; padding:32px; background:#0f172a; border:1px solid rgba(56,189,248,0.3); border-radius:16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
-            <div style="font-size:48px; margin-bottom:16px;">🔑</div>
-            <h2 style="color:#38bdf8; margin-bottom:8px;">Stream Authentication Required</h2>
+            <div style="font-size:48px; margin-bottom:16px;">🔐</div>
+            <h2 style="color:#38bdf8; margin-bottom:8px;">Stream PIN Required</h2>
             <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
-              Please open this device stream directly from your <strong>DeviceFarm Dashboard</strong> or enter your active rental session token below.
+              This device stream is protected. Enter your assigned <strong>PIN Code</strong> or session token to access the live stream.
             </p>
-            <form style="margin-top:20px;" onsubmit="event.preventDefault(); const t=document.getElementById('tok').value; if(t) location.search='?udid=${serial}&token='+t;">
-              <input id="tok" type="password" placeholder="Enter Session Token" style="width:100%; padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(15,23,42,0.8); color:#fff; margin-bottom:12px; font-size:14px; box-sizing:border-box;" />
-              <button type="submit" style="width:100%; padding:10px; border-radius:8px; border:none; background:#38bdf8; color:#0f172a; font-weight:bold; font-size:14px; cursor:pointer;">Authenticate & Watch Stream</button>
+            <form style="margin-top:20px;" onsubmit="event.preventDefault(); const p=document.getElementById('pinInput').value; if(p) location.search='?udid=${serial}&pin='+p;">
+              <input id="pinInput" type="password" placeholder="Enter PIN Code" maxlength="12" style="width:100%; padding:12px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(15,23,42,0.8); color:#fff; margin-bottom:14px; font-size:16px; text-align:center; letter-spacing:3px; box-sizing:border-box;" />
+              <button type="submit" style="width:100%; padding:12px; border-radius:8px; border:none; background:#38bdf8; color:#0f172a; font-weight:bold; font-size:15px; cursor:pointer;">Unlock & Watch Stream</button>
             </form>
           </div>
         </body>
@@ -1037,16 +1042,19 @@ async function startStreamServer(serial, port) {
     }
 
     const wsUrl = new URL(req.url, 'http://localhost');
+    const pinParam = wsUrl.searchParams.get('pin');
     const tokenParam = wsUrl.searchParams.get('token');
     const remoteIp = req.socket.remoteAddress || '';
     const hostHeader = req.headers.host || '';
     const isLocalHost = remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1');
 
     const dashboardServer = require('../dashboard/server');
-    const isValidWs = isLocalHost || (tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam));
+    const isPinValid = pinParam && (pinParam === bindingCode || pinParam === bindingCode.slice(-4));
+    const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
+    const isValidWs = isLocalHost || isPinValid || isTokenValid;
 
     if (!isValidWs) {
-      ws.close(4001, 'Unauthorized Stream Access');
+      ws.close(4001, 'Unauthorized Stream Access (PIN / Session Token Required)');
       return;
     }
 

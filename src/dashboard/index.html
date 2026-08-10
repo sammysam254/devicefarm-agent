@@ -272,11 +272,16 @@
             </span>
           </div>
           <div class="stream-box">
-            <div style="font-size: 11px; color: var(--text-dim); font-weight: 700;">🌐 LIVE CLOUDFLARE STREAM URL</div>
-            <div class="stream-url-text">${d.streamUrl || 'Generating link...'}</div>
-            <div style="display: flex; gap: 8px; margin-top: 8px;">
-              <button class="btn-action" onclick="navigator.clipboard.writeText('${d.streamUrl}'); alert('Copied!');">📋 Copy</button>
-              <a href="${d.streamUrl}" target="_blank" class="btn-action btn-primary">Open Stream ↗</a>
+            <div style="font-size: 11px; color: var(--emerald); font-weight: 700; display: flex; align-items: center; gap: 6px;">
+              <span>🔒</span> CLOUD SYNCED & PROTECTED
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
+              Device streams are synced to your online account. Access is strictly routed through your dashboard with your assigned PIN code.
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 10px;">
+              <span style="font-size: 11px; font-family: 'JetBrains Mono', monospace; padding: 4px 10px; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 6px; color: var(--emerald);">
+                ✓ Direct Links Hidden & PIN Protected
+              </span>
             </div>
           </div>
         </div>
