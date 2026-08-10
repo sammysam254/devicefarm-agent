@@ -382,7 +382,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let audioDecoder = null;
   let audioDecoderReady = false;
   let audioNextPlayTime = 0;
-  let isMuted = false;
+  const urlParams = new URLSearchParams(window.location.search);
+  let isMuted = urlParams.get('muted') === '1' || urlParams.get('muted') === 'true';
   let gainNode = null;
 
   function initAudio() {
@@ -650,6 +651,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+    if (ws) {
+      try {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        ws.close();
+      } catch (_) {}
+      ws = null;
+    }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
     ws.binaryType = 'arraybuffer';

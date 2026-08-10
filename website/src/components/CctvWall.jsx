@@ -155,6 +155,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
+          {devices.map(d => {
             const rawStreamUrl = d.stream_url;
             let streamUrl = rawStreamUrl;
             if (!streamUrl || streamUrl.includes('localhost')) {
@@ -165,6 +166,10 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             if (d.serial && !streamUrl.includes('udid=')) {
               streamUrl += (streamUrl.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(d.serial)}`;
             }
+            if (!streamUrl.includes('muted=')) {
+              streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'muted=1';
+            }
+            const isFocused = focusDevice && focusDevice.id === d.id;
             const isStealthOn = d.stealth_root_enabled !== false;
 
             return (
@@ -187,7 +192,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
 
                 {/* Viewport Frame */}
                 <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
-                  {streamUrl ? (
+                  {streamUrl && !isFocused ? (
                     <iframe 
                       src={streamUrl} 
                       style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} 
@@ -195,6 +200,10 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                       referrerPolicy="no-referrer"
                       allow="autoplay; fullscreen"
                     />
+                  ) : isFocused ? (
+                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontSize: '12px', fontWeight: 700 }}>
+                      ⚡ Focused in Active Modal
+                    </div>
                   ) : (
                     <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
                       Device Offline
