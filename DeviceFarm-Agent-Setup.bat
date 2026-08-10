@@ -170,9 +170,9 @@ for %%I in ("%NODE%") do set "NODE_DIR=%%~dpI"
 set "PATH=%NODE_DIR%;%PATH%"
 echo [OK] Node.js added to PATH: %NODE_DIR%
 
-:: Patch config.json with correct binary paths for this install location
-echo [*] Patching config.json with local binary paths...
-"%NODE%" -e "const fs=require('fs'),p='config.json',cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p)):{}; cfg.adbPath=require('path').join(process.cwd(),'assets','bin','adb.exe'); cfg.cloudflaredPath=require('path').join(process.cwd(),'assets','bin','cloudflared.exe'); fs.writeFileSync(p,JSON.stringify(cfg,null,2));"
+:: Patch config.json with correct binary paths and Cloudflare token for this install location
+echo [*] Patching config.json with local binary paths and Cloudflare token...
+"%NODE%" -e "const fs=require('fs'),p='config.json',cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p)):{}; cfg.adbPath=require('path').join(process.cwd(),'assets','bin','adb.exe'); cfg.cloudflaredPath=require('path').join(process.cwd(),'assets','bin','cloudflared.exe'); if(!cfg.cloudflareToken) cfg.cloudflareToken='eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9'; fs.writeFileSync(p,JSON.stringify(cfg,null,2));"
 echo [OK] config.json updated.
 
 :: ════════════════════════════════════════════════════════════════════════════
