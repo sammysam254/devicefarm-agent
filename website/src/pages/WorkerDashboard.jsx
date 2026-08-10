@@ -13,8 +13,9 @@ export default function WorkerDashboard() {
   const [error, setError] = useState(null);
   const [revealedPasswords, setRevealedPasswords] = useState({});
 
-  const loadData = async () => {
+  const loadData = async (isInitial = false) => {
     if (!profile) return;
+    if (isInitial) setLoading(true);
     try {
       const { data } = await supabase
         .from('device_assignments')
@@ -30,13 +31,13 @@ export default function WorkerDashboard() {
     } catch (e) {
       console.error('Error loading worker assignments:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-    const timer = setInterval(loadData, 5000);
+    loadData(true);
+    const timer = setInterval(() => loadData(false), 5000);
     return () => clearInterval(timer);
   }, [profile]);
 

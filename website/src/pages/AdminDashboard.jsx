@@ -14,8 +14,8 @@ export default function AdminDashboard() {
   const [blockReasonModal, setBlockReasonModal] = useState(null);
   const [blockReason, setBlockReason] = useState('');
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
       // Fetch workers (workers and admins for management)
       const { data: wData } = await supabase.from('profiles').select('*').eq('role', 'worker').order('email', { ascending: true });
@@ -23,12 +23,14 @@ export default function AdminDashboard() {
     } catch (e) {
       console.error('Error loading admin worker data:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(true);
+    const interval = setInterval(() => loadData(false), 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleBlockUser = async (e) => {

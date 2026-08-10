@@ -20,8 +20,8 @@ export default function DeviceAllocationSection({ currentUser }) {
     return (new Date().getTime() - lastTime) < 86400000;
   };
 
-  const loadAllocationData = async () => {
-    setLoading(true);
+  const loadAllocationData = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
       // 1. Fetch all devices (excluding deleted from view)
       const { data: dData, error: dErr } = await supabase
@@ -54,13 +54,13 @@ export default function DeviceAllocationSection({ currentUser }) {
     } catch (e) {
       console.error('Error loading allocation section:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadAllocationData();
-    const interval = setInterval(loadAllocationData, 10000);
+    loadAllocationData(true);
+    const interval = setInterval(() => loadAllocationData(false), 10000);
     return () => clearInterval(interval);
   }, []);
 

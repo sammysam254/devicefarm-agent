@@ -16,8 +16,8 @@ export default function SeedAdminDashboard() {
   const [blockReason, setBlockReason] = useState('');
   const [blockReasonModal, setBlockReasonModal] = useState(null); // profile to block
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
       const { data: bData } = await supabase.from('machine_bindings').select('*');
       const { data: pData } = await supabase.from('profiles').select('*');
@@ -28,12 +28,14 @@ export default function SeedAdminDashboard() {
     } catch (e) {
       console.error('Error loading seed data:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(true);
+    const interval = setInterval(() => loadData(false), 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleDeleteFromView = async (deviceId) => {

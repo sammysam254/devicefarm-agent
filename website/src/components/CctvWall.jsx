@@ -23,7 +23,19 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
         return false;
       });
 
-      setDevices(activeOnlineDevices);
+      setDevices(prev => {
+        if (prev.length === activeOnlineDevices.length) {
+          const isSame = prev.every((p, idx) => {
+            const n = activeOnlineDevices[idx];
+            return p.id === n.id && 
+                   p.stream_url === n.stream_url && 
+                   p.stealth_root_enabled === n.stealth_root_enabled && 
+                   p.status === n.status;
+          });
+          if (isSame) return prev;
+        }
+        return activeOnlineDevices;
+      });
 
       // 2. Fetch CCTV lock setting from system_settings
       const { data: sData } = await supabase.from('system_settings').select('*').eq('key', 'cctv_wall_locked').single();

@@ -17,7 +17,8 @@ export default function SuperAdminDashboard() {
   const [blockReasonModal, setBlockReasonModal] = useState(null);
   const [blockReason, setBlockReason] = useState('');
 
-  const loadData = async () => {
+  const loadData = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
       const isSeed = profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com';
       let bQuery = supabase.from('machine_bindings').select('*');
@@ -44,7 +45,7 @@ export default function SuperAdminDashboard() {
     } catch (e) {
       console.error('Error loading super admin data:', e);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
@@ -55,7 +56,7 @@ export default function SuperAdminDashboard() {
         is_deleted_from_view: true,
         updated_at: new Date().toISOString()
       }).eq('id', deviceId);
-      loadData();
+      loadData(false);
     } catch (err) {
       alert('Error removing device from view: ' + err.message);
     }
@@ -63,10 +64,10 @@ export default function SuperAdminDashboard() {
 
   useEffect(() => {
     if (profile) {
-      loadData();
+      loadData(true);
       const timer = setInterval(() => {
-        loadData();
-      }, 4000);
+        loadData(false);
+      }, 5000);
       return () => clearInterval(timer);
     }
   }, [profile]);
