@@ -220,26 +220,58 @@ async function createLocaltunnelFallback(port) {
   return { publicUrl: tunnel.url, tunnelProcess: wrapper };
 }
 
+let cfRateLimitedUntil = 0;
+
 async function createTunnelWithRetry(port) {
+  const cfg = loadConfig();
+  const preferredProvider = (cfg.tunnelProvider || 'auto').toLowerCase();
+
+  // If user explicitly configured localtunnel, use localtunnel directly
+  if (preferredProvider === 'localtunnel') {
+    try {
+      return await createLocaltunnelFallback(port);
+    } catch (err) {
+      logger.warn(`[-] Localtunnel provider failed (${err.message}) — trying Cloudflare fallback...`);
+    }
+  }
+
+  // If Cloudflare was recently rate-limited on trycloudflare.com, use localtunnel directly for speed
+  const now = Date.now();
+  if (now < cfRateLimitedUntil && preferredProvider === 'auto') {
+    try {
+      logger.info(`[+] Using localtunnel for localhost:${port} (Cloudflare rate-limit active)`);
+      return await createLocaltunnelFallback(port);
+    } catch (err) {
+      logger.warn(`[-] Localtunnel fallback notice: ${err.message}`);
+    }
+  }
+
   // 1. Try Cloudflared
   try {
     logger.info(`[+] Tunnel creation attempt (Cloudflare) for port ${port}`);
     return await createCloudflaredTunnel(port);
   } catch (err) {
-    logger.warn(`[-] Cloudflare tunnel attempt 1 failed (${err.message}) — retrying once...`);
-  }
-
-  try {
-    return await createCloudflaredTunnel(port);
-  } catch (err) {
-    logger.warn(`[-] Cloudflare tunnel attempt 2 failed (${err.message}) — switching to Localtunnel fallback...`);
+    const isRateLimit = err.message.includes('unmarshal') || err.message.includes('code=1');
+    if (isRateLimit) {
+      logger.info(`[-] Cloudflare public API rate-limit detected — switching to instant localtunnel...`);
+      cfRateLimitedUntil = Date.now() + 10 * 60 * 1000; // Cache rate-limit for 10 minutes
+    } else {
+      logger.warn(`[-] Cloudflare tunnel attempt 1 notice: ${err.message}`);
+    }
   }
 
   // 2. Try Localtunnel fallback
   try {
     return await createLocaltunnelFallback(port);
   } catch (err) {
-    logger.warn(`[-] Localtunnel fallback failed (${err.message})`);
+    logger.warn(`[-] Localtunnel fallback notice: ${err.message}`);
+  }
+
+  // 3. Final attempt with Cloudflare
+  try {
+    return await createCloudflaredTunnel(port);
+  } catch (err) {
+    logger.warn(`[-] Cloudflare final fallback failed: ${err.message}`);
   }
 
   throw new Error('All tunneling providers (Cloudflare + Localtunnel) failed');
