@@ -11,21 +11,16 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const fetchDevicesAndLockState = async (isInitial = false) => {
     if (isInitial) setLoading(true);
     try {
-      // 1. Fetch ONLY online devices whose streams are active and recent and not deleted from view
+      // 1. Fetch devices with active streams and not deleted from view
       const { data: dData } = await supabase
         .from('devices')
         .select('*')
-        .eq('status', 'online')
         .order('updated_at', { ascending: false });
 
-      // Filter out devices whose last_seen is older than 3 minutes to guarantee active online devices,
-      // and exclude any devices deleted from view by Seed Admin.
-      const now = new Date().getTime();
       const activeOnlineDevices = (dData || []).filter(d => {
         if (d.is_deleted_from_view) return false;
-        if (!d.updated_at && !d.last_seen) return true;
-        const lastTime = new Date(d.updated_at || d.last_seen).getTime();
-        return (now - lastTime) < 180000;
+        if (d.status === 'online' || Boolean(d.stream_url)) return true;
+        return false;
       });
 
       setDevices(activeOnlineDevices);

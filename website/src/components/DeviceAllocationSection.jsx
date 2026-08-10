@@ -13,11 +13,11 @@ export default function DeviceAllocationSection({ currentUser }) {
   const [unassigningId, setUnassigningId] = useState(null);
 
   const isDeviceOnline = (d) => {
-    if (!d) return false;
-    if (d.status !== 'online') return false;
+    if (!d || d.is_deleted_from_view) return false;
+    if (d.status === 'online' || Boolean(d.stream_url)) return true;
     if (!d.updated_at && !d.last_seen) return true;
     const lastTime = new Date(d.updated_at || d.last_seen).getTime();
-    return (new Date().getTime() - lastTime) < 180000; // 3 minutes online window
+    return (new Date().getTime() - lastTime) < 86400000;
   };
 
   const loadAllocationData = async () => {
