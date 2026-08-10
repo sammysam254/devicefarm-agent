@@ -134,6 +134,9 @@ function createCloudflaredTunnel(port) {
     logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
     const token = config.cloudflareToken || config.cloudflaredToken || config.token;
+    const rawDomain = config.customDomain || config.domain || 'dennoh.site';
+    const domain = rawDomain.replace(/^https?:\/\//, '');
+
     const args = token 
       ? ['tunnel', 'run', '--token', token]
       : ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
@@ -147,18 +150,36 @@ function createCloudflaredTunnel(port) {
       let resolved = false;
       let combinedOutput = '';
 
+      // Token tunnels don't print trycloudflare URLs on stdout; resolve in 3.5s if process remains running & healthy
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
+          if (token && tunnelProcess.exitCode === null) {
+            const publicUrl = `https://${domain}`;
+            logger.info(`[OK] Cloudflare Zero Trust token tunnel active: ${publicUrl}`);
+            return resolve({ publicUrl, tunnelProcess });
+          }
           logger.warn(`Cloudflared tunnel timed out after ${TUNNEL_TIMEOUT_MS}ms for port ${port}`);
           killTunnel(tunnelProcess);
           reject(new Error(`Tunnel URL not received within ${TUNNEL_TIMEOUT_MS}ms`));
         }
-      }, TUNNEL_TIMEOUT_MS);
+      }, token ? 3500 : TUNNEL_TIMEOUT_MS);
 
       function handleData(data) {
         const text = data.toString();
         combinedOutput += text;
+
+        if (token && !resolved) {
+          if (text.includes('Registered tunnel connection') || text.includes('Connection') || text.includes('Infra')) {
+            resolved = true;
+            clearTimeout(timeout);
+            const publicUrl = `https://${domain}`;
+            logger.info(`[OK] Cloudflare Zero Trust tunnel registered: ${publicUrl}`);
+            resolve({ publicUrl, tunnelProcess });
+            return;
+          }
+        }
+
         const match = text.match(TUNNEL_URL_REGEX);
         if (match && !resolved) {
           resolved = true;
