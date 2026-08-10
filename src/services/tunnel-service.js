@@ -134,7 +134,7 @@ function createCloudflaredTunnel(port) {
     logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
     const token = config.cloudflareToken || config.cloudflaredToken || config.token;
-    const rawDomain = config.customDomain || config.domain || 'dennoh.site';
+    const rawDomain = config.customDomain || config.domain || 'agent.dennoh.site';
     const domain = rawDomain.replace(/^https?:\/\//, '');
 
     const args = token 
