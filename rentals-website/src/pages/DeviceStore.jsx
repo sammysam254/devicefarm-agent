@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Store, Smartphone, CheckCircle, RefreshCw, ShoppingCart, Lock, DollarSign, Zap } from 'lucide-react';
+import { Store, Smartphone, CheckCircle, RefreshCw, ShoppingCart, Lock, DollarSign, Zap, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import PaymentModal from '../components/PaymentModal';
 import SEO from '../components/SEO';
@@ -86,24 +86,59 @@ export default function DeviceStore() {
     }
   };
 
-  const storeSchema = {
-    "@context": "https://schema.org",
-    "@type": "OfferCatalog",
-    "name": "Android Cloud Device Rental Store",
-    "itemListElement": storeDevices.map((d, index) => ({
-      "@type": "Offer",
-      "position": index + 1,
-      "name": `${d.brand} ${d.model}`,
-      "price": d.monthly_rental_price || 49,
-      "priceCurrency": "USD",
-      "availability": "https://schema.org/InStock",
-      "itemOffered": {
-        "@type": "Product",
-        "name": `${d.brand} ${d.model} Real Cloud Android Device`,
-        "serialNumber": d.serial
-      }
-    }))
-  };
+  const [expandedFaq, setExpandedFaq] = useState(null);
+
+  const faqs = [
+    {
+      q: "What is FlexPulse Device Rentals Marketplace?",
+      a: "FlexPulse Device Marketplace lets you rent dedicated, real physical Android devices hosted on high-speed hardware nodes. Devices feature ultra-low latency WebRTC video streaming, full touchscreen remote control, and stealth routing."
+    },
+    {
+      q: "How fast is access activated after rental payment?",
+      a: "Activation is instantaneous! As soon as your card payment via Paystack or crypto payment via NOWPayments is verified, an access PIN is generated and the device is immediately assigned to your My Devices dashboard."
+    },
+    {
+      q: "What payment methods are supported?",
+      a: "We support major credit/debit cards via Paystack (USD, NGN) and popular cryptocurrencies (USDT, BTC, ETH, SOL) via NOWPayments for flexible monthly rental plans."
+    },
+    {
+      q: "Are the devices virtual emulators or real Android hardware?",
+      a: "All devices hosted on FlexPulse are 100% real physical Android phones connected via high-speed USB 3.0 nodes with hardware acceleration."
+    }
+  ];
+
+  const storeSchema = [
+    {
+      "@context": "https://schema.org",
+      "@type": "OfferCatalog",
+      "name": "Android Cloud Device Rental Store",
+      "itemListElement": storeDevices.map((d, index) => ({
+        "@type": "Offer",
+        "position": index + 1,
+        "name": `${d.brand} ${d.model}`,
+        "price": d.monthly_rental_price || 49,
+        "priceCurrency": "USD",
+        "availability": "https://schema.org/InStock",
+        "itemOffered": {
+          "@type": "Product",
+          "name": `${d.brand} ${d.model} Real Cloud Android Device`,
+          "serialNumber": d.serial
+        }
+      }))
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": faqs.map(item => ({
+        "@type": "Question",
+        "name": item.q,
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": item.a
+        }
+      }))
+    }
+  ];
 
   return (
     <RentalsLayout>
@@ -203,6 +238,42 @@ export default function DeviceStore() {
           })}
         </div>
       )}
+      {/* Frequently Asked Questions Section */}
+      <section style={{ marginTop: '56px', paddingTop: '36px', borderTop: '1px solid var(--border-color)' }} aria-labelledby="faq-heading">
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '30px', background: 'rgba(56, 189, 248, 0.1)', color: 'var(--primary)', fontSize: '13px', fontWeight: 700, marginBottom: '10px' }}>
+            <HelpCircle size={15} /> FREQUENTLY ASKED QUESTIONS
+          </div>
+          <h2 id="faq-heading" style={{ fontSize: '24px', fontWeight: 800 }}>Everything You Need to Know</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
+            Get instant answers to key questions about hardware device rentals, payments, and instant access.
+          </p>
+        </div>
+
+        <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {faqs.map((faq, idx) => {
+            const isOpen = expandedFaq === idx;
+            return (
+              <div
+                key={idx}
+                className="card"
+                style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '20px 24px' }}
+                onClick={() => setExpandedFaq(isOpen ? null : idx)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 700, fontSize: '15px' }}>
+                  <span>{faq.q}</span>
+                  {isOpen ? <ChevronUp size={18} color="var(--primary)" /> : <ChevronDown size={18} color="var(--text-muted)" />}
+                </div>
+                {isOpen && (
+                  <p style={{ marginTop: '12px', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1.6, borderTop: '1px dashed var(--border-color)', paddingTop: '12px' }}>
+                    {faq.a}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
       {/* In-App Payment Modal (Paystack & NOWPayments Crypto) */}
       {paymentModalDevice && (
