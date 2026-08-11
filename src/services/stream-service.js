@@ -275,36 +275,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
   </div>
 </div>
 
-<!-- ── Mobile Bottom Navigation Bar ───────────────────────────────────────── -->
-<div class="mobile-nav" id="mobileNav">
-  <button class="mnav-btn nav-back" onclick="key(4)" title="Back">
-    <span>&#x21A9;</span>
-    <span class="lbl">Back</span>
-  </button>
-  <div class="mnav-sep"></div>
-  <button class="mnav-btn nav-home" onclick="key(3)" title="Home">
-    <span>&#9711;</span>
-    <span class="lbl">Home</span>
-  </button>
-  <button class="mnav-btn nav-recent" onclick="key(187)" title="Recent Apps">
-    <span>&#9723;</span>
-    <span class="lbl">Recent</span>
-  </button>
-  <div class="mnav-sep"></div>
-  <button class="mnav-btn nav-voldn" onclick="key(25)" title="Volume Down">
-    <span>&#128264;</span>
-    <span class="lbl">Vol&#x2212;</span>
-  </button>
-  <button class="mnav-btn nav-mute-m" id="muteBtnM" onclick="toggleMute()" title="Mute/Unmute">
-    <span id="muteBtnMIcon">&#128266;</span>
-    <span class="lbl">Mute</span>
-  </button>
-  <button class="mnav-btn nav-volup" onclick="key(24)" title="Volume Up">
-    <span>&#128265;</span>
-    <span class="lbl">Vol+</span>
-  </button>
-</div>
-
 <div class="modal" id="textModal">
   <div class="mbox">
     <div style="font-weight:700;margin-bottom:10px">Send Text</div>
