@@ -184,29 +184,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0;-webkit-tap-highlight-color:transparent}
     canvas{display:block;max-height:calc(100vh - 60px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
 
-    /* Floating Red Action Button at bottom-right corner of screen */
-    .fab-rotate{
-      position:absolute;
-      bottom:14px;
-      right:14px;
-      width:44px;
-      height:44px;
-      border-radius:50%;
-      background:linear-gradient(135deg,#ef4444,#dc2626);
-      color:#ffffff;
-      border:2px solid rgba(255,255,255,.3);
-      box-shadow:0 4px 14px rgba(239,68,68,.6);
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      cursor:pointer;
-      font-size:20px;
-      transition:transform .15s ease,background .2s ease,box-shadow .2s ease;
-      z-index:10;
-    }
-    .fab-rotate:hover{transform:scale(1.1);background:linear-gradient(135deg,#f87171,#ef4444);box-shadow:0 6px 18px rgba(239,68,68,.8)}
-    .fab-rotate:active{transform:scale(.92)}
-
     /* Sidebar ALWAYS on the right side */
     .sidebar{display:flex !important;flex-direction:column;align-items:center;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:8px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 25px rgba(0,0,0,.5);z-index:10}
     .btn{width:36px;height:36px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease;user-select:none}
@@ -248,9 +225,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
 <div class="stage">
   <div class="wrap" id="wrap">
     <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
-
-    <!-- Floating Action Red Rotation Button -->
-    <button class="fab-rotate" onclick="rotateScreen()" title="Rotate / Refresh Screen">&#x21BB;</button>
   </div>
 
   <!-- Sleek Dark Control Sidebar (Right Side) -->
@@ -258,6 +232,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <button class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
     <button class="btn btn-red" onclick="key(26)" title="Power">&#9211;</button>
     <button class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
+    <button class="btn btn-red" onclick="rotateScreen()" title="Rotate Screen">&#x21BB;</button>
     <button class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
     <button class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
     <button class="btn" onclick="key(4)" title="Back">&#x25C0;</button>
