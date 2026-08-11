@@ -207,48 +207,25 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .fab-rotate:hover{transform:scale(1.1);background:linear-gradient(135deg,#f87171,#ef4444);box-shadow:0 6px 18px rgba(239,68,68,.8)}
     .fab-rotate:active{transform:scale(.92)}
 
-    /* Sleek Dark Right Sidebar */
-    .sidebar{display:flex;flex-direction:column;align-items:center;gap:6px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:8px 6px;max-height:calc(100vh - 60px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 25px rgba(0,0,0,.5)}
+    /* Sidebar ALWAYS on the right side */
+    .sidebar{display:flex !important;flex-direction:column;align-items:center;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:8px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 25px rgba(0,0,0,.5);z-index:10}
     .btn{width:36px;height:36px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease;user-select:none}
     .btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
     .btn:active{transform:scale(.88)}
     .btn-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.3)}
     .btn-red:hover{background:rgba(248,113,113,.3);border-color:rgba(248,113,113,.6);color:#ef4444}
     
-    /* Vertical Green Volume Slider */
     .vol-slider-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 2px;width:100%}
-    .volume-slider-v{
-      -webkit-appearance:slider-vertical;
-      appearance:slider-vertical;
-      writing-mode:bt-lr;
-      width:6px;
-      height:80px;
-      background:rgba(255,255,255,.15);
-      border-radius:4px;
-      outline:none;
-      cursor:pointer;
-      accent-color:#22c55e;
-    }
+    .volume-slider-v{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:bt-lr;width:6px;height:75px;background:rgba(255,255,255,.15);border-radius:4px;outline:none;cursor:pointer;accent-color:#22c55e}
 
     .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:20;align-items:center;justify-content:center}
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:380px;box-shadow:0 20px 30px rgba(0,0,0,.6)}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
 
-    /* Mobile bottom navigation bar */
-    .mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:rgba(8,12,24,.97);border-top:1px solid rgba(56,189,248,.2);backdrop-filter:blur(16px);justify-content:space-around;align-items:center;padding:6px 12px;z-index:99;height:64px}
-    .mnav-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;color:#f8fafc;font-size:16px;cursor:pointer;padding:4px 8px;flex:1;max-width:68px;min-width:44px;min-height:52px;-webkit-tap-highlight-color:transparent}
-    .mnav-btn .lbl{font-size:9px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;line-height:1}
-    .mnav-btn:active{transform:scale(.88)}
-
-    @media (max-width: 640px) {
-      .sidebar    { display: none !important; }
-      .mobile-nav { display: flex; }
-      body        { padding: 0; overflow: hidden; }
-      .stage      { padding-bottom: 74px; flex-direction: column; justify-content: flex-start; }
-      canvas      { max-height: calc(100svh - 130px); max-width: 100%; width: auto; object-fit: contain; }
-      .wrap       { border-radius: 10px; border-width: 1px; max-width: 100%; display: flex; align-items: center; justify-content: center; }
-    }
+    .mobile-nav{display:none !important}
+    .stage{flex:1;display:flex;flex-direction:row !important;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0;padding:6px 10px}
+    canvas{display:block;max-height:calc(100vh - 55px);max-width:calc(100vw - 65px);width:auto;height:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
   </style>
 </head>
 <body>
@@ -957,7 +934,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function popOutWindow() {
-    const width = 470, height = 920;
+    const width = 510, height = 900;
     const left = Math.max(0, Math.round((window.screen.width - width) / 2));
     const top = Math.max(0, Math.round((window.screen.height - height) / 2));
     window.open(window.location.href, 'Stream_${serial}', 'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left + ',resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes');

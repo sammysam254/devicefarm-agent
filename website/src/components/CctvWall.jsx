@@ -280,7 +280,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                     if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
                     else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
                     if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
-                    const w = 470, h = 920;
+                    const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
                     window.open(u, `Stream_${focusDevice.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
