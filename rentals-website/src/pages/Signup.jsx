@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { UserPlus, ArrowRight } from 'lucide-react';
+import SEO from '../components/SEO';
 
 export default function Signup() {
   const { signup } = useAuth();
@@ -31,7 +32,12 @@ export default function Signup() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+    <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <SEO
+        title="Create Account — FlexPulse Device Rentals Marketplace"
+        description="Register a free account on FlexPulse Device Store to instantly rent real Android cloud hardware."
+        canonical="https://rentals.dennoh.site/signup"
+      />
       <div className="card" style={{ maxWidth: '420px', width: '100%', padding: '36px' }}>
         <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: 'linear-gradient(135deg, #38bdf8, #a855f7)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', marginBottom: '12px' }}>
@@ -94,6 +100,6 @@ export default function Signup() {
           Already have an account? <Link to="/login" style={{ fontWeight: 700 }}>Sign In</Link>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Allow: /store
+Allow: /login
+Allow: /signup
+
+Disallow: /my-devices
+Disallow: /admin-rentals
+
+Sitemap: https://rentals.dennoh.site/sitemap.xml

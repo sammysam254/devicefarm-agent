@@ -3,6 +3,7 @@ import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import SEO from '../components/SEO';
 
 export default function WorkerDashboard() {
   const { profile } = useAuth();
@@ -95,20 +96,26 @@ export default function WorkerDashboard() {
 
   return (
     <DashboardLayout>
-      <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Smartphone size={24} color="var(--primary)" />
-            <h1 style={{ fontSize: '22px', fontWeight: 800 }}>My Assigned Devices</h1>
-          </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
+      <SEO
+        title="Worker Control Dashboard — FlexPulse Cloud"
+        description="Assigned devices control center."
+        noIndex={true}
+      />
+      <main aria-labelledby="worker-devices-heading">
+        <header style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Smartphone size={24} color="var(--primary)" />
+              <h1 id="worker-devices-heading" style={{ fontSize: '22px', fontWeight: 800 }}>My Assigned Devices</h1>
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
             Devices assigned to you. Use your password to unlock and open the stream.
           </p>
         </div>
-        <button onClick={loadData} className="btn btn-secondary">
+        <button onClick={() => loadData(true)} className="btn btn-secondary" aria-label="Refresh">
           <RefreshCw size={16} /> Refresh
         </button>
-      </div>
+      </header>
 
       {loading ? (
         <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>Loading assigned devices...</div>
@@ -239,6 +246,7 @@ export default function WorkerDashboard() {
           </div>
         </div>
       )}
+      </main>
     </DashboardLayout>
   );
 }

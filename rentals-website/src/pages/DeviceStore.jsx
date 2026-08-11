@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { Store, Smartphone, CheckCircle, RefreshCw, ShoppingCart, Lock, DollarSign, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import PaymentModal from '../components/PaymentModal';
+import SEO from '../components/SEO';
 
 export default function DeviceStore() {
   const { user } = useAuth();
@@ -85,22 +86,49 @@ export default function DeviceStore() {
     }
   };
 
+  const storeSchema = {
+    "@context": "https://schema.org",
+    "@type": "OfferCatalog",
+    "name": "Android Cloud Device Rental Store",
+    "itemListElement": storeDevices.map((d, index) => ({
+      "@type": "Offer",
+      "position": index + 1,
+      "name": `${d.brand} ${d.model}`,
+      "price": d.monthly_rental_price || 49,
+      "priceCurrency": "USD",
+      "availability": "https://schema.org/InStock",
+      "itemOffered": {
+        "@type": "Product",
+        "name": `${d.brand} ${d.model} Real Cloud Android Device`,
+        "serialNumber": d.serial
+      }
+    }))
+  };
+
   return (
     <RentalsLayout>
-      <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Store size={26} color="var(--primary)" />
-            <h1 style={{ fontSize: '26px', fontWeight: 800 }}>Device Store Marketplace</h1>
+      <SEO
+        title="Device Store Marketplace — Dedicated Real Hardware Android Cloud"
+        description="Browse and rent unassigned real hardware Android devices for automation, testing, and remote control with instant WebRTC streaming access."
+        keywords="Android marketplace, device rental store, cloud Android devices, mobile testing farm, instant real phone rental"
+        canonical="https://rentals.dennoh.site/store"
+        jsonLd={storeSchema}
+      />
+      <main aria-labelledby="marketplace-title">
+        <header style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Store size={26} color="var(--primary)" />
+              <h1 id="marketplace-title" style={{ fontSize: '26px', fontWeight: 800 }}>Device Store Marketplace</h1>
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
+              Unassigned high-performance Android devices ready for instant monthly rental.
+            </p>
           </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Unassigned high-performance Android devices ready for instant monthly rental.
-          </p>
-        </div>
-        <button onClick={fetchStoreDevices} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh Marketplace
-        </button>
-      </div>
+          <button onClick={() => fetchStoreDevices(false)} className="btn btn-secondary" aria-label="Refresh available devices list">
+            <RefreshCw size={16} /> Refresh Marketplace
+          </button>
+        </header>
 
       {loading ? (
         <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '60px 0' }}>
@@ -185,6 +213,7 @@ export default function DeviceStore() {
           onPaymentSuccess={handlePaymentConfirmed}
         />
       )}
+      </main>
     </RentalsLayout>
   );
 }

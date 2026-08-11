@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Smartphone, Lock, Mail, ArrowRight } from 'lucide-react';
+import SEO from '../components/SEO';
 
 export default function Login() {
   const { login, signup } = useAuth();
@@ -35,7 +36,7 @@ export default function Login() {
   };
 
   return (
-    <div style={{
+    <main style={{
       minHeight: '100vh',
       display: 'flex',
       alignItems: 'center',
@@ -43,6 +44,11 @@ export default function Login() {
       padding: '24px',
       background: 'radial-gradient(circle at top, rgba(56,189,248,0.1), transparent)'
     }}>
+      <SEO
+        title="Access Portal — FlexPulse Cloud Device Farm"
+        description="Sign in to FlexPulse Cloud Platform to access dedicated device streaming, WebRTC controls, and agent monitoring."
+        canonical="https://dennoh.site/login"
+      />
       <div className="card" style={{ maxWidth: '420px', width: '100%', padding: '36px 28px' }}>
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <div style={{
@@ -130,6 +136,6 @@ export default function Login() {
           </button>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

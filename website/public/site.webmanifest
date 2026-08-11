@@ -1,0 +1,16 @@
+{
+  "name": "FlexPulse Cloud Device Farm",
+  "short_name": "FlexPulse",
+  "description": "Enterprise Real Hardware Android Device Farm Cloud Platform",
+  "start_url": "/login",
+  "display": "standalone",
+  "background_color": "#07090e",
+  "theme_color": "#38bdf8",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

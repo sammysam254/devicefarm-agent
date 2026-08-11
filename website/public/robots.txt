@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Allow: /login
+
+Disallow: /admin
+Disallow: /super-admin
+Disallow: /seed-admin
+Disallow: /worker
+
+Sitemap: https://dennoh.site/sitemap.xml

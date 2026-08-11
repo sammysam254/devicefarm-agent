@@ -3,6 +3,7 @@ import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Shield, Smartphone, DollarSign, RefreshCw, CheckCircle, XCircle, RotateCcw, Trash2, Users } from 'lucide-react';
+import SEO from '../components/SEO';
 
 export default function AdminRentalHub() {
   const { profile } = useAuth();
@@ -91,20 +92,26 @@ export default function AdminRentalHub() {
 
   return (
     <RentalsLayout>
-      <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Shield size={26} color="var(--warning)" />
-            <h1 style={{ fontSize: '26px', fontWeight: 800 }}>Admin Rental Control Hub</h1>
+      <SEO
+        title="Admin Rental Control Hub — FlexPulse"
+        description="Super Admin rental management hub for setting rental rates and managing store releases."
+        noIndex={true}
+      />
+      <main aria-labelledby="admin-hub-title">
+        <header style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Shield size={26} color="var(--warning)" />
+              <h1 id="admin-hub-title" style={{ fontSize: '26px', fontWeight: 800 }}>Admin Rental Control Hub</h1>
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
+              Super Admin & Seed Admin rental management. Release devices to marketplace, set pricing, and monitor active rentals.
+            </p>
           </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Super Admin & Seed Admin rental management. Release devices to marketplace, set pricing, and monitor active rentals.
-          </p>
-        </div>
-        <button onClick={loadRentalData} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh Data
-        </button>
-      </div>
+          <button onClick={loadRentalData} className="btn btn-secondary">
+            <RefreshCw size={16} /> Refresh Data
+          </button>
+        </header>
 
       {/* Overview Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '28px' }}>
@@ -262,6 +269,7 @@ export default function AdminRentalHub() {
           </div>
         )}
       </div>
+      </main>
     </RentalsLayout>
   );
 }

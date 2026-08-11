@@ -3,6 +3,7 @@ import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw, Eye, EyeOff, AlertCircle, ArrowLeft, Video, ShieldCheck } from 'lucide-react';
+import SEO from '../components/SEO';
 
 export default function MyDevices() {
   const { user } = useAuth();
@@ -76,20 +77,26 @@ export default function MyDevices() {
 
   return (
     <RentalsLayout>
-      <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Smartphone size={26} color="var(--primary)" />
-            <h1 style={{ fontSize: '26px', fontWeight: 800 }}>My Rented Devices</h1>
+      <SEO
+        title="My Rented Devices — FlexPulse Device Rentals"
+        description="View and control your active rented real Android cloud devices with instant PIN unlock."
+        noIndex={true}
+      />
+      <main aria-labelledby="my-devices-heading">
+        <header style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Smartphone size={26} color="var(--primary)" />
+              <h1 id="my-devices-heading" style={{ fontSize: '26px', fontWeight: 800 }}>My Rented Devices</h1>
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
+              Devices assigned to you. Unlock with password to open the full interactive stream with stealth controls.
+            </p>
           </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>
-            Devices assigned to you. Unlock with password to open the full interactive stream with stealth controls.
-          </p>
-        </div>
-        <button onClick={() => fetchMyRentedDevices(true)} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh Feeds
-        </button>
-      </div>
+          <button onClick={() => fetchMyRentedDevices(true)} className="btn btn-secondary" aria-label="Refresh Feeds">
+            <RefreshCw size={16} /> Refresh Feeds
+          </button>
+        </header>
 
       {loading ? (
         <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '60px 0' }}>
@@ -236,6 +243,7 @@ export default function MyDevices() {
           </div>
         </div>
       )}
+      </main>
     </RentalsLayout>
   );
 }

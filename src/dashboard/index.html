@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DeviceFarm Agent — Local Control Center</title>
+  <title>FlexPulse DeviceFarm Agent — Local Machine Control Center</title>
+  <meta name="description" content="Local control center and hardware agent dashboard for managing USB-connected Android devices, hardware binding, and WebRTC streaming.">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#07090e">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
@@ -150,12 +153,12 @@
 </head>
 <body>
 
-  <div class="container">
-    <nav class="navbar">
+  <main class="container">
+    <header class="navbar">
       <div class="brand">
         <div class="brand-icon">📱</div>
         <div>
-          <div class="brand-text">DeviceFarm Agent</div>
+          <h1 class="brand-text">DeviceFarm Agent</h1>
           <div style="font-size: 12px; color: var(--text-dim);">Local Machine Control Center</div>
         </div>
       </div>
@@ -163,10 +166,10 @@
         <span class="pulse-dot"></span>
         <span>Agent Operational</span>
       </div>
-    </nav>
+    </header>
 
     <!-- Metrics Stats Grid -->
-    <div class="stats-grid">
+    <section class="stats-grid" aria-label="System Metrics">
       <div class="stat-card">
         <div class="stat-header">Connected Devices</div>
         <div class="stat-value stat-val-primary" id="statDevices">0</div>
@@ -183,10 +186,10 @@
         <div class="stat-header">License Mode</div>
         <div class="stat-value" style="font-size: 20px; margin-top: 10px; color: var(--primary);" id="statLicenseMode">Active</div>
       </div>
-    </div>
+    </section>
 
     <!-- Machine Binding Code Banner -->
-    <div class="binding-banner">
+    <section class="binding-banner" aria-label="Machine Binding Info">
       <div>
         <div style="font-size: 12px; font-weight: 800; color: var(--primary); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px;">
           🔑 MACHINE BINDING CODE (STATIC HARDWARE CODE)
@@ -201,22 +204,24 @@
       <button class="btn-action btn-primary" style="padding: 12px 20px; font-size: 14px;" onclick="copyBindingCode()">
         📋 Copy 8-Digit Code
       </button>
-    </div>
+    </section>
 
     <!-- Devices List Section -->
-    <div class="section-header">
-      <h2 class="section-title">Connected Devices</h2>
-      <button class="btn-action" onclick="fetchDevices()">🔄 Refresh</button>
-    </div>
-
-    <div id="devicesContainer" class="devices-grid">
-      <div class="empty-state">
-        <div style="font-size: 40px; margin-bottom: 12px;">📱</div>
-        <div style="font-size: 16px; font-weight: 700;">Scanning for Android Devices...</div>
-        <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Connect Android phones via USB with USB Debugging enabled.</div>
+    <section aria-label="Connected Devices List">
+      <div class="section-header">
+        <h2 class="section-title">Connected Devices</h2>
+        <button class="btn-action" onclick="fetchDevices()">🔄 Refresh</button>
       </div>
-    </div>
-  </div>
+
+      <div id="devicesContainer" class="devices-grid">
+        <div class="empty-state">
+          <div style="font-size: 40px; margin-bottom: 12px;">📱</div>
+          <div style="font-size: 16px; font-weight: 700;">Scanning for Android Devices...</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Connect Android phones via USB with USB Debugging enabled.</div>
+        </div>
+      </div>
+    </section>
+  </main>
 
   <script>
     let currentBindingCode = '';
