@@ -47,7 +47,10 @@ export default function MyDevices() {
         if (!streamUrl.includes('pin=')) {
           streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(unlockModal.access_password.trim());
         }
-        window.open(streamUrl, '_blank');
+        const w = 470, h = 920;
+        const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+        const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+        window.open(streamUrl, `Stream_${unlockModal.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
       } else {
         alert('Device stream link is currently generating or device is offline');
       }

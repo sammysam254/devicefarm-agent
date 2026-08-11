@@ -162,106 +162,107 @@ function buildPlayerHtml(serial, screenW, screenH) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>${serial} — Live</title>
+  <title>Stream ${serial}</title>
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
     html,body{height:100%;background:#04060a;color:#f8fafc;font-family:system-ui;overflow:hidden}
-    body{display:flex;flex-direction:column;align-items:center;padding:6px 12px;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
-    .header{display:flex;align-items:center;justify-content:space-between;width:100%;max-width:560px;padding:2px 0;flex-shrink:0}
+    body{display:flex;flex-direction:column;align-items:center;padding:0;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+    
+    /* Top Header Bar inside window */
+    .header{display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 12px;background:rgba(15,23,42,.95);border-bottom:1px solid rgba(255,255,255,.1);flex-shrink:0;z-index:10}
+    .hdr-left{display:flex;align-items:center;gap:10px}
+    .hdr-title{font-weight:700;font-size:14px;color:#f8fafc;letter-spacing:.3px}
+    .hdr-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#f8fafc;border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease}
+    .hdr-btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
+    .hdr-btn:active{transform:scale(.92)}
+
     .badge{background:rgba(56,189,248,.15);color:#38bdf8;border:1px solid rgba(56,189,248,.3);padding:3px 10px;border-radius:100px;font-size:11px;font-weight:700;display:flex;align-items:center;gap:5px}
     .dot{width:6px;height:6px;background:#38bdf8;border-radius:50%;animation:pulse 1s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-    .stage{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0}
+
+    .stage{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0;padding:8px}
     .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0;-webkit-tap-highlight-color:transparent}
-    canvas{display:block;max-height:calc(100vh - 52px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
-    .sidebar{display:flex;flex-direction:column;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:7px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0}
-    .btn{width:36px;height:36px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .12s}
+    canvas{display:block;max-height:calc(100vh - 60px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
+
+    /* Floating Red Action Button at bottom-right corner of screen */
+    .fab-rotate{
+      position:absolute;
+      bottom:14px;
+      right:14px;
+      width:44px;
+      height:44px;
+      border-radius:50%;
+      background:linear-gradient(135deg,#ef4444,#dc2626);
+      color:#ffffff;
+      border:2px solid rgba(255,255,255,.3);
+      box-shadow:0 4px 14px rgba(239,68,68,.6);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      cursor:pointer;
+      font-size:20px;
+      transition:transform .15s ease,background .2s ease,box-shadow .2s ease;
+      z-index:10;
+    }
+    .fab-rotate:hover{transform:scale(1.1);background:linear-gradient(135deg,#f87171,#ef4444);box-shadow:0 6px 18px rgba(239,68,68,.8)}
+    .fab-rotate:active{transform:scale(.92)}
+
+    /* Sleek Dark Right Sidebar */
+    .sidebar{display:flex;flex-direction:column;align-items:center;gap:6px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:8px 6px;max-height:calc(100vh - 60px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 25px rgba(0,0,0,.5)}
+    .btn{width:36px;height:36px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease;user-select:none}
     .btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
     .btn:active{transform:scale(.88)}
     .btn-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.3)}
-    .btn-red:hover{background:rgba(248,113,113,.3)}
-    .hr{height:1px;background:rgba(255,255,255,.1);margin:2px 0}
-    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);z-index:20;align-items:center;justify-content:center}
-    .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:360px}
+    .btn-red:hover{background:rgba(248,113,113,.3);border-color:rgba(248,113,113,.6);color:#ef4444}
+    
+    /* Vertical Green Volume Slider */
+    .vol-slider-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 2px;width:100%}
+    .volume-slider-v{
+      -webkit-appearance:slider-vertical;
+      appearance:slider-vertical;
+      writing-mode:bt-lr;
+      width:6px;
+      height:80px;
+      background:rgba(255,255,255,.15);
+      border-radius:4px;
+      outline:none;
+      cursor:pointer;
+      accent-color:#22c55e;
+    }
+
+    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:20;align-items:center;justify-content:center}
+    .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:380px;box-shadow:0 20px 30px rgba(0,0,0,.6)}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
 
-    /* ── Mobile bottom navigation bar ─────────────────────────────────────── */
-    .mobile-nav{
-      display:none;
-      position:fixed;bottom:0;left:0;right:0;
-      background:rgba(8,12,24,.97);
-      border-top:1px solid rgba(56,189,248,.2);
-      backdrop-filter:blur(16px);
-      justify-content:space-around;
-      align-items:center;
-      padding:6px 12px;
-      z-index:99;
-      height:64px;
-    }
-    .mnav-btn{
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      justify-content:center;
-      gap:3px;
-      background:rgba(255,255,255,.05);
-      border:1px solid rgba(255,255,255,.1);
-      border-radius:12px;
-      color:#f8fafc;
-      font-size:16px;
-      cursor:pointer;
-      padding:4px 8px;
-      flex:1;
-      max-width:68px;
-      min-width:44px;
-      min-height:52px;
-      -webkit-tap-highlight-color:transparent;
-    }
+    /* Mobile bottom navigation bar */
+    .mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:rgba(8,12,24,.97);border-top:1px solid rgba(56,189,248,.2);backdrop-filter:blur(16px);justify-content:space-around;align-items:center;padding:6px 12px;z-index:99;height:64px}
+    .mnav-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;color:#f8fafc;font-size:16px;cursor:pointer;padding:4px 8px;flex:1;max-width:68px;min-width:44px;min-height:52px;-webkit-tap-highlight-color:transparent}
     .mnav-btn .lbl{font-size:9px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;line-height:1}
     .mnav-btn:active{transform:scale(.88)}
-    /* Back — red accent */
-    .mnav-btn.nav-back{color:#f87171;border-color:rgba(248,113,113,.25);background:rgba(248,113,113,.07)}
-    .mnav-btn.nav-back:active{background:rgba(248,113,113,.25)}
-    /* Home — sky accent */
-    .mnav-btn.nav-home{color:#38bdf8;border-color:rgba(56,189,248,.3);background:rgba(56,189,248,.08)}
-    .mnav-btn.nav-home:active{background:rgba(56,189,248,.25)}
-    /* Recent — purple accent */
-    .mnav-btn.nav-recent{color:#c084fc;border-color:rgba(192,132,252,.25);background:rgba(192,132,252,.07)}
-    .mnav-btn.nav-recent:active{background:rgba(192,132,252,.2)}
-    /* Volume down — amber */
-    .mnav-btn.nav-voldn{color:#fbbf24;border-color:rgba(251,191,36,.25);background:rgba(251,191,36,.06)}
-    .mnav-btn.nav-voldn:active{background:rgba(251,191,36,.2)}
-    /* Volume up — emerald */
-    .mnav-btn.nav-volup{color:#34d399;border-color:rgba(52,211,153,.25);background:rgba(52,211,153,.06)}
-    .mnav-btn.nav-volup:active{background:rgba(52,211,153,.2)}
-    /* Mute — default muted state red */
-    .mnav-btn.nav-mute-m{color:#94a3b8}
-    .mnav-sep{width:1px;height:36px;background:rgba(255,255,255,.12);flex-shrink:0;border-radius:1px}
 
-    /* ── Responsive: mobile ≤ 640px ─────────────────────────────────────── */
     @media (max-width: 640px) {
       .sidebar    { display: none !important; }
       .mobile-nav { display: flex; }
-      body        { padding: 3px 6px; overflow: hidden; }
-      .stage      { padding-bottom: 80px; flex-direction: column; justify-content: flex-start; }
-      /* canvas: never set height:auto on canvas — it collapses to 0. Use max-height only. */
+      body        { padding: 0; overflow: hidden; }
+      .stage      { padding-bottom: 74px; flex-direction: column; justify-content: flex-start; }
       canvas      { max-height: calc(100svh - 130px); max-width: 100%; width: auto; object-fit: contain; }
       .wrap       { border-radius: 10px; border-width: 1px; max-width: 100%; display: flex; align-items: center; justify-content: center; }
-      .header     { max-width: 100%; }
     }
   </style>
 </head>
 <body>
+
+<!-- Header Bar -->
 <div class="header">
-  <div style="display:flex;align-items:center;gap:8px">
-    <span style="font-size:18px">📱</span>
-    <div>
-      <div style="font-weight:700;font-size:13px">Live Stream</div>
-      <div style="font-size:10px;color:#64748b;font-family:monospace">${serial}</div>
-    </div>
+  <div class="hdr-left">
+    <button class="hdr-btn" onclick="if(history.length>1)history.back();else window.close()" title="Back">&#x2190;</button>
+    <div class="hdr-title" id="hdrTitle">Stream ${serial}</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
+    <button class="hdr-btn" onclick="reconnectStream()" title="Refresh Stream">&#x21BB;</button>
+    <button class="hdr-btn" onclick="toggleDebugModal()" title="Stream Diagnostics">&#128030;</button>
+    <button class="hdr-btn" onclick="popOutWindow()" title="Pop Out Chrome Window">&#x2197;</button>
     <div class="badge" id="badge"><span class="dot"></span><span id="modeText">CONNECTING</span></div>
     <span style="font-size:10px;color:#64748b;font-family:monospace" id="fps">--fps</span>
   </div>
@@ -270,25 +271,30 @@ function buildPlayerHtml(serial, screenW, screenH) {
 <div class="stage">
   <div class="wrap" id="wrap">
     <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
+
+    <!-- Floating Action Red Rotation Button -->
+    <button class="fab-rotate" onclick="rotateScreen()" title="Rotate / Refresh Screen">&#x21BB;</button>
   </div>
+
+  <!-- Sleek Dark Control Sidebar (Right Side) -->
   <div class="sidebar">
     <button class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
-    <button class="btn btn-red" onclick="key(26)" title="Power (Key 26)">&#9211;</button>
-    <button class="btn btn-red" onclick="key(4)" title="Back (Key 4)">&#x21A9;</button>
-    <div class="hr"></div>
-    <button class="btn" id="muteBtn" onclick="toggleMute()" title="Toggle audio">&#128266;</button>
+    <button class="btn btn-red" onclick="key(26)" title="Power">&#9211;</button>
+    <button class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
     <button class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
     <button class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
-    <button class="btn" onclick="key(164)" title="Mute Volume">&#128277;</button>
-    <div class="hr"></div>
+    <button class="btn" onclick="key(4)" title="Back">&#x25C0;</button>
     <button class="btn" onclick="key(3)" title="Home">&#9711;</button>
-    <button class="btn" onclick="key(187)" title="Recent Apps">&#9723;</button>
-    <div class="hr"></div>
+    <button class="btn" onclick="key(187)" title="Recents">&#9633;</button>
     <button class="btn" onclick="screenshot()" title="Screenshot">&#128247;</button>
-    <button class="btn" onclick="openText()" title="Send Text">&#9000;</button>
-    <button class="btn" onclick="openUpload()" title="Upload File">&#128228;</button>
-    <div class="hr"></div>
-    <button class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
+    <button class="btn" onclick="openText()" title="Send Text / Keyboard">&#9000;</button>
+    <button class="btn" onclick="openUpload()" title="Upload File / APK">&#128228;</button>
+    <button class="btn" id="muteBtn" onclick="toggleMute()" title="Mute/Unmute Audio">&#128266;</button>
+    
+    <!-- Vertical Green Volume Slider -->
+    <div class="vol-slider-box" title="Volume Slider">
+      <input type="range" min="0" max="100" value="100" class="volume-slider-v" id="volSlider" oninput="setVolume(this.value)"/>
+    </div>
   </div>
 </div>
 
@@ -334,6 +340,21 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <div style="font-weight:700;margin-bottom:10px">Upload to Phone</div>
     <input class="minput" type="file" id="filePick" accept="image/*,video/*"/>
     <button class="mbtn" onclick="doUpload()">Upload</button>
+  </div>
+</div>
+
+<div class="modal" id="debugModal">
+  <div class="mbox">
+    <div style="font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+      <span>🐞 Stream Diagnostics</span>
+      <button onclick="document.getElementById('debugModal').style.display='none'" style="background:none;border:none;color:#94a3b8;font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;color:#94a3b8">
+      <div>Device Serial: <strong style="color:#fff">${serial}</strong></div>
+      <div>Stream Resolution: <strong style="color:#38bdf8" id="dbgRes">--</strong></div>
+      <div>Decoder Engine: <strong style="color:#34d399" id="dbgCodec">--</strong></div>
+      <div>WebSocket State: <strong style="color:#c084fc" id="dbgWs">--</strong></div>
+    </div>
   </div>
 </div>
 
@@ -904,6 +925,44 @@ function buildPlayerHtml(serial, screenW, screenH) {
       .then(()=>{ alert(f.name+' uploaded!'); document.getElementById('uploadModal').style.display='none'; })
       .catch(()=>alert('Upload failed'));
   }
+  let currentVolume = 100;
+  function setVolume(val) {
+    currentVolume = parseFloat(val);
+    if (gainNode) gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
+    const btn = document.getElementById('muteBtn');
+    if (btn) {
+      btn.textContent = (isMuted || currentVolume === 0) ? '🔇' : '🔊';
+    }
+  }
+
+  function rotateScreen() {
+    send({ type: 'code', code: 275 });
+    setTimeout(reconnectStream, 300);
+  }
+
+  function reconnectStream() {
+    modeText.textContent = 'RECONNECTING';
+    resetDecoder();
+    connectWS();
+  }
+
+  function toggleDebugModal() {
+    const modal = document.getElementById('debugModal');
+    if (modal) {
+      document.getElementById('dbgRes').textContent = nativeW + ' x ' + nativeH;
+      document.getElementById('dbgWs').textContent = wsOk ? 'CONNECTED' : 'DISCONNECTED';
+      document.getElementById('dbgCodec').textContent = typeof VideoDecoder !== 'undefined' ? 'WebCodecs H264 (Hardware)' : 'Fallback Canvas';
+      modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
+    }
+  }
+
+  function popOutWindow() {
+    const width = 470, height = 920;
+    const left = Math.max(0, Math.round((window.screen.width - width) / 2));
+    const top = Math.max(0, Math.round((window.screen.height - height) / 2));
+    window.open(window.location.href, 'Stream_${serial}', 'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left + ',resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes');
+  }
+
   window.addEventListener('click', e => { if (e.target.classList.contains('modal')) e.target.style.display='none'; });
 
   connectWS();

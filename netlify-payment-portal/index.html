@@ -1038,29 +1038,10 @@
     }
 
     function openCctvFocusModal(serial, streamUrl, title) {
-      document.getElementById('focusDeviceTitle').innerText = title || 'Device Stream';
-      document.getElementById('focusDeviceSerial').innerText = `Serial: ${serial}`;
-      
-      // Pre-fetch with bypass headers to bypass localtunnel security page
-      // This "warms up" the tunnel so iframe loads directly
-      if (streamUrl && streamUrl.includes('loca.lt')) {
-        fetch(streamUrl, {
-          headers: {
-            'bypass-tunnel-reminder': '1',
-            'User-Agent': 'FlexPulse-Agent/1.0'
-          },
-          mode: 'no-cors'
-        }).catch(() => {});
-        
-        // Wait 500ms for bypass to register, then load iframe
-        setTimeout(() => {
-          document.getElementById('focusIframe').src = streamUrl;
-        }, 500);
-      } else {
-        document.getElementById('focusIframe').src = streamUrl;
-      }
-      
-      document.getElementById('cctvFocusModal').style.display = 'flex';
+      const w = 470, h = 920;
+      const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+      const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+      window.open(streamUrl, `Stream_${serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
     }
 
     function closeCctvFocusModal() {

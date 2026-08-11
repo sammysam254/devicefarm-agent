@@ -273,9 +273,27 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 <strong style={{ color: '#fff', fontSize: '15px' }}>📱 {focusDevice.brand || ''} {focusDevice.model || 'Android'}</strong>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Serial: {focusDevice.serial}</div>
               </div>
-              <button onClick={() => setFocusDevice(null)} className="btn btn-danger" style={{ padding: '6px 14px', fontSize: '12px' }}>
-                <ArrowLeft size={14} /> Back to Admin Monitor
-              </button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button 
+                  onClick={() => {
+                    let u = focusDevice.stream_url;
+                    if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                    else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
+                    if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
+                    const w = 470, h = 920;
+                    const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+                    const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+                    window.open(u, `Stream_${focusDevice.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+                  }} 
+                  className="btn btn-primary" 
+                  style={{ padding: '6px 14px', fontSize: '12px' }}
+                >
+                  <ExternalLink size={14} /> Pop Out Window
+                </button>
+                <button onClick={() => setFocusDevice(null)} className="btn btn-danger" style={{ padding: '6px 14px', fontSize: '12px' }}>
+                  <ArrowLeft size={14} /> Back to Admin Monitor
+                </button>
+              </div>
             </div>
 
             {/* Interactive Stream Frame */}

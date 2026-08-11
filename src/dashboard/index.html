@@ -278,14 +278,26 @@
             <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
               Device streams are synced to your online account. Access is strictly routed through your dashboard with your assigned PIN code.
             </div>
-            <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
               <span style="font-size: 11px; font-family: 'JetBrains Mono', monospace; padding: 4px 10px; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 6px; color: var(--emerald);">
                 ✓ Direct Links Hidden & PIN Protected
               </span>
+              ${d.streamUrl ? `
+                <button onclick="openPopoutStream('${d.streamUrl}', '${d.serial}')" style="padding: 6px 14px; background: #38bdf8; color: #0f172a; border: none; border-radius: 6px; font-weight: 700; font-size: 12px; cursor: pointer;">
+                  ▶ Open Pop-Out Stream ↗
+                </button>
+              ` : ''}
             </div>
           </div>
         </div>
       `).join('');
+    }
+
+    function openPopoutStream(streamUrl, serial) {
+      const w = 470, h = 920;
+      const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+      const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+      window.open(streamUrl, `Stream_${serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
     }
 
     function copyBindingCode() {

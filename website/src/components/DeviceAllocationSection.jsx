@@ -248,7 +248,19 @@ export default function DeviceAllocationSection({ currentUser }) {
                       </td>
                       <td style={{ padding: '14px 12px', fontSize: '12px', fontFamily: 'monospace' }}>
                         {a.devices?.stream_url ? (
-                          <a href={a.devices.stream_url} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <a 
+                            href={a.devices.stream_url} 
+                            target="_blank" 
+                            rel="noreferrer" 
+                            style={{ color: 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              const w = 470, h = 920;
+                              const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+                              const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+                              window.open(a.devices.stream_url, `Stream_${a.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+                            }}
+                          >
                             Open Stream <ExternalLink size={12} />
                           </a>
                         ) : (
