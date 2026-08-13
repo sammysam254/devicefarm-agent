@@ -84,10 +84,15 @@ function startDashboardServer(port = 7400) {
         const rawDevices = processManager.getActiveDeviceSummaries();
         const sessionToken = storeBindingCodeInSession(bindingCode);
 
-        const devices = rawDevices.map(d => ({
+        const remoteIp = req.socket.remoteAddress || '';
+        const hostHeader = req.headers.host || '';
+        const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
+        const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
+
+        const devices = isLocalHost ? rawDevices.map(d => ({
           ...d,
           streamUrl: d.streamUrl ? `${d.streamUrl}&token=${sessionToken}` : d.streamUrl,
-        }));
+        })) : [];
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -96,8 +101,9 @@ function startDashboardServer(port = 7400) {
           sessionToken,
           isLicensed: lic.isActive,
           licenseMode: lic.mode,
-          count: devices.length,
+          count: isLocalHost ? rawDevices.length : 0,
           devices: devices,
+          isRemote: !isLocalHost,
           timestamp: new Date().toISOString()
         }));
         return;

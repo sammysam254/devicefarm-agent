@@ -232,7 +232,9 @@
         const data = await res.json();
 
         if (data.status === 'ok') {
-          document.getElementById('statDevices').innerText = data.count || 0;
+          const isRemoteHost = data.isRemote || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1');
+
+          document.getElementById('statDevices').innerText = isRemoteHost ? 0 : (data.count || 0);
           document.getElementById('statBindingCode').innerText = data.bindingCode || '--------';
           document.getElementById('localBindingCodeBig').innerText = data.bindingCode || '--------';
           currentBindingCode = data.bindingCode;
@@ -244,15 +246,28 @@
 
           document.getElementById('statLicenseMode').innerText = (data.licenseMode || 'LICENSED').toUpperCase();
 
-          renderDevices(data.devices || []);
+          renderDevices(data.devices || [], isRemoteHost);
         }
       } catch (err) {
         console.error('Error fetching devices:', err);
       }
     }
 
-    function renderDevices(devices) {
+    function renderDevices(devices, isRemoteHost) {
       const container = document.getElementById('devicesContainer');
+
+      if (isRemoteHost || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+        container.innerHTML = `
+          <div class="empty-state" style="border-color: rgba(56, 189, 248, 0.3);">
+            <div style="font-size: 40px; margin-bottom: 12px;">🛡️</div>
+            <div style="font-size: 16px; font-weight: 700; color: var(--primary);">Cloud Stream Protection Active</div>
+            <div style="font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.6;">
+              Device streams are active and routed to your online account. For security, individual device streams are managed exclusively through your online website dashboard.
+            </div>
+          </div>
+        `;
+        return;
+      }
 
       if (!devices || devices.length === 0) {
         container.innerHTML = `
