@@ -65,8 +65,7 @@ export default function AdminRentalHub() {
   };
 
   const handleCancelRental = async (device) => {
-    if (!isSeedAdmin) return alert('Only Seed Admin can cancel and release active rentals.');
-    if (!window.confirm(`Cancel rental for ${device.brand} ${device.model} (${device.serial}) and release device back to store?`)) return;
+    if (!window.confirm(`Unallocate & cancel rental for ${device.brand} ${device.model} (${device.serial})?\n\nThis will completely remove the device from the user's dashboard and release it back for re-linking.`)) return;
 
     try {
       // 1. Reset device rental status
@@ -77,13 +76,13 @@ export default function AdminRentalHub() {
         updated_at: new Date().toISOString()
       }).eq('id', device.id);
 
-      // 2. Delete device assignment record
+      // 2. Delete device assignment record (removes from worker dashboard completely)
       await supabase.from('device_assignments').delete().eq('device_id', device.id);
 
-      alert('Rental cancelled successfully! Device released back to Rentals Store.');
+      alert('✅ Device unallocated successfully! Removed from worker dashboard and released for re-linking.');
       loadRentalData();
     } catch (err) {
-      alert('Error cancelling rental: ' + err.message);
+      alert('Error unallocating rental: ' + err.message);
     }
   };
 
@@ -250,17 +249,14 @@ export default function AdminRentalHub() {
                       <span className="badge badge-warning">ACTIVE RENTAL</span>
                     </td>
                     <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                      {isSeedAdmin ? (
-                        <button
-                          onClick={() => handleCancelRental(d)}
-                          className="btn btn-danger"
-                          style={{ padding: '6px 12px', fontSize: '12px' }}
-                        >
-                          <RotateCcw size={14} /> Cancel & Release Device
-                        </button>
-                      ) : (
-                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Seed Admin Only</span>
-                      )}
+                      <button
+                        onClick={() => handleCancelRental(d)}
+                        className="btn btn-danger"
+                        style={{ padding: '6px 12px', fontSize: '12px' }}
+                        title="Unallocate device and remove from user dashboard completely"
+                      >
+                        <RotateCcw size={14} /> Unallocate & Release Device
+                      </button>
                     </td>
                   </tr>
                 ))}

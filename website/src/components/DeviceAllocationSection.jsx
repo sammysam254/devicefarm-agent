@@ -73,9 +73,20 @@ export default function DeviceAllocationSection({ currentUser }) {
     if (!selectedDevice || !selectedUser) return alert('Please select both a device and a user');
 
     // Check if device is already assigned
-    const existing = assignments.find(a => a.device_id === selectedDevice && a.assigned_to_user_id === selectedUser);
-    if (existing) {
-      return alert('This device is already assigned to the selected user.');
+    const existingSame = assignments.find(a => a.device_id === selectedDevice && a.assigned_to_user_id === selectedUser);
+    if (existingSame) {
+      return alert('This device is already allocated to the selected user.');
+    }
+
+    const existingOther = assignments.find(a => a.device_id === selectedDevice);
+    if (existingOther) {
+      const confirmRelink = window.confirm(
+        `This device is currently allocated to ${existingOther.profiles?.email || 'another user'}.\n\nDo you want to UNALLOCATE it from them and RE-LINK it to the selected user?`
+      );
+      if (!confirmRelink) return;
+
+      // Delete old assignment to enable clean re-linking
+      await supabase.from('device_assignments').delete().eq('device_id', selectedDevice);
     }
 
     setAssigning(true);
@@ -91,7 +102,7 @@ export default function DeviceAllocationSection({ currentUser }) {
 
       if (error) throw error;
 
-      alert(`✅ Device allocated successfully!\n\nGenerated Access Password: ${autoPassword}`);
+      alert(`✅ Device allocated & re-linked successfully!\n\nGenerated Access Password: ${autoPassword}`);
       setSelectedDevice('');
       setSelectedUser('');
       loadAllocationData();
@@ -120,17 +131,31 @@ export default function DeviceAllocationSection({ currentUser }) {
     }
   };
 
-  const handleRevokeAssignment = async (assignmentId, deviceName, userEmail) => {
-    if (!window.confirm(`Revoke device allocation for ${deviceName} assigned to ${userEmail}?`)) return;
+  const handleRevokeAssignment = async (assignmentId, deviceName, userEmail, deviceId) => {
+    if (!window.confirm(`Unallocate ${deviceName} assigned to ${userEmail}?\n\nThis will completely remove the device from their worker dashboard and make it available for re-linking.`)) return;
 
     setUnassigningId(assignmentId);
     try {
-      const { error } = await supabase.from('device_assignments').delete().eq('id', assignmentId);
-      if (error) throw error;
+      // 1. Delete assignment record (removes device from worker dashboard completely)
+      const { error: delErr } = await supabase.from('device_assignments').delete().eq('id', assignmentId);
+      if (delErr) throw delErr;
 
+      // 2. Reset device rental status in devices table if assigned
+      if (deviceId) {
+        try {
+          await supabase.from('devices').update({
+            rental_status: 'available',
+            rented_by_user_id: null,
+            rented_at: null,
+            updated_at: new Date().toISOString()
+          }).eq('id', deviceId);
+        } catch (_) {}
+      }
+
+      alert(`✅ Device unallocated cleanly!\n\n${deviceName} has been completely removed from ${userEmail}'s dashboard and is available for re-linking.`);
       loadAllocationData();
     } catch (err) {
-      alert('Error revoking allocation: ' + err.message);
+      alert('Error unallocating device: ' + err.message);
     } finally {
       setUnassigningId(null);
     }
@@ -278,12 +303,13 @@ export default function DeviceAllocationSection({ currentUser }) {
                             <Key size={12} /> Re-Key Link
                           </button>
                           <button
-                            onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail)}
+                            onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail, a.devices?.id)}
                             disabled={unassigningId === a.id}
                             className="btn btn-danger"
                             style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title="Unallocate device and remove from worker dashboard completely, releasing for re-linking"
                           >
-                            <Trash2 size={12} /> {unassigningId === a.id ? 'Revoking...' : 'Revoke'}
+                            <Trash2 size={12} /> {unassigningId === a.id ? 'Unallocating...' : 'Unallocate Device'}
                           </button>
                         </div>
                       </td>
