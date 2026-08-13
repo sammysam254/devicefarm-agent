@@ -952,7 +952,10 @@ async function startStreamServer(serial, port) {
     const tokenParam = url.searchParams.get('token') || req.headers['x-session-token'];
     const remoteIp = req.socket.remoteAddress || '';
     const hostHeader = req.headers.host || '';
-    const isLocalHost = remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1');
+    
+    // Cloudflare Tunnel proxies traffic to localhost — inspect Cloudflare & proxy headers to detect remote clients
+    const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
+    const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
     const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status');
     if (linkStatus === 'suspended' || linkStatus === 'revoked') {
@@ -1077,7 +1080,9 @@ async function startStreamServer(serial, port) {
     const tokenParam = wsUrl.searchParams.get('token');
     const remoteIp = req.socket.remoteAddress || '';
     const hostHeader = req.headers.host || '';
-    const isLocalHost = remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1');
+    
+    const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
+    const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
     const dashboardServer = require('../dashboard/server');
     const isPinValid = pinParam && (pinParam === bindingCode || pinParam === bindingCode.slice(-4));
@@ -1137,7 +1142,8 @@ async function startStreamServer(serial, port) {
 function buildStreamUrl(tunnelDomain, port, serial) {
   const cleanDomain = tunnelDomain.replace(/\/+$/, '');
   const domain = cleanDomain.startsWith('http') ? cleanDomain : `https://${cleanDomain}`;
-  return `${domain}/?udid=${encodeURIComponent(serial)}`;
+  const bindingCode = bindingService.getOrGenerateBindingCode();
+  return `${domain}/?udid=${encodeURIComponent(serial)}&pin=${encodeURIComponent(bindingCode)}`;
 }
 
 function killStreamServer(streamProcess) {

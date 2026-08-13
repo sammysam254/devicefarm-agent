@@ -58,9 +58,46 @@ exports.handler = async (event) => {
         const resCode = await client.get(`/device_rentals?user_id=eq.${encodeURIComponent(bindingCode)}&select=*`);
         if (resCode.data && Array.isArray(resCode.data)) {
           resCode.data.forEach(d => {
-            if (!seenSerials.has(d.serial_number)) {
-              seenSerials.add(d.serial_number);
+            const s = d.serial_number || d.serial;
+            if (s && !seenSerials.has(s)) {
+              seenSerials.add(s);
               devices.push(d);
+            }
+          });
+        }
+      } catch (_) {}
+
+      try {
+        const resBindingCol = await client.get(`/device_rentals?binding_code=eq.${encodeURIComponent(bindingCode)}&select=*`);
+        if (resBindingCol.data && Array.isArray(resBindingCol.data)) {
+          resBindingCol.data.forEach(d => {
+            const s = d.serial_number || d.serial;
+            if (s && !seenSerials.has(s)) {
+              seenSerials.add(s);
+              devices.push(d);
+            }
+          });
+        }
+      } catch (_) {}
+
+      try {
+        const resDev = await client.get(`/devices?binding_code=eq.${encodeURIComponent(bindingCode)}&select=*`);
+        if (resDev.data && Array.isArray(resDev.data)) {
+          resDev.data.forEach(d => {
+            const s = d.serial || d.serial_number;
+            if (s && !seenSerials.has(s)) {
+              seenSerials.add(s);
+              devices.push({
+                serial_number: s,
+                device_model: d.model || 'Android Device',
+                device_brand: d.brand || 'Generic',
+                monthly_fee: d.monthly_rental_price || 30,
+                currency: 'USD',
+                status: d.status || 'active',
+                binding_code: d.binding_code,
+                stream_url: d.stream_url,
+                updated_at: d.updated_at,
+              });
             }
           });
         }

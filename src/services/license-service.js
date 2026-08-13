@@ -160,7 +160,7 @@ async function checkLicenseStatus(bindingCode) {
 }
 
 /**
- * Sync device info to Supabase devices table.
+ * Sync device info to Supabase devices & device_rentals tables.
  * Called when a device connects or its stream URL changes.
  */
 async function syncDeviceToCloud(params) {
@@ -169,7 +169,8 @@ async function syncDeviceToCloud(params) {
   if (!client) return;
 
   try {
-    const payload = {
+    // 1. Sync to public.devices table (used by website dashboards)
+    const devicesPayload = {
       serial,
       model: model || 'Android Device',
       brand: brand || 'Generic',
@@ -178,22 +179,70 @@ async function syncDeviceToCloud(params) {
       port: port || null,
       binding_code: bindingCode || null,
       status: status || 'online',
+      is_deleted_from_view: false, // Ensure active connected devices are visible in admin dashboards
       last_seen: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
-    await client.post('/devices?on_conflict=serial', payload, {
+    await client.post('/devices?on_conflict=serial', devicesPayload, {
       headers: { Prefer: 'resolution=merge-duplicates' },
     });
 
-    logger.info(`[LicenseService] Device ${serial} synced to cloud (url: ${streamUrl})`);
+    // 2. Check machine_bindings to find owner user_id if machine is bound to a user account
+    let ownerUserId = 'RENTAL_USER_DEFAULT';
+    if (bindingCode) {
+      try {
+        const mbRes = await client.get(`/machine_bindings?binding_code=eq.${encodeURIComponent(bindingCode)}&select=user_id`);
+        if (mbRes.data && Array.isArray(mbRes.data) && mbRes.data.length > 0 && mbRes.data[0].user_id) {
+          ownerUserId = mbRes.data[0].user_id;
+        }
+      } catch (_) {}
+    }
+
+    // 3. Sync to public.device_rentals table (used by netlify admin portal & rental hub)
+    try {
+      const rentalPatchPayload = {
+        device_model: model || 'Android Device',
+        device_brand: brand || 'Generic',
+        binding_code: bindingCode || null,
+        updated_at: new Date().toISOString(),
+      };
+      if (streamUrl) rentalPatchPayload.stream_url = streamUrl;
+
+      const patchRes = await client.patch(
+        `/device_rentals?serial_number=eq.${encodeURIComponent(serial)}`,
+        rentalPatchPayload,
+        { headers: { Prefer: 'return=representation' } }
+      );
+
+      if (!patchRes.data || !Array.isArray(patchRes.data) || patchRes.data.length === 0) {
+        // New device serial — insert into device_rentals so admin portals always match local ADB device count
+        await client.post('/device_rentals', {
+          serial_number: serial,
+          user_id: ownerUserId,
+          device_model: model || 'Android Device',
+          device_brand: brand || 'Generic',
+          binding_code: bindingCode || null,
+          stream_url: streamUrl || null,
+          monthly_fee: 30,
+          currency: 'USD',
+          status: 'active',
+          updated_at: new Date().toISOString(),
+        });
+        logger.info(`[LicenseService] Device ${serial} newly registered in device_rentals cloud table`);
+      }
+    } catch (rentalErr) {
+      logger.warn(`[LicenseService] device_rentals sync notice for ${serial}: ${rentalErr.message}`);
+    }
+
+    logger.info(`[LicenseService] Device ${serial} synced to cloud (devices & device_rentals updated, url: ${streamUrl})`);
   } catch (err) {
     logger.warn(`[LicenseService] Device sync notice for ${serial}: ${err.message}`);
   }
 }
 
 /**
- * Mark device as offline in Supabase.
+ * Mark device as offline in Supabase across devices & device_rentals tables.
  */
 async function markDeviceOffline(serial) {
   const client = getSupabaseClient();
@@ -202,6 +251,13 @@ async function markDeviceOffline(serial) {
     await client.patch(
       `/devices?serial=eq.${encodeURIComponent(serial)}`,
       { status: 'offline', updated_at: new Date().toISOString() },
+      { headers: { Prefer: 'return=minimal' } }
+    );
+  } catch (_) {}
+  try {
+    await client.patch(
+      `/device_rentals?serial_number=eq.${encodeURIComponent(serial)}`,
+      { updated_at: new Date().toISOString() },
       { headers: { Prefer: 'return=minimal' } }
     );
   } catch (_) {}

@@ -127,6 +127,31 @@ exports.handler = async (event) => {
         devices = devRes.data || [];
       } catch (_) {}
 
+      // Fallback/Merge from public.devices table if any device is in devices but not device_rentals
+      try {
+        const altRes = await client.get('/devices?select=*&order=updated_at.desc');
+        if (altRes.data && Array.isArray(altRes.data)) {
+          const seenSerials = new Set(devices.map(d => d.serial_number || d.serial));
+          altRes.data.forEach(d => {
+            const s = d.serial || d.serial_number;
+            if (s && !seenSerials.has(s)) {
+              seenSerials.add(s);
+              devices.push({
+                serial_number: s,
+                device_model: d.model || d.device_model || 'Android Device',
+                device_brand: d.brand || d.device_brand || 'Generic',
+                monthly_fee: d.monthly_rental_price || 30,
+                currency: 'USD',
+                status: d.status || 'active',
+                binding_code: d.binding_code,
+                stream_url: d.stream_url,
+                updated_at: d.updated_at,
+              });
+            }
+          });
+        }
+      } catch (_) {}
+
       const cctvAllowed = await walletStore.getCctvAccess();
       return {
         statusCode: 200,

@@ -267,7 +267,8 @@ let cloudHeartbeatTimer = null;
 
 function startCloudHeartbeat() {
   if (cloudHeartbeatTimer) clearInterval(cloudHeartbeatTimer);
-  cloudHeartbeatTimer = setInterval(async () => {
+
+  const performSync = async () => {
     try {
       const activeDevices = processManager.getActiveDeviceSummaries();
       if (!activeDevices || activeDevices.length === 0) return;
@@ -287,7 +288,13 @@ function startCloudHeartbeat() {
         });
       }
     } catch (_) {}
-  }, 10000);
+  };
+
+  // Immediate sync on start
+  performSync();
+
+  // Periodic heartbeat every 10s
+  cloudHeartbeatTimer = setInterval(performSync, 10000);
 }
 
 function stopCloudHeartbeat() {
