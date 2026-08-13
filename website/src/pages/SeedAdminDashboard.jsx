@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
+import { generate16CharKey, rotateUrlWithKey } from '../lib/keyGenerator';
 
 export default function SeedAdminDashboard() {
   const { profile: myProfile } = useAuth();
@@ -154,6 +155,39 @@ export default function SeedAdminDashboard() {
     }
   };
 
+  const handleRotateStreamLink = async (device) => {
+    if (!window.confirm(`Rotate stream link for ${device.brand} ${device.model} (${device.serial})?\n\nThis will invalidate the old stream link/PIN and generate a new 16-character key.`)) return;
+
+    const newKey = generate16CharKey();
+    const newStreamUrl = rotateUrlWithKey(device.stream_url, device.serial, newKey);
+
+    try {
+      await supabase.from('devices').update({
+        stream_url: newStreamUrl,
+        updated_at: new Date().toISOString()
+      }).eq('id', device.id);
+
+      try {
+        await supabase.from('device_rentals').update({
+          stream_url: newStreamUrl,
+          updated_at: new Date().toISOString()
+        }).eq('serial_number', device.serial);
+      } catch (_) {}
+
+      try {
+        await supabase.from('device_assignments').update({
+          access_password: newKey,
+          updated_at: new Date().toISOString()
+        }).eq('device_id', device.id);
+      } catch (_) {}
+
+      alert(`✅ Stream link rotated successfully!\n\nNew 16-Character Key: ${newKey}\nNew Stream Link: ${newStreamUrl}\n\nThe previous stream link/PIN has been invalidated.`);
+      loadData();
+    } catch (err) {
+      alert('Error rotating stream link: ' + err.message);
+    }
+  };
+
   const isSeedOwner = (p) => p.email?.toLowerCase() === 'sammyseth260@gmail.com';
 
   return (
@@ -274,23 +308,33 @@ export default function SeedAdminDashboard() {
                         )}
                       </td>
                       <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                        {isDeleted ? (
+                        <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
                           <button
-                            onClick={() => handleRestoreToView(d.id)}
+                            onClick={() => handleRotateStreamLink(d)}
                             className="btn btn-secondary"
-                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title="Rotate stream link and issue a new 16-character access key"
                           >
-                            <RotateCcw size={14} /> Restore to View
+                            <RotateCcw size={12} /> Rotate Link
                           </button>
-                        ) : (
-                          <button
-                            onClick={() => handleDeleteFromView(d.id)}
-                            className="btn btn-danger"
-                            style={{ padding: '6px 12px', fontSize: '12px' }}
-                          >
-                            <Trash2 size={14} /> Delete from View
-                          </button>
-                        )}
+                          {isDeleted ? (
+                            <button
+                              onClick={() => handleRestoreToView(d.id)}
+                              className="btn btn-secondary"
+                              style={{ padding: '6px 10px', fontSize: '11px' }}
+                            >
+                              Restore
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleDeleteFromView(d.id)}
+                              className="btn btn-danger"
+                              style={{ padding: '6px 10px', fontSize: '11px' }}
+                            >
+                              <Trash2 size={12} /> Delete from View
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

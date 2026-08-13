@@ -86,6 +86,56 @@ export default function AdminRentalHub() {
     }
   };
 
+  const handleRotateStreamLink = async (device) => {
+    if (!window.confirm(`Rotate stream link for ${device.brand} ${device.model} (${device.serial})?\n\nThis will invalidate the old stream link/PIN and generate a new 16-character key.`)) return;
+
+    function generate16CharKey() {
+      const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
+      const w1 = words[Math.floor(Math.random() * words.length)];
+      const w2 = words[Math.floor(Math.random() * words.length)];
+      const num = Math.floor(1000 + Math.random() * 9000).toString();
+      let k = `${w1}${w2}${num}`.toLowerCase();
+      if (k.length > 16) k = k.substring(0, 16);
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      while (k.length < 16) {
+        k += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return k;
+    }
+
+    const newKey = generate16CharKey();
+    const currentUrl = device.stream_url || '';
+    let baseUrl = currentUrl ? currentUrl.split('?')[0] : 'https://agent.dennoh.site/';
+    if (!baseUrl.endsWith('/')) baseUrl += '/';
+    const newStreamUrl = `${baseUrl}?udid=${encodeURIComponent(device.serial)}&key=${newKey}`;
+
+    try {
+      await supabase.from('devices').update({
+        stream_url: newStreamUrl,
+        updated_at: new Date().toISOString()
+      }).eq('id', device.id);
+
+      try {
+        await supabase.from('device_rentals').update({
+          stream_url: newStreamUrl,
+          updated_at: new Date().toISOString()
+        }).eq('serial_number', device.serial);
+      } catch (_) {}
+
+      try {
+        await supabase.from('device_assignments').update({
+          access_password: newKey,
+          updated_at: new Date().toISOString()
+        }).eq('device_id', device.id);
+      } catch (_) {}
+
+      alert(`✅ Stream link rotated successfully!\n\nNew 16-Character Key: ${newKey}\nNew Link: ${newStreamUrl}\n\nOld stream link/PIN has been invalidated.`);
+      loadRentalData();
+    } catch (err) {
+      alert('Error rotating stream link: ' + err.message);
+    }
+  };
+
   const unassignedDevices = devices.filter(d => !d.rented_by_user_id && d.rental_status !== 'rented');
   const activeRentals = devices.filter(d => d.rented_by_user_id || d.rental_status === 'rented');
 
@@ -249,14 +299,24 @@ export default function AdminRentalHub() {
                       <span className="badge badge-warning">ACTIVE RENTAL</span>
                     </td>
                     <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                      <button
-                        onClick={() => handleCancelRental(d)}
-                        className="btn btn-danger"
-                        style={{ padding: '6px 12px', fontSize: '12px' }}
-                        title="Unallocate device and remove from user dashboard completely"
-                      >
-                        <RotateCcw size={14} /> Unallocate & Release Device
-                      </button>
+                      <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                        <button
+                          onClick={() => handleRotateStreamLink(d)}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '11px' }}
+                          title="Rotate stream link and issue a new 16-character access key"
+                        >
+                          <RotateCcw size={12} /> Rotate Link
+                        </button>
+                        <button
+                          onClick={() => handleCancelRental(d)}
+                          className="btn btn-danger"
+                          style={{ padding: '6px 10px', fontSize: '11px' }}
+                          title="Unallocate device and remove from user dashboard completely"
+                        >
+                          Unallocate
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -182,6 +182,62 @@ exports.handler = async (event) => {
       };
     }
 
+    // 7. Rotate Stream Link (Generates 16-character key and updates stream_url)
+    if (action === 'rotate_stream_link') {
+      function generate16CharKey() {
+        const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
+        const w1 = words[Math.floor(Math.random() * words.length)];
+        const w2 = words[Math.floor(Math.random() * words.length)];
+        const num = Math.floor(1000 + Math.random() * 9000).toString();
+        let k = `${w1}${w2}${num}`.toLowerCase();
+        if (k.length > 16) k = k.substring(0, 16);
+        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        while (k.length < 16) {
+          k += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return k;
+      }
+
+      const newKey = generate16CharKey();
+      try {
+        const checkRes = await client.get(`/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}&select=stream_url`);
+        let currentUrl = (checkRes.data && checkRes.data.length > 0) ? checkRes.data[0].stream_url : '';
+        let baseUrl = currentUrl ? currentUrl.split('?')[0] : 'https://agent.dennoh.site/';
+        if (!baseUrl.endsWith('/')) baseUrl += '/';
+        let newStreamUrl = `${baseUrl}?udid=${encodeURIComponent(serialNumber)}&key=${newKey}`;
+
+        await client.patch(
+          `/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}`,
+          { stream_url: newStreamUrl, updated_at: new Date().toISOString() }
+        );
+
+        await client.patch(
+          `/devices?serial=eq.${encodeURIComponent(serialNumber)}`,
+          { stream_url: newStreamUrl, updated_at: new Date().toISOString() }
+        );
+
+        await client.patch(
+          `/device_assignments?device_id=eq.${encodeURIComponent(serialNumber)}`,
+          { access_password: newKey, updated_at: new Date().toISOString() }
+        );
+
+        return {
+          statusCode: 200,
+          body: JSON.stringify({
+            status: 'ok',
+            message: `Stream link rotated successfully for ${serialNumber}!\n\nNew 16-Character Key: ${newKey}\nNew Link: ${newStreamUrl}`,
+            newStreamUrl,
+            newKey,
+          }),
+        };
+      } catch (err) {
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ status: 'error', message: err.message }),
+        };
+      }
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({ status: 'ok', message: 'Action completed.' }),

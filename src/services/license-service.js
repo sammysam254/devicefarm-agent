@@ -80,6 +80,18 @@ function saveConfig(cfg) {
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
 const licenseCache = new Map();
+const ROTATED_STREAM_KEYS = new Map(); // Map<serial, rotated16CharKey>
+
+function getRotatedStreamKey(serial) {
+  return ROTATED_STREAM_KEYS.get(serial) || null;
+}
+
+function setRotatedStreamKey(serial, key) {
+  if (serial && key) {
+    ROTATED_STREAM_KEYS.set(serial, key);
+  }
+}
+
 // Randomize cache TTL to prevent timing attacks (3000-8000ms instead of fixed 5000ms)
 const CACHE_TTL_MIN = process.env.CACHE_TTL_MIN ? parseInt(process.env.CACHE_TTL_MIN, 10) : 3000;
 const CACHE_TTL_MAX = process.env.CACHE_TTL_MAX ? parseInt(process.env.CACHE_TTL_MAX, 10) : 8000;
@@ -169,12 +181,29 @@ async function syncDeviceToCloud(params) {
   if (!client) return;
 
   try {
+    let finalStreamUrl = streamUrl || null;
+
+    // Check if an existing rotated stream_url with key= exists in Supabase for this device
+    try {
+      const exRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=stream_url`);
+      if (exRes.data && Array.isArray(exRes.data) && exRes.data.length > 0 && exRes.data[0].stream_url) {
+        const dbUrl = exRes.data[0].stream_url;
+        if (dbUrl.includes('key=')) {
+          finalStreamUrl = dbUrl;
+          const match = dbUrl.match(/key=([^&]+)/);
+          if (match && match[1]) {
+            ROTATED_STREAM_KEYS.set(serial, match[1]);
+          }
+        }
+      }
+    } catch (_) {}
+
     // 1. Sync to public.devices table (used by website dashboards)
     const devicesPayload = {
       serial,
       model: model || 'Android Device',
       brand: brand || 'Generic',
-      stream_url: streamUrl || null,
+      stream_url: finalStreamUrl,
       local_url: localUrl || null,
       port: port || null,
       binding_code: bindingCode || null,
@@ -207,7 +236,7 @@ async function syncDeviceToCloud(params) {
         binding_code: bindingCode || null,
         updated_at: new Date().toISOString(),
       };
-      if (streamUrl) rentalPatchPayload.stream_url = streamUrl;
+      if (finalStreamUrl) rentalPatchPayload.stream_url = finalStreamUrl;
 
       const patchRes = await client.patch(
         `/device_rentals?serial_number=eq.${encodeURIComponent(serial)}`,
@@ -223,7 +252,7 @@ async function syncDeviceToCloud(params) {
           device_model: model || 'Android Device',
           device_brand: brand || 'Generic',
           binding_code: bindingCode || null,
-          stream_url: streamUrl || null,
+          stream_url: finalStreamUrl,
           monthly_fee: 30,
           currency: 'USD',
           status: 'active',
@@ -235,7 +264,7 @@ async function syncDeviceToCloud(params) {
       logger.warn(`[LicenseService] device_rentals sync notice for ${serial}: ${rentalErr.message}`);
     }
 
-    logger.info(`[LicenseService] Device ${serial} synced to cloud (devices & device_rentals updated, url: ${streamUrl})`);
+    logger.info(`[LicenseService] Device ${serial} synced to cloud (devices & device_rentals updated, url: ${finalStreamUrl})`);
   } catch (err) {
     logger.warn(`[LicenseService] Device sync notice for ${serial}: ${err.message}`);
   }
@@ -270,4 +299,6 @@ module.exports = {
   loadConfig,
   saveConfig,
   dohClient,
+  getRotatedStreamKey,
+  setRotatedStreamKey,
 };

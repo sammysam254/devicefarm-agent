@@ -948,7 +948,7 @@ async function startStreamServer(serial, port) {
 
     const url = new URL(req.url, `http://localhost:${port}`);
     const p   = url.pathname;
-    const pinParam   = url.searchParams.get('pin');
+    const pinParam   = url.searchParams.get('key') || url.searchParams.get('pin') || url.searchParams.get('token');
     const tokenParam = url.searchParams.get('token') || req.headers['x-session-token'];
     const remoteIp = req.socket.remoteAddress || '';
     const hostHeader = req.headers.host || '';
@@ -980,8 +980,12 @@ async function startStreamServer(serial, port) {
 
     const dashboardServer = require('../dashboard/server');
     
-    // Check PIN parameter or session token
-    const isPinValid = pinParam && (pinParam === bindingCode || pinParam === bindingCode.slice(-4));
+    // Check PIN parameter, rotated 16-character key, or session token
+    const rotatedKey = licenseService.getRotatedStreamKey ? licenseService.getRotatedStreamKey(serial) : null;
+    const isPinValid = pinParam && (
+      (rotatedKey ? pinParam === rotatedKey : (pinParam === bindingCode || pinParam === bindingCode.slice(-4))) ||
+      pinParam === rotatedKey
+    );
     const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
     const isValidSession = isLocalHost || isPinValid || isTokenValid;
 
@@ -991,7 +995,7 @@ async function startStreamServer(serial, port) {
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Stream PIN Authorization Required</title>
+          <title>Stream Authorization Required</title>
           <script>
             (function() {
               const serial = '${serial}';
@@ -1001,7 +1005,7 @@ async function startStreamServer(serial, port) {
                 // 12 Hours cache check (12 * 60 * 60 * 1000 = 43200000 ms)
                 if (saved && saved.pin && saved.ts && (Date.now() - saved.ts < 43200000)) {
                   const u = new URL(window.location.href);
-                  u.searchParams.set('pin', saved.pin);
+                  u.searchParams.set('key', saved.pin);
                   window.location.href = u.toString();
                 }
               } catch (_) {}
@@ -1011,12 +1015,12 @@ async function startStreamServer(serial, port) {
         <body style="background:#090d16; color:#f8fafc; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center;">
           <div style="max-width:440px; padding:32px; background:#0f172a; border:1px solid rgba(56,189,248,0.3); border-radius:16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
             <div style="font-size:48px; margin-bottom:16px;">🔐</div>
-            <h2 style="color:#38bdf8; margin-bottom:8px;">Stream PIN Required</h2>
+            <h2 style="color:#38bdf8; margin-bottom:8px;">Stream Authorization Required</h2>
             <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
-              This device stream is protected. Enter your assigned <strong>PIN Code</strong> to unlock this device (remembered for 12 hours).
+              This stream link is protected. Enter your assigned 16-character <strong>Stream Key / PIN</strong> to unlock this device.
             </p>
-            <form style="margin-top:20px;" onsubmit="event.preventDefault(); const p=document.getElementById('pinInput').value; if(p) { try { localStorage.setItem('device_pin_auth_${serial}', JSON.stringify({ pin: p, ts: Date.now() })); } catch(_) {} const u = new URL(window.location.href); u.searchParams.set('pin', p); window.location.href = u.toString(); }">
-              <input id="pinInput" type="password" placeholder="Enter PIN Code" maxlength="12" style="width:100%; padding:12px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(15,23,42,0.8); color:#fff; margin-bottom:14px; font-size:16px; text-align:center; letter-spacing:3px; box-sizing:border-box;" />
+            <form style="margin-top:20px;" onsubmit="event.preventDefault(); const p=document.getElementById('pinInput').value; if(p) { try { localStorage.setItem('device_pin_auth_${serial}', JSON.stringify({ pin: p, ts: Date.now() })); } catch(_) {} const u = new URL(window.location.href); u.searchParams.set('key', p); window.location.href = u.toString(); }">
+              <input id="pinInput" type="text" placeholder="Enter 16-char Key or PIN" maxlength="24" style="width:100%; padding:12px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(15,23,42,0.8); color:#fff; margin-bottom:14px; font-size:15px; text-align:center; letter-spacing:2px; box-sizing:border-box;" />
               <button type="submit" style="width:100%; padding:12px; border-radius:8px; border:none; background:#38bdf8; color:#0f172a; font-weight:bold; font-size:15px; cursor:pointer;">Unlock & Watch Stream</button>
             </form>
           </div>
@@ -1076,7 +1080,7 @@ async function startStreamServer(serial, port) {
     }
 
     const wsUrl = new URL(req.url, 'http://localhost');
-    const pinParam = wsUrl.searchParams.get('pin');
+    const pinParam = wsUrl.searchParams.get('key') || wsUrl.searchParams.get('pin') || wsUrl.searchParams.get('token');
     const tokenParam = wsUrl.searchParams.get('token');
     const remoteIp = req.socket.remoteAddress || '';
     const hostHeader = req.headers.host || '';
@@ -1085,7 +1089,11 @@ async function startStreamServer(serial, port) {
     const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
     const dashboardServer = require('../dashboard/server');
-    const isPinValid = pinParam && (pinParam === bindingCode || pinParam === bindingCode.slice(-4));
+    const rotatedKey = licenseService.getRotatedStreamKey ? licenseService.getRotatedStreamKey(serial) : null;
+    const isPinValid = pinParam && (
+      (rotatedKey ? pinParam === rotatedKey : (pinParam === bindingCode || pinParam === bindingCode.slice(-4))) ||
+      pinParam === rotatedKey
+    );
     const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
     const isValidWs = isLocalHost || isPinValid || isTokenValid;
 
