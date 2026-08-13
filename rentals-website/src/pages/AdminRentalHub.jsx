@@ -87,7 +87,7 @@ export default function AdminRentalHub() {
   };
 
   const handleRotateStreamLink = async (device) => {
-    if (!window.confirm(`Rotate stream link for ${device.brand} ${device.model} (${device.serial})?\n\nThis will invalidate the old stream link/PIN and generate a new 16-character key.`)) return;
+    if (!window.confirm(`Rotate stream link for ${device.brand} ${device.model} (${device.serial})?\n\nThis will generate a new 16-character URL key and a new 6-digit stream PIN.`)) return;
 
     function generate16CharKey() {
       const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
@@ -103,11 +103,16 @@ export default function AdminRentalHub() {
       return k;
     }
 
+    function generate6DigitPin() {
+      return Math.floor(100000 + Math.random() * 900000).toString();
+    }
+
     const newKey = generate16CharKey();
+    const newPin = generate6DigitPin();
     const currentUrl = device.stream_url || '';
     let baseUrl = currentUrl ? currentUrl.split('?')[0] : 'https://agent.dennoh.site/';
     if (!baseUrl.endsWith('/')) baseUrl += '/';
-    const newStreamUrl = `${baseUrl}?udid=${encodeURIComponent(device.serial)}&key=${newKey}`;
+    const newStreamUrl = `${baseUrl}?udid=${encodeURIComponent(device.serial)}&key=${newKey}&pin=${newPin}`;
 
     try {
       await supabase.from('devices').update({
@@ -124,12 +129,12 @@ export default function AdminRentalHub() {
 
       try {
         await supabase.from('device_assignments').update({
-          access_password: newKey,
+          access_password: newPin,
           updated_at: new Date().toISOString()
         }).eq('device_id', device.id);
       } catch (_) {}
 
-      alert(`✅ Stream link rotated successfully!\n\nNew 16-Character Key: ${newKey}\nNew Link: ${newStreamUrl}\n\nOld stream link/PIN has been invalidated.`);
+      alert(`✅ Stream link rotated successfully!\n\nNew 16-Char URL Key: ${newKey}\nNew 6-Digit Stream PIN: ${newPin}\n\nOld stream link and PIN have been invalidated.`);
       loadRentalData();
     } catch (err) {
       alert('Error rotating stream link: ' + err.message);

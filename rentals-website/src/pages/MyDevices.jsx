@@ -136,7 +136,7 @@ export default function MyDevices() {
                     </span>
                   </div>
 
-                  {/* Password box */}
+                  {/* Password / PIN box */}
                   <div style={{
                     background: 'rgba(56,189,248,0.06)',
                     border: '1px solid rgba(56,189,248,0.15)',
@@ -145,25 +145,42 @@ export default function MyDevices() {
                     marginBottom: '14px',
                     display: 'flex',
                     alignItems: 'center',
-                    justify: 'space-between'
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
                   }}>
                     <div>
                       <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                        ACCESS PASSWORD
+                        YOUR ACCESS PIN (6-DIGIT)
                       </div>
-                      <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '18px', letterSpacing: '2px', color: 'var(--primary)' }}>
-                        {isPasswordRevealed ? a.access_password : '••••••'}
+                      <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '18px', letterSpacing: '3px', color: 'var(--primary)' }}>
+                        {isPasswordRevealed ? (a.access_password || '------') : '••••••'}
                       </div>
                     </div>
-                    <button
-                      onClick={() => togglePasswordReveal(a.id)}
-                      className="btn btn-secondary"
-                      style={{ padding: '6px 10px', fontSize: '12px' }}
-                      title={isPasswordRevealed ? 'Hide password' : 'Show password'}
-                    >
-                      {isPasswordRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                      {isPasswordRevealed ? 'Hide' : 'Show'}
-                    </button>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        onClick={() => togglePasswordReveal(a.id)}
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 10px', fontSize: '12px' }}
+                        title={isPasswordRevealed ? 'Hide PIN' : 'Show PIN'}
+                      >
+                        {isPasswordRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                        {isPasswordRevealed ? 'Hide' : 'Show'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (a.access_password) {
+                            navigator.clipboard.writeText(a.access_password);
+                            alert('✅ 6-Digit PIN (' + a.access_password + ') copied to clipboard!');
+                          }
+                        }}
+                        className="btn btn-primary"
+                        style={{ padding: '6px 10px', fontSize: '12px' }}
+                        title="Copy 6-Digit PIN to clipboard"
+                      >
+                        📋 Copy PIN
+                      </button>
+                    </div>
                   </div>
 
                   {/* Stream URL snippet */}

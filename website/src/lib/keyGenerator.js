@@ -1,7 +1,8 @@
 /**
- * Generates a 16-character random word + number key for stream link rotation.
- * Format: 16 characters lowercase alphanumeric, e.g. "flexstream8492k7", "quantumvector391"
+ * Key and PIN Generator for Device Stream Access
  */
+
+// Generates a 16-character random word + number key for URL stream link
 export function generate16CharKey() {
   const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
   const w1 = words[Math.floor(Math.random() * words.length)];
@@ -16,8 +17,14 @@ export function generate16CharKey() {
   return key;
 }
 
-export function rotateUrlWithKey(currentUrl, serial, newKey) {
+// Generates a clean 6-digit PIN for stream unlock & dashboard copy
+export function generate6DigitPin() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Constructs stream URL with 16-character key and 6-digit PIN
+export function rotateUrlWithKeyAndPin(currentUrl, serial, newKey, newPin) {
   const baseUrl = currentUrl ? currentUrl.split('?')[0] : 'https://agent.dennoh.site/';
   const cleanBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-  return `${cleanBase}?udid=${encodeURIComponent(serial)}&key=${encodeURIComponent(newKey)}`;
+  return `${cleanBase}?udid=${encodeURIComponent(serial)}&key=${encodeURIComponent(newKey)}&pin=${encodeURIComponent(newPin)}`;
 }

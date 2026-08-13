@@ -182,7 +182,7 @@ exports.handler = async (event) => {
       };
     }
 
-    // 7. Rotate Stream Link (Generates 16-character key and updates stream_url)
+    // 7. Rotate Stream Link (Generates 16-character key and 6-digit PIN)
     if (action === 'rotate_stream_link') {
       function generate16CharKey() {
         const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
@@ -198,13 +198,18 @@ exports.handler = async (event) => {
         return k;
       }
 
+      function generate6DigitPin() {
+        return Math.floor(100000 + Math.random() * 900000).toString();
+      }
+
       const newKey = generate16CharKey();
+      const newPin = generate6DigitPin();
       try {
         const checkRes = await client.get(`/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}&select=stream_url`);
         let currentUrl = (checkRes.data && checkRes.data.length > 0) ? checkRes.data[0].stream_url : '';
         let baseUrl = currentUrl ? currentUrl.split('?')[0] : 'https://agent.dennoh.site/';
         if (!baseUrl.endsWith('/')) baseUrl += '/';
-        let newStreamUrl = `${baseUrl}?udid=${encodeURIComponent(serialNumber)}&key=${newKey}`;
+        let newStreamUrl = `${baseUrl}?udid=${encodeURIComponent(serialNumber)}&key=${newKey}&pin=${newPin}`;
 
         await client.patch(
           `/device_rentals?serial_number=eq.${encodeURIComponent(serialNumber)}`,
@@ -218,16 +223,17 @@ exports.handler = async (event) => {
 
         await client.patch(
           `/device_assignments?device_id=eq.${encodeURIComponent(serialNumber)}`,
-          { access_password: newKey, updated_at: new Date().toISOString() }
+          { access_password: newPin, updated_at: new Date().toISOString() }
         );
 
         return {
           statusCode: 200,
           body: JSON.stringify({
             status: 'ok',
-            message: `Stream link rotated successfully for ${serialNumber}!\n\nNew 16-Character Key: ${newKey}\nNew Link: ${newStreamUrl}`,
+            message: `Stream link rotated successfully for ${serialNumber}!\n\nNew 16-Char URL Key: ${newKey}\nNew 6-Digit Stream PIN: ${newPin}`,
             newStreamUrl,
             newKey,
+            newPin,
           }),
         };
       } catch (err) {

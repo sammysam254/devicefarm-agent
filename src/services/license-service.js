@@ -81,6 +81,7 @@ function saveConfig(cfg) {
 
 const licenseCache = new Map();
 const ROTATED_STREAM_KEYS = new Map(); // Map<serial, rotated16CharKey>
+const ROTATED_STREAM_PINS = new Map(); // Map<serial, rotated6DigitPin>
 
 function getRotatedStreamKey(serial) {
   return ROTATED_STREAM_KEYS.get(serial) || null;
@@ -89,6 +90,16 @@ function getRotatedStreamKey(serial) {
 function setRotatedStreamKey(serial, key) {
   if (serial && key) {
     ROTATED_STREAM_KEYS.set(serial, key);
+  }
+}
+
+function getRotatedStreamPin(serial) {
+  return ROTATED_STREAM_PINS.get(serial) || null;
+}
+
+function setRotatedStreamPin(serial, pin) {
+  if (serial && pin) {
+    ROTATED_STREAM_PINS.set(serial, pin);
   }
 }
 
@@ -183,16 +194,22 @@ async function syncDeviceToCloud(params) {
   try {
     let finalStreamUrl = streamUrl || null;
 
-    // Check if an existing rotated stream_url with key= exists in Supabase for this device
+    // Check if an existing rotated stream_url with key= or pin= exists in Supabase for this device
     try {
       const exRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=stream_url`);
       if (exRes.data && Array.isArray(exRes.data) && exRes.data.length > 0 && exRes.data[0].stream_url) {
         const dbUrl = exRes.data[0].stream_url;
         if (dbUrl.includes('key=')) {
           finalStreamUrl = dbUrl;
-          const match = dbUrl.match(/key=([^&]+)/);
-          if (match && match[1]) {
-            ROTATED_STREAM_KEYS.set(serial, match[1]);
+          const matchKey = dbUrl.match(/key=([^&]+)/);
+          if (matchKey && matchKey[1]) {
+            ROTATED_STREAM_KEYS.set(serial, matchKey[1]);
+          }
+        }
+        if (dbUrl.includes('pin=')) {
+          const matchPin = dbUrl.match(/pin=([^&]+)/);
+          if (matchPin && matchPin[1]) {
+            ROTATED_STREAM_PINS.set(serial, matchPin[1]);
           }
         }
       }
@@ -301,4 +318,6 @@ module.exports = {
   dohClient,
   getRotatedStreamKey,
   setRotatedStreamKey,
+  getRotatedStreamPin,
+  setRotatedStreamPin,
 };

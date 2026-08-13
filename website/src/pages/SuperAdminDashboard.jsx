@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2, RotateCcw } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
-import { generate16CharKey, rotateUrlWithKey } from '../lib/keyGenerator';
+import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
 
 export default function SuperAdminDashboard() {
   const { profile } = useAuth();
@@ -148,10 +148,11 @@ export default function SuperAdminDashboard() {
   };
 
   const handleRotateStreamLink = async (device) => {
-    if (!window.confirm(`Rotate stream link for ${device.brand} ${device.model} (${device.serial})?\n\nThis will invalidate the old stream link/PIN and generate a new 16-character key.`)) return;
+    if (!window.confirm(`Rotate stream link for ${device.brand} ${device.model} (${device.serial})?\n\nThis will generate a new 16-character URL key and a new 6-digit stream PIN.`)) return;
 
     const newKey = generate16CharKey();
-    const newStreamUrl = rotateUrlWithKey(device.stream_url, device.serial, newKey);
+    const newPin = generate6DigitPin();
+    const newStreamUrl = rotateUrlWithKeyAndPin(device.stream_url, device.serial, newKey, newPin);
 
     try {
       await supabase.from('devices').update({
@@ -168,12 +169,12 @@ export default function SuperAdminDashboard() {
 
       try {
         await supabase.from('device_assignments').update({
-          access_password: newKey,
+          access_password: newPin,
           updated_at: new Date().toISOString()
         }).eq('device_id', device.id);
       } catch (_) {}
 
-      alert(`✅ Stream link rotated successfully!\n\nNew 16-Character Key: ${newKey}\nNew Stream Link: ${newStreamUrl}\n\nThe previous stream link/PIN has been invalidated.`);
+      alert(`✅ Stream link rotated successfully!\n\nNew 16-Char URL Key: ${newKey}\nNew 6-Digit Stream PIN: ${newPin}\n\nThe previous link and PIN have been invalidated.`);
       loadData(false);
     } catch (err) {
       alert('Error rotating stream link: ' + err.message);

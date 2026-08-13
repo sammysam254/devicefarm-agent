@@ -147,7 +147,7 @@ export default function WorkerDashboard() {
                   </span>
                 </div>
 
-                {/* Password Row */}
+                {/* Password / PIN Row */}
                 <div style={{
                   background: 'rgba(56,189,248,0.06)',
                   border: '1px solid rgba(56,189,248,0.15)',
@@ -155,24 +155,41 @@ export default function WorkerDashboard() {
                   padding: '10px 14px',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   marginBottom: '14px',
+                  flexWrap: 'wrap',
+                  gap: '8px',
                 }}>
                   <div>
                     <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '3px' }}>
-                      Your Access Password
+                      YOUR ACCESS PIN (6-DIGIT)
                     </div>
-                    <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '18px', letterSpacing: '2px' }}>
-                      {revealed ? a.access_password : '••••••'}
+                    <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '18px', letterSpacing: '3px', color: 'var(--primary)' }}>
+                      {revealed ? (a.access_password || '------') : '••••••'}
                     </div>
                   </div>
-                  <button
-                    onClick={() => togglePasswordReveal(a.id)}
-                    className="btn btn-secondary"
-                    style={{ padding: '6px 10px', fontSize: '12px' }}
-                    title={revealed ? 'Hide password' : 'Show password'}
-                  >
-                    {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                    {revealed ? 'Hide' : 'Show'}
-                  </button>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      onClick={() => togglePasswordReveal(a.id)}
+                      className="btn btn-secondary"
+                      style={{ padding: '6px 10px', fontSize: '12px' }}
+                      title={revealed ? 'Hide PIN' : 'Show PIN'}
+                    >
+                      {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                      {revealed ? 'Hide' : 'Show'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (a.access_password) {
+                          navigator.clipboard.writeText(a.access_password);
+                          alert('✅ 6-Digit PIN (' + a.access_password + ') copied to clipboard!');
+                        }
+                      }}
+                      className="btn btn-primary"
+                      style={{ padding: '6px 10px', fontSize: '12px' }}
+                      title="Copy 6-Digit PIN to clipboard"
+                    >
+                      📋 Copy PIN
+                    </button>
+                  </div>
                 </div>
 
                 {/* Stream URL info */}

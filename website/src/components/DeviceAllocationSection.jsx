@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Key, Smartphone, Users, Lock, CheckCircle, RefreshCw, Trash2, ExternalLink } from 'lucide-react';
+import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
 
 export default function DeviceAllocationSection({ currentUser }) {
   const [devices, setDevices] = useState([]);
@@ -64,15 +65,10 @@ export default function DeviceAllocationSection({ currentUser }) {
     return () => clearInterval(interval);
   }, []);
 
-  const generatePassword = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  };
-
   const handleAssign = async (e) => {
     e.preventDefault();
     if (!selectedDevice || !selectedUser) return alert('Please select both a device and a user');
 
-    // Check if device is already assigned
     const existingSame = assignments.find(a => a.device_id === selectedDevice && a.assigned_to_user_id === selectedUser);
     if (existingSame) {
       return alert('This device is already allocated to the selected user.');
@@ -85,24 +81,41 @@ export default function DeviceAllocationSection({ currentUser }) {
       );
       if (!confirmRelink) return;
 
-      // Delete old assignment to enable clean re-linking
       await supabase.from('device_assignments').delete().eq('device_id', selectedDevice);
     }
 
     setAssigning(true);
-    const autoPassword = generatePassword();
+    const autoPin = generate6DigitPin();
+    const urlKey = generate16CharKey();
 
     try {
+      const targetDev = devices.find(d => d.id === selectedDevice);
+      const newStreamUrl = rotateUrlWithKeyAndPin(targetDev?.stream_url, targetDev?.serial || selectedDevice, urlKey, autoPin);
+
       const { error } = await supabase.from('device_assignments').insert([{
         device_id: selectedDevice,
         assigned_to_user_id: selectedUser,
         assigned_by_user_id: currentUser?.id,
-        access_password: autoPassword
+        access_password: autoPin
       }]);
 
       if (error) throw error;
 
-      alert(`✅ Device allocated & re-linked successfully!\n\nGenerated Access Password: ${autoPassword}`);
+      if (targetDev?.id) {
+        await supabase.from('devices').update({
+          stream_url: newStreamUrl,
+          updated_at: new Date().toISOString()
+        }).eq('id', targetDev.id);
+
+        try {
+          await supabase.from('device_rentals').update({
+            stream_url: newStreamUrl,
+            updated_at: new Date().toISOString()
+          }).eq('serial_number', targetDev.serial);
+        } catch (_) {}
+      }
+
+      alert(`✅ Device allocated & re-linked successfully!\n\nGenerated 6-Digit Stream PIN: ${autoPin}\n16-Char Stream Link Key: ${urlKey}`);
       setSelectedDevice('');
       setSelectedUser('');
       loadAllocationData();
@@ -113,18 +126,33 @@ export default function DeviceAllocationSection({ currentUser }) {
     }
   };
 
-  const handleReKeyAssignment = async (assignmentId, deviceName, userEmail) => {
-    if (!window.confirm(`Re-key access password for ${deviceName} assigned to ${userEmail}? This will instantly invalidate the current stream link.`)) return;
+  const handleReKeyAssignment = async (assignmentId, deviceName, userEmail, serial, currentStreamUrl) => {
+    if (!window.confirm(`Rotate link & re-key 6-digit PIN for ${deviceName} assigned to ${userEmail}? This will instantly invalidate the current stream link and PIN.`)) return;
 
-    const newPassword = generatePassword();
+    const newPin = generate6DigitPin();
+    const newKey = generate16CharKey();
+    const newStreamUrl = rotateUrlWithKeyAndPin(currentStreamUrl, serial, newKey, newPin);
+
     try {
       const { error } = await supabase.from('device_assignments').update({
-        access_password: newPassword,
+        access_password: newPin,
       }).eq('id', assignmentId);
 
       if (error) throw error;
 
-      alert(`✅ Stream link re-keyed successfully!\n\nNew Access Password: ${newPassword}`);
+      try {
+        await supabase.from('devices').update({
+          stream_url: newStreamUrl,
+          updated_at: new Date().toISOString()
+        }).eq('serial', serial);
+
+        await supabase.from('device_rentals').update({
+          stream_url: newStreamUrl,
+          updated_at: new Date().toISOString()
+        }).eq('serial_number', serial);
+      } catch (_) {}
+
+      alert(`✅ Stream link rotated & 6-digit PIN re-keyed successfully!\n\nNew 6-Digit PIN: ${newPin}\nNew 16-Char URL Key: ${newKey}`);
       loadAllocationData();
     } catch (err) {
       alert('Error re-keying link: ' + err.message);
@@ -295,12 +323,12 @@ export default function DeviceAllocationSection({ currentUser }) {
                       <td style={{ padding: '14px 12px', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
                           <button
-                            onClick={() => handleReKeyAssignment(a.id, deviceName, userEmail)}
+                            onClick={() => handleReKeyAssignment(a.id, deviceName, userEmail, a.devices?.serial, a.devices?.stream_url)}
                             className="btn btn-secondary"
                             style={{ padding: '6px 10px', fontSize: '11px' }}
-                            title="Invalidate current password and issue a new stream link key"
+                            title="Rotate stream link and issue a new 6-digit PIN"
                           >
-                            <Key size={12} /> Re-Key Link
+                            <Key size={12} /> Rotate & Re-Key
                           </button>
                           <button
                             onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail, a.devices?.id)}
