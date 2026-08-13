@@ -62,6 +62,27 @@ ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_by_user_id UUID REFER
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rental_status TEXT DEFAULT 'available';
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_at TIMESTAMP WITH TIME ZONE;
 
+-- Ensure device_rentals columns exist for binding code and stream links
+CREATE TABLE IF NOT EXISTS public.device_rentals (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    serial_number TEXT UNIQUE NOT NULL,
+    user_id TEXT,
+    device_model TEXT,
+    device_brand TEXT,
+    monthly_fee NUMERIC DEFAULT 30.00,
+    currency TEXT DEFAULT 'USD',
+    status TEXT DEFAULT 'unpaid',
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.device_rentals ADD COLUMN IF NOT EXISTS binding_code TEXT;
+ALTER TABLE public.device_rentals ADD COLUMN IF NOT EXISTS stream_url TEXT;
+ALTER TABLE public.device_rentals ADD COLUMN IF NOT EXISTS stealth_root_enabled BOOLEAN DEFAULT TRUE;
+ALTER TABLE public.device_rentals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read and sync access" ON public.device_rentals;
+CREATE POLICY "Allow public read and sync access" ON public.device_rentals FOR ALL USING (true);
+
 -- 4. DEVICE ASSIGNMENTS TABLE (Admin -> Worker assignments with auto-generated passwords)
 CREATE TABLE IF NOT EXISTS public.device_assignments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
