@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ArrowRight, CheckCircle2, ShieldCheck, Mail, ArrowLeft } from 'lucide-react';
+import { ArrowRight, CheckCircle2, ShieldCheck, Mail, ArrowLeft, Hash, Link2 } from 'lucide-react';
 import SEO from '../components/SEO';
 import QuadCornerLoader from '../components/QuadCornerLoader';
 import { playWelcomeSound } from '../lib/soundEffects';
@@ -10,12 +10,14 @@ export default function Signup() {
   const { signup, verifyOtp } = useAuth();
   const navigate = useNavigate();
 
-  const [step, setStep] = useState(1); // 1: Signup form, 2: OTP Verification
+  const [verifyMode, setVerifyMode] = useState('code'); // 'code' | 'link'
+  const [step, setStep] = useState(1); // 1: Form, 2: OTP Verification / Link instructions
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState(null);
   const [welcomeMsg, setWelcomeMsg] = useState(null);
+  const [linkSentMsg, setLinkSentMsg] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const otpRefs = [useRef(), useRef(), useRef(), useRef(), useRef(), useRef()];
@@ -32,8 +34,11 @@ export default function Signup() {
         playWelcomeSound();
         setWelcomeMsg(`Welcome to FlexPulse, ${email}!`);
         setTimeout(() => navigate('/store'), 2000);
+      } else if (verifyMode === 'link') {
+        setLinkSentMsg(`Account registered! We've sent a verification link to ${email}. Please check your email inbox and click the link to activate your account.`);
+        setStep(2);
       } else {
-        // Move to OTP verification step
+        // Move to OTP 6-digit code verification step
         setStep(2);
       }
     } catch (err) {
@@ -49,7 +54,6 @@ export default function Signup() {
     newDigits[index] = value.slice(-1);
     setOtpDigits(newDigits);
 
-    // Auto-focus next input
     if (value && index < 5) {
       otpRefs[index + 1].current?.focus();
     }
@@ -87,12 +91,12 @@ export default function Signup() {
   return (
     <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
       <SEO
-        title="Create Account & Verify — FlexPulse Device Rentals"
-        description="Register and verify your account to instantly access FlexPulse cloud Android devices."
+        title="Create Account — FlexPulse Device Rentals"
+        description="Register and choose your verification method (6-Digit Code or Email Link) to access FlexPulse."
         canonical="https://rentals.dennoh.site/signup"
       />
       <div className="card" style={{ maxWidth: '440px', width: '100%', padding: '36px' }}>
-        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <div style={{
             width: '52px',
             height: '52px',
@@ -108,12 +112,32 @@ export default function Signup() {
             ⚡
           </div>
           <h1 style={{ fontSize: '24px', fontWeight: 800 }}>
-            {step === 1 ? 'Create Account' : 'Verify Email Code'}
+            {welcomeMsg ? 'Account Verified' : (step === 2 && verifyMode === 'code' ? 'Verify Email Code' : 'Create Account')}
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
-            {step === 1 ? 'Join FlexPulse Device Rentals Marketplace' : `Enter the 6-digit code sent to ${email}`}
+            {welcomeMsg ? 'Welcome aboard' : (step === 2 && verifyMode === 'code' ? `Enter the 6-digit code sent to ${email}` : 'Join FlexPulse Device Rentals Marketplace')}
           </p>
         </div>
+
+        {/* Interactive Verification Method Selector */}
+        {step === 1 && !welcomeMsg && (
+          <div className="tab-group" style={{ marginBottom: '24px' }}>
+            <button
+              type="button"
+              className={`tab-item ${verifyMode === 'code' ? 'active' : ''}`}
+              onClick={() => setVerifyMode('code')}
+            >
+              <Hash size={15} /> 6-Digit Code
+            </button>
+            <button
+              type="button"
+              className={`tab-item ${verifyMode === 'link' ? 'active' : ''}`}
+              onClick={() => setVerifyMode('link')}
+            >
+              <Link2 size={15} /> Email Link
+            </button>
+          </div>
+        )}
 
         {error && (
           <div style={{ background: 'rgba(248, 113, 113, 0.12)', border: '1px solid rgba(248, 113, 113, 0.3)', color: 'var(--danger)', padding: '12px 16px', borderRadius: '12px', fontSize: '13px', marginBottom: '20px' }}>
@@ -164,10 +188,20 @@ export default function Signup() {
               {loading ? (
                 <QuadCornerLoader text="Creating Account..." size="small" inline />
               ) : (
-                <>Register & Send Code <ArrowRight size={16} /></>
+                <>{verifyMode === 'code' ? 'Register & Get 6-Digit Code' : 'Register & Send Email Link'} <ArrowRight size={16} /></>
               )}
             </button>
           </form>
+        ) : verifyMode === 'link' && linkSentMsg ? (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#4ade80', padding: '20px', borderRadius: '16px', fontSize: '14px', lineHeight: 1.6, marginBottom: '24px', textAlign: 'center' }}>
+              <CheckCircle2 size={36} style={{ display: 'block', margin: '0 auto 12px auto' }} />
+              <div>{linkSentMsg}</div>
+            </div>
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '12px' }}>
+              Go to Sign In <ArrowRight size={16} />
+            </Link>
+          </div>
         ) : (
           <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
@@ -195,7 +229,7 @@ export default function Signup() {
             </button>
 
             <button type="button" onClick={() => setStep(1)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-              <ArrowLeft size={14} /> Back to Sign Up
+              <ArrowLeft size={14} /> Back to Sign Up Options
             </button>
           </form>
         )}

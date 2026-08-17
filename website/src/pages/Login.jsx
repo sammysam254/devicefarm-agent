@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { Smartphone, Lock, Mail, ArrowRight, ShieldCheck, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { Smartphone, Lock, Mail, ArrowRight, ShieldCheck, CheckCircle2, ArrowLeft, Hash, Link2 } from 'lucide-react';
 import SEO from '../components/SEO';
 import QuadCornerLoader from '../components/QuadCornerLoader';
 import { playWelcomeSound } from '../lib/soundEffects';
@@ -11,12 +11,14 @@ export default function Login() {
   const navigate = useNavigate();
 
   const [isSignUp, setIsSignUp] = useState(false);
-  const [step, setStep] = useState(1); // 1: Form, 2: OTP Verification
+  const [verifyMode, setVerifyMode] = useState('code'); // 'code' | 'link'
+  const [step, setStep] = useState(1); // 1: Form, 2: OTP Verification / Link Instructions
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState(null);
   const [welcomeMsg, setWelcomeMsg] = useState(null);
+  const [linkSentMsg, setLinkSentMsg] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const otpRefs = [useRef(), useRef(), useRef(), useRef(), useRef(), useRef()];
@@ -34,6 +36,9 @@ export default function Login() {
           playWelcomeSound();
           setWelcomeMsg(`Welcome to FlexPulse, ${email}!`);
           setTimeout(() => navigate('/worker'), 1800);
+        } else if (verifyMode === 'link') {
+          setLinkSentMsg(`Account registered! We've sent a verification link to ${email}. Please check your email inbox and click the link to activate your account.`);
+          setStep(2);
         } else {
           setStep(2);
         }
@@ -123,9 +128,29 @@ export default function Login() {
           </div>
           <h2 style={{ fontSize: '24px', fontWeight: 800 }}>FlexPulse Access</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
-            {welcomeMsg ? 'Authentication Verified' : (step === 2 ? `Enter code sent to ${email}` : (isSignUp ? 'Create a new account to join' : 'Log in to access your device dashboard'))}
+            {welcomeMsg ? 'Authentication Verified' : (step === 2 && verifyMode === 'code' ? `Enter code sent to ${email}` : (isSignUp ? 'Choose verification method & create account' : 'Log in to access your device dashboard'))}
           </p>
         </div>
+
+        {/* Interactive Verification Method Selector for Signup */}
+        {isSignUp && step === 1 && !welcomeMsg && (
+          <div className="tab-group" style={{ marginBottom: '20px' }}>
+            <button
+              type="button"
+              className={`tab-item ${verifyMode === 'code' ? 'active' : ''}`}
+              onClick={() => setVerifyMode('code')}
+            >
+              <Hash size={15} /> 6-Digit Code
+            </button>
+            <button
+              type="button"
+              className={`tab-item ${verifyMode === 'link' ? 'active' : ''}`}
+              onClick={() => setVerifyMode('link')}
+            >
+              <Link2 size={15} /> Email Link
+            </button>
+          </div>
+        )}
 
         {error && (
           <div style={{
@@ -205,12 +230,31 @@ export default function Login() {
 
             <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '10px' }}>
               {loading ? (
-                <QuadCornerLoader text={isSignUp ? 'Creating Account & Sending Code...' : 'Connecting Corners & Authenticating...'} size="small" inline />
+                <QuadCornerLoader text={isSignUp ? 'Creating Account...' : 'Connecting Corners & Authenticating...'} size="small" inline />
               ) : (
-                <>{isSignUp ? 'Create Account & Get Code' : 'Sign In'} <ArrowRight size={16} /></>
+                <>{isSignUp ? (verifyMode === 'code' ? 'Register & Get 6-Digit Code' : 'Register & Send Email Link') : 'Sign In'} <ArrowRight size={16} /></>
               )}
             </button>
           </form>
+        ) : verifyMode === 'link' && linkSentMsg ? (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{
+              padding: '20px',
+              borderRadius: '16px',
+              background: 'rgba(34, 197, 94, 0.15)',
+              border: '1px solid rgba(34, 197, 94, 0.3)',
+              color: '#4ade80',
+              fontSize: '14px',
+              lineHeight: 1.6,
+              marginBottom: '20px'
+            }}>
+              <CheckCircle2 size={36} style={{ display: 'block', margin: '0 auto 10px auto' }} />
+              <div>{linkSentMsg}</div>
+            </div>
+            <button type="button" onClick={() => { setStep(1); setIsSignUp(false); }} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+              Return to Log In <ArrowRight size={16} />
+            </button>
+          </div>
         ) : (
           <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
@@ -237,8 +281,8 @@ export default function Login() {
               )}
             </button>
 
-            <button type="button" onClick={() => setStep(1)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-              <ArrowLeft size={14} /> Back to Sign Up
+            <button type="button" onClick={() => setStep(1)} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+              <ArrowLeft size={14} /> Back to Sign Up Options
             </button>
           </form>
         )}
@@ -246,7 +290,7 @@ export default function Login() {
         <div style={{ textAlign: 'center', marginTop: '20px' }}>
           <button 
             type="button" 
-            onClick={() => { setIsSignUp(!isSignUp); setStep(1); setError(null); }}
+            onClick={() => { setIsSignUp(!isSignUp); setStep(1); setError(null); setLinkSentMsg(null); }}
             style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}
           >
             {isSignUp ? 'Already have an account? Log in' : "Don't have an account? Sign up"}
