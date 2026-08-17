@@ -100,6 +100,7 @@ export function AuthProvider({ children }) {
     });
   };
   const updatePassword = (newPassword) => supabase.auth.updateUser({ password: newPassword });
+  const verifyOtp = (email, token, type = 'signup') => supabase.auth.verifyOtp({ email, token, type });
   const logout = () => supabase.auth.signOut();
 
   const value = {
@@ -112,6 +113,7 @@ export function AuthProvider({ children }) {
     signup,
     resetPassword,
     updatePassword,
+    verifyOtp,
     logout,
     refreshProfile: () => user && fetchProfile(user),
   };

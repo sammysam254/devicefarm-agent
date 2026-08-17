@@ -3,6 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Lock, ShieldCheck, ArrowRight, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import SEO from '../components/SEO';
+import QuadCornerLoader from '../components/QuadCornerLoader';
+import { playSuccessSound } from '../lib/soundEffects';
 
 export default function ResetPassword() {
   const { updatePassword } = useAuth();
@@ -34,10 +36,11 @@ export default function ResetPassword() {
       const { error: err } = await updatePassword(password);
       if (err) throw err;
 
+      playSuccessSound();
       setSuccess(true);
       setTimeout(() => {
         navigate('/login');
-      }, 3000);
+      }, 2500);
     } catch (err) {
       setError(err.message || 'Failed to update password. Link may have expired.');
     } finally {
@@ -70,7 +73,8 @@ export default function ResetPassword() {
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: '14px',
-            color: '#fff'
+            color: '#fff',
+            boxShadow: '0 8px 24px rgba(56, 189, 248, 0.3)'
           }}>
             <ShieldCheck size={28} />
           </div>
@@ -160,7 +164,11 @@ export default function ResetPassword() {
             </div>
 
             <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '10px' }}>
-              {loading ? 'Updating Password...' : 'Update Password'} <ArrowRight size={16} />
+              {loading ? (
+                <QuadCornerLoader text="Connecting Corners & Updating..." size="small" inline />
+              ) : (
+                <>Update Password <ArrowRight size={16} /></>
+              )}
             </button>
           </form>
         )}

@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LogIn, Mail, Lock, ShieldCheck, ArrowRight } from 'lucide-react';
+import { LogIn, Mail, Lock, ShieldCheck, ArrowRight, CheckCircle2 } from 'lucide-react';
 import SEO from '../components/SEO';
+import QuadCornerLoader from '../components/QuadCornerLoader';
+import { playWelcomeSound } from '../lib/soundEffects';
 
 export default function Login() {
   const { login } = useAuth();
@@ -10,6 +12,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
+  const [welcomeMsg, setWelcomeMsg] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -19,10 +22,13 @@ export default function Login() {
 
     try {
       await login(email, password);
-      navigate('/store');
+      playWelcomeSound();
+      setWelcomeMsg(`Welcome back to FlexPulse!`);
+      setTimeout(() => {
+        navigate('/store');
+      }, 1500);
     } catch (err) {
       setError(err.message || 'Failed to sign in');
-    } finally {
       setLoading(false);
     }
   };
@@ -51,46 +57,60 @@ export default function Login() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div>
-            <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
-              EMAIL ADDRESS
-            </label>
-            <div style={{ position: 'relative' }}>
+        {welcomeMsg ? (
+          <div style={{ textAlign: 'center', padding: '12px 0' }}>
+            <div style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#4ade80', padding: '20px', borderRadius: '16px', fontSize: '15px', fontWeight: 700, marginBottom: '16px' }}>
+              <CheckCircle2 size={36} style={{ display: 'block', margin: '0 auto 10px auto' }} />
+              {welcomeMsg}
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Accessing Device Store...</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+                EMAIL ADDRESS
+              </label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="email"
+                  required
+                  className="input-field"
+                  placeholder="name@example.com"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block' }}>
+                  PASSWORD
+                </label>
+                <Link to="/forgot-password" style={{ fontSize: '12px', color: 'var(--primary, #38bdf8)', fontWeight: 600, textDecoration: 'none' }}>
+                  Forgot Password?
+                </Link>
+              </div>
               <input
-                type="email"
+                type="password"
                 required
                 className="input-field"
-                placeholder="name@example.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
               />
             </div>
-          </div>
 
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block' }}>
-                PASSWORD
-              </label>
-              <Link to="/forgot-password" style={{ fontSize: '12px', color: 'var(--primary, #38bdf8)', fontWeight: 600, textDecoration: 'none' }}>
-                Forgot Password?
-              </Link>
-            </div>
-            <input
-              type="password"
-              required
-              className="input-field"
-              placeholder="••••••••"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-            />
-          </div>
-
-          <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '12px', marginTop: '8px' }}>
-            {loading ? 'Signing in...' : 'Sign In'} <ArrowRight size={16} />
-          </button>
-        </form>
+            <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '12px', marginTop: '8px' }}>
+              {loading ? (
+                <QuadCornerLoader text="Connecting Corners & Signing in..." size="small" inline />
+              ) : (
+                <>Sign In <ArrowRight size={16} /></>
+              )}
+            </button>
+          </form>
+        )}
 
         <div style={{ textAlign: 'center', marginTop: '24px', fontSize: '13px', color: 'var(--text-muted)' }}>
           Don't have an account? <Link to="/signup" style={{ fontWeight: 700 }}>Create Account</Link>

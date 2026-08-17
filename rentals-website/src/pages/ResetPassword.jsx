@@ -3,6 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Lock, CheckCircle2, ShieldCheck, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import SEO from '../components/SEO';
+import QuadCornerLoader from '../components/QuadCornerLoader';
+import { playSuccessSound } from '../lib/soundEffects';
 
 export default function ResetPassword() {
   const { updatePassword } = useAuth();
@@ -32,10 +34,11 @@ export default function ResetPassword() {
 
     try {
       await updatePassword(password);
+      playSuccessSound();
       setSuccess(true);
       setTimeout(() => {
         navigate('/login');
-      }, 3000);
+      }, 2500);
     } catch (err) {
       setError(err.message || 'Failed to update password. Link may have expired.');
     } finally {
@@ -83,7 +86,7 @@ export default function ResetPassword() {
             <div style={{ background: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#4ade80', padding: '20px', borderRadius: '14px', fontSize: '14px', lineHeight: 1.6, marginBottom: '24px', textAlign: 'center' }}>
               <CheckCircle2 size={36} style={{ display: 'block', margin: '0 auto 12px auto' }} />
               <strong style={{ display: 'block', fontSize: '16px', marginBottom: '4px' }}>Password Reset Complete!</strong>
-              Your password has been updated successfully. Redirecting to login page...
+              Your password has been updated successfully. Redirecting to sign in...
             </div>
             <Link to="/login" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '12px' }}>
               Go to Sign In <ArrowRight size={16} />
@@ -129,7 +132,11 @@ export default function ResetPassword() {
             </div>
 
             <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '12px', marginTop: '8px' }}>
-              {loading ? 'Updating Password...' : 'Update Password'} <ArrowRight size={16} />
+              {loading ? (
+                <QuadCornerLoader text="Connecting Corners & Updating..." size="small" inline />
+              ) : (
+                <>Update Password <ArrowRight size={16} /></>
+              )}
             </button>
           </form>
         )}
