@@ -91,6 +91,14 @@ export function AuthProvider({ children }) {
 
   const login = (email, password) => supabase.auth.signInWithPassword({ email, password });
   const signup = (email, password) => supabase.auth.signUp({ email, password });
+  const resetPassword = (email) => {
+    const siteUrl = import.meta.env.VITE_SITE_URL || 'https://dennoh.site';
+    const redirectUrl = `${siteUrl.replace(/\/$/, '')}/reset-password`;
+    return supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: redirectUrl,
+    });
+  };
+  const updatePassword = (newPassword) => supabase.auth.updateUser({ password: newPassword });
   const logout = () => supabase.auth.signOut();
 
   const value = {
@@ -101,6 +109,8 @@ export function AuthProvider({ children }) {
     toggleTheme,
     login,
     signup,
+    resetPassword,
+    updatePassword,
     logout,
     refreshProfile: () => user && fetchProfile(user),
   };

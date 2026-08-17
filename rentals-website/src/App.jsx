@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import DeviceStore from './pages/DeviceStore';
 import MyDevices from './pages/MyDevices';
 import AdminRentalHub from './pages/AdminRentalHub';
@@ -25,6 +27,8 @@ export default function App() {
           <Route path="/admin-rentals" element={<ProtectedRoute><AdminRentalHub /></ProtectedRoute>} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="*" element={<Navigate to="/store" replace />} />
         </Routes>
       </BrowserRouter>

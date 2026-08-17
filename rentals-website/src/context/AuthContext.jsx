@@ -57,6 +57,22 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
+  const resetPassword = async (email) => {
+    const siteUrl = import.meta.env.VITE_SITE_URL || 'https://rentals.dennoh.site';
+    const redirectUrl = `${siteUrl.replace(/\/$/, '')}/reset-password`;
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: redirectUrl,
+    });
+    if (error) throw error;
+    return data;
+  };
+
+  const updatePassword = async (newPassword) => {
+    const { data, error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    return data;
+  };
+
   const logout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -64,7 +80,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, profile, loading, login, signup, resetPassword, updatePassword, logout }}>
       {children}
     </AuthContext.Provider>
   );
