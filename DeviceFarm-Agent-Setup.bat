@@ -35,6 +35,13 @@ echo [*] Install directory : %INSTALL_DIR%
 echo [*] Source repository : %REPO_URL%
 echo.
 
+:: ── Stop any active background daemons to unlock DLLs and executables ──────
+taskkill /F /IM adb.exe >nul 2>&1
+taskkill /F /IM electron.exe >nul 2>&1
+taskkill /F /IM cloudflared.exe >nul 2>&1
+taskkill /F /IM scrcpy.exe >nul 2>&1
+
+
 :: ════════════════════════════════════════════════════════════════════════════
 :: STEP 1 — Git
 :: ════════════════════════════════════════════════════════════════════════════
