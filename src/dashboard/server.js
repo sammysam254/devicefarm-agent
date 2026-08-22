@@ -160,15 +160,23 @@ function startDashboardServer(port = 7400) {
             method: req.method,
             headers: req.headers,
           }, (proxyRes) => {
-            res.writeHead(proxyRes.statusCode, proxyRes.headers);
+            if (!res.headersSent) {
+              res.writeHead(proxyRes.statusCode, proxyRes.headers);
+            }
             proxyRes.pipe(res);
+            proxyRes.on('error', () => { try { res.destroy(); } catch (_) {} });
           });
 
           proxyReq.on('error', () => {
-            res.writeHead(502, { 'Content-Type': 'text/plain' });
-            res.end('Bad Gateway — device stream unavailable');
+            if (!res.headersSent) {
+              res.writeHead(502, { 'Content-Type': 'text/plain' });
+              res.end('Bad Gateway — device stream unavailable');
+            } else {
+              try { res.destroy(); } catch (_) {}
+            }
           });
 
+          req.on('error', () => { try { proxyReq.destroy(); } catch (_) {} });
           req.pipe(proxyReq);
           return;
         }
@@ -186,7 +194,18 @@ function startDashboardServer(port = 7400) {
       });
     });
 
+    server.on('clientError', (err, socket) => {
+      try {
+        if (socket.writable) {
+          socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        }
+        socket.destroy();
+      } catch (_) {}
+    });
+
     server.on('upgrade', (req, socket, head) => {
+      socket.on('error', () => { try { socket.destroy(); } catch (_) {} });
+
       const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const actionParam = fullUrl.searchParams.get('action');
       const udidParam = fullUrl.searchParams.get('udid');
@@ -206,6 +225,9 @@ function startDashboardServer(port = 7400) {
         });
 
         proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+          proxySocket.on('error', () => { try { socket.destroy(); proxySocket.destroy(); } catch (_) {} });
+          socket.on('error', () => { try { proxySocket.destroy(); socket.destroy(); } catch (_) {} });
+
           socket.write(
             `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n` +
             Object.keys(proxyRes.headers)
@@ -222,13 +244,12 @@ function startDashboardServer(port = 7400) {
         });
 
         proxyReq.on('error', (err) => {
-          logger.warn(`[DashboardServer] WS Proxy error: ${err.message}`);
-          socket.destroy();
+          try { socket.destroy(); } catch (_) {}
         });
 
         proxyReq.end();
       } else {
-        socket.destroy();
+        try { socket.destroy(); } catch (_) {}
       }
     });
 

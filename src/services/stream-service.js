@@ -1135,6 +1135,12 @@ async function startStreamServer(serial, port) {
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);
+    server.on('clientError', (err, socket) => {
+      try {
+        if (socket.writable) socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        socket.destroy();
+      } catch (_) {}
+    });
     server.listen(port, '0.0.0.0', () => {
       const localUrl = `http://localhost:${port}`;
       logger.info(`[StreamServer] Listening at ${localUrl}`);

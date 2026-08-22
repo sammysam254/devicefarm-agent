@@ -240,6 +240,10 @@ app.on('window-all-closed', (e) => {
 });
 
 process.on('uncaughtException', (err) => {
+  if (err && (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ETIMEDOUT' || err.message?.includes('ECONNRESET') || err.message?.includes('EPIPE'))) {
+    // Normal socket disconnection from browser tab closures or reverse proxies
+    return;
+  }
   logger.error('Uncaught exception', { error: err.message, stack: err.stack });
 });
 
