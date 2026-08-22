@@ -141,6 +141,11 @@ if defined ADB (
 echo.
 echo [4/6] Setting up agent files...
 
+:: Stop running background processes to release locks on DLLs (e.g., AdbWinApi.dll)
+taskkill /F /IM adb.exe >nul 2>&1
+taskkill /F /IM electron.exe >nul 2>&1
+taskkill /F /IM cloudflared.exe >nul 2>&1
+
 if exist "%INSTALL_DIR%\.git" (
     echo [*] Agent directory exists — fetching latest updates...
     "%GIT%" -C "%INSTALL_DIR%" fetch origin main
