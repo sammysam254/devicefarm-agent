@@ -35,8 +35,24 @@ export default function SeedAdminDashboard() {
 
   useEffect(() => {
     loadData(true);
-    const interval = setInterval(() => loadData(false), 5000);
-    return () => clearInterval(interval);
+
+    const channel = supabase
+      .channel('seed_admin_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'machine_bindings' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => loadData(false))
+      .subscribe();
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleDeleteFromView = async (deviceId) => {

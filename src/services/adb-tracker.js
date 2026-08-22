@@ -293,8 +293,8 @@ function startCloudHeartbeat() {
   // Immediate sync on start
   performSync();
 
-  // Periodic heartbeat every 10s
-  cloudHeartbeatTimer = setInterval(performSync, 10000);
+  // Periodic heartbeat every 5 minutes (event-driven syncs handle plug/unplug)
+  cloudHeartbeatTimer = setInterval(performSync, 300000);
 }
 
 function stopCloudHeartbeat() {

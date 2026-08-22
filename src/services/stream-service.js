@@ -1121,7 +1121,7 @@ async function startStreamServer(serial, port) {
         ws.close(4003, 'License Revoked');
         clearInterval(licCheckTimer);
       }
-    }, 5000);
+    }, 60000);
 
     ws.on('message', (msg) => {
       try {

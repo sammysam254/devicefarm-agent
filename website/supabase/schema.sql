@@ -175,6 +175,26 @@ CREATE POLICY "Allow public read device_assignments" ON public.device_assignment
 DROP POLICY IF EXISTS "Allow all write device_assignments" ON public.device_assignments;
 CREATE POLICY "Allow all write device_assignments" ON public.device_assignments FOR ALL USING (true);
 
+-- 5. SYSTEM SETTINGS TABLE (Stores platform toggles like cctv_wall_locked)
+CREATE TABLE IF NOT EXISTS public.system_settings (
+    key TEXT PRIMARY KEY,
+    value JSONB,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+ALTER TABLE public.system_settings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read system_settings" ON public.system_settings;
+CREATE POLICY "Allow public read system_settings" ON public.system_settings FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow all write system_settings" ON public.system_settings;
+CREATE POLICY "Allow all write system_settings" ON public.system_settings FOR ALL USING (true);
+
+-- Enable REPLICA IDENTITY FULL so realtime change payloads include previous and new values
+ALTER TABLE public.devices REPLICA IDENTITY FULL;
+ALTER TABLE public.machine_bindings REPLICA IDENTITY FULL;
+ALTER TABLE public.device_assignments REPLICA IDENTITY FULL;
+ALTER TABLE public.profiles REPLICA IDENTITY FULL;
+ALTER TABLE public.device_rentals REPLICA IDENTITY FULL;
+ALTER TABLE public.system_settings REPLICA IDENTITY FULL;
+
 -- Enable Realtime broadcasting on tables safely
 DO $$
 BEGIN
@@ -189,5 +209,11 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'profiles') THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'device_rentals') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.device_rentals;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'system_settings') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings;
   END IF;
 END $$;

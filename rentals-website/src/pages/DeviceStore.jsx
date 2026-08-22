@@ -43,8 +43,22 @@ export default function DeviceStore() {
 
   useEffect(() => {
     fetchStoreDevices(true);
-    const interval = setInterval(() => fetchStoreDevices(false), 5000);
-    return () => clearInterval(interval);
+
+    const channel = supabase
+      .channel('store_devices_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => fetchStoreDevices(false))
+      .subscribe();
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchStoreDevices(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleOpenPaymentModal = (device) => {

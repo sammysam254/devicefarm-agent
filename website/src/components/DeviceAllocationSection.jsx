@@ -61,8 +61,24 @@ export default function DeviceAllocationSection({ currentUser }) {
 
   useEffect(() => {
     loadAllocationData(true);
-    const interval = setInterval(() => loadAllocationData(false), 10000);
-    return () => clearInterval(interval);
+
+    const channel = supabase
+      .channel('device_allocation_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadAllocationData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => loadAllocationData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'device_assignments' }, () => loadAllocationData(false))
+      .subscribe();
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadAllocationData(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleAssign = async (e) => {

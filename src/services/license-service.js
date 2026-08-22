@@ -79,9 +79,36 @@ function saveConfig(cfg) {
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
+// 2 Days Cache TTL (48 hours = 172,800,000 ms)
+const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+const LICENSE_CACHE_FILE = path.join(process.cwd(), 'license_cache.json');
+
 const licenseCache = new Map();
 const ROTATED_STREAM_KEYS = new Map(); // Map<serial, rotated16CharKey>
 const ROTATED_STREAM_PINS = new Map(); // Map<serial, rotated6DigitPin>
+const lastDeviceSyncState = new Map(); // Map<serial, { signature: string, at: number }>
+
+// Load persistent disk cache if present
+try {
+  if (fs.existsSync(LICENSE_CACHE_FILE)) {
+    const rawDisk = JSON.parse(fs.readFileSync(LICENSE_CACHE_FILE, 'utf-8'));
+    for (const [code, entry] of Object.entries(rawDisk)) {
+      if (entry && entry.value && entry.at && (Date.now() - entry.at < TWO_DAYS_MS)) {
+        licenseCache.set(code, entry);
+      }
+    }
+  }
+} catch (_) {}
+
+function saveDiskLicenseCache() {
+  try {
+    const obj = {};
+    for (const [code, entry] of licenseCache.entries()) {
+      obj[code] = entry;
+    }
+    fs.writeFileSync(LICENSE_CACHE_FILE, JSON.stringify(obj, null, 2), 'utf-8');
+  } catch (_) {}
+}
 
 function getRotatedStreamKey(serial) {
   return ROTATED_STREAM_KEYS.get(serial) || null;
@@ -101,14 +128,6 @@ function setRotatedStreamPin(serial, pin) {
   if (serial && pin) {
     ROTATED_STREAM_PINS.set(serial, pin);
   }
-}
-
-// Randomize cache TTL to prevent timing attacks (3000-8000ms instead of fixed 5000ms)
-const CACHE_TTL_MIN = process.env.CACHE_TTL_MIN ? parseInt(process.env.CACHE_TTL_MIN, 10) : 3000;
-const CACHE_TTL_MAX = process.env.CACHE_TTL_MAX ? parseInt(process.env.CACHE_TTL_MAX, 10) : 8000;
-
-function getRandomCacheTTL() {
-  return Math.floor(Math.random() * (CACHE_TTL_MAX - CACHE_TTL_MIN + 1)) + CACHE_TTL_MIN;
 }
 
 const security = require('../utils/security');
@@ -133,16 +152,18 @@ function getSupabaseClient() {
   });
 }
 
-// ─── License check ────────────────────────────────────────────────────────────
+// ─── License check (Checked every 2 days to minimize egress) ─────────────────
 
 /**
  * Check if the local machine binding is licensed and active.
+ * Cached locally for 48 hours to keep Supabase egress near zero.
  * Returns { isActive, mode, bindingCode, note }
  */
 async function checkLicenseStatus(bindingCode) {
   const cached = licenseCache.get(bindingCode);
-  const cacheTTL = getRandomCacheTTL();
-  if (cached && Date.now() - cached.at < cacheTTL) return cached.value;
+  if (cached && Date.now() - cached.at < TWO_DAYS_MS) {
+    return cached.value;
+  }
 
   const client = getSupabaseClient();
 
@@ -150,12 +171,14 @@ async function checkLicenseStatus(bindingCode) {
   if (!client) {
     const result = { isActive: true, mode: 'standalone', bindingCode, note: 'No Supabase configured — standalone mode' };
     licenseCache.set(bindingCode, { value: result, at: Date.now() });
+    saveDiskLicenseCache();
     return result;
   }
 
   try {
+    // Only query required columns to minimize egress
     const res = await client.get(
-      `/machine_bindings?binding_code=eq.${encodeURIComponent(bindingCode)}&select=*&limit=1`
+      `/machine_bindings?binding_code=eq.${encodeURIComponent(bindingCode)}&select=is_licensed,license_mode,license_note&limit=1`
     );
     const rows = res.data;
 
@@ -163,6 +186,7 @@ async function checkLicenseStatus(bindingCode) {
       // No binding record yet in cloud — treat as free/active
       const result = { isActive: true, mode: 'free', bindingCode, note: 'Unbound machine — active free mode' };
       licenseCache.set(bindingCode, { value: result, at: Date.now() });
+      saveDiskLicenseCache();
       return result;
     }
 
@@ -175,11 +199,13 @@ async function checkLicenseStatus(bindingCode) {
       note: isActive ? 'Licensed and active' : ('Revoked: ' + (lic.license_note || 'License revoked by seed admin')),
     };
     licenseCache.set(bindingCode, { value: result, at: Date.now() });
+    saveDiskLicenseCache();
     return result;
   } catch (err) {
     logger.warn(`[LicenseService] License check note for ${bindingCode}: ${err.message}`);
     const result = { isActive: true, mode: 'offline_grace', bindingCode, note: 'Supabase notice — active grace mode' };
     licenseCache.set(bindingCode, { value: result, at: Date.now() });
+    saveDiskLicenseCache();
     return result;
   }
 }
@@ -192,6 +218,13 @@ async function syncDeviceToCloud(params) {
   const { serial, model, brand, streamUrl, localUrl, port, bindingCode, status } = params;
   const client = getSupabaseClient();
   if (!client) return;
+
+  const syncSignature = `${serial}:${model || ''}:${brand || ''}:${streamUrl || ''}:${localUrl || ''}:${port || ''}:${bindingCode || ''}:${status || ''}`;
+  const lastState = lastDeviceSyncState.get(serial);
+  // Skip redundant cloud sync if device state hasn't changed and synced in the last 15 minutes
+  if (lastState && lastState.signature === syncSignature && (Date.now() - lastState.at < 15 * 60 * 1000)) {
+    return;
+  }
 
   try {
     let finalStreamUrl = streamUrl || null;
@@ -283,6 +316,7 @@ async function syncDeviceToCloud(params) {
       logger.warn(`[LicenseService] device_rentals sync notice for ${serial}: ${rentalErr.message}`);
     }
 
+    lastDeviceSyncState.set(serial, { signature: syncSignature, at: Date.now() });
     logger.info(`[LicenseService] Device ${serial} synced to cloud (devices & device_rentals updated, url: ${finalStreamUrl})`);
   } catch (err) {
     logger.warn(`[LicenseService] Device sync notice for ${serial}: ${err.message}`);

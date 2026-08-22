@@ -29,8 +29,22 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     loadData(true);
-    const interval = setInterval(() => loadData(false), 5000);
-    return () => clearInterval(interval);
+
+    const channel = supabase
+      .channel('admin_dashboard_profiles_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => loadData(false))
+      .subscribe();
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleBlockUser = async (e) => {

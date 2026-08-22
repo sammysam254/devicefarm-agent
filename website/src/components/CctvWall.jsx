@@ -51,8 +51,23 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
 
   useEffect(() => {
     fetchDevicesAndLockState(true);
-    const interval = setInterval(() => fetchDevicesAndLockState(false), 5000);
-    return () => clearInterval(interval);
+
+    const channel = supabase
+      .channel('cctv_wall_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => fetchDevicesAndLockState(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'system_settings' }, () => fetchDevicesAndLockState(false))
+      .subscribe();
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchDevicesAndLockState(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const deleteDeviceFromView = async (deviceId) => {

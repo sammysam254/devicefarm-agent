@@ -32,6 +32,22 @@ export default function AdminRentalHub() {
 
   useEffect(() => {
     loadRentalData();
+
+    const channel = supabase
+      .channel('admin_rental_hub_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadRentalData())
+      .subscribe();
+
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadRentalData();
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(timer);
+    };
   }, []);
 
   const toggleRentalAvailability = async (deviceId, currentVal) => {

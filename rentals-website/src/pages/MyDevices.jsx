@@ -33,9 +33,34 @@ export default function MyDevices() {
   };
 
   useEffect(() => {
+    if (!user) return;
     fetchMyRentedDevices(true);
-    const timer = setInterval(() => fetchMyRentedDevices(false), 5000);
-    return () => clearInterval(timer);
+
+    const channel = supabase
+      .channel(`my_rented_devices_realtime_${user.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'device_assignments',
+        filter: `assigned_to_user_id=eq.${user.id}`,
+      }, () => fetchMyRentedDevices(false))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'devices',
+      }, () => fetchMyRentedDevices(false))
+      .subscribe();
+
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchMyRentedDevices(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(timer);
+    };
   }, [user]);
 
   const handleUnlock = (e) => {

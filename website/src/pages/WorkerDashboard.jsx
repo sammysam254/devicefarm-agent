@@ -37,26 +37,34 @@ export default function WorkerDashboard() {
   };
 
   useEffect(() => {
-    loadData(true);
-    const timer = setInterval(() => loadData(false), 5000);
-    return () => clearInterval(timer);
-  }, [profile]);
-
-  // Live subscription: if assignment is removed (user blocked) reload immediately
-  useEffect(() => {
     if (!profile) return;
+    loadData(true);
+
     const channel = supabase
-      .channel(`worker-assignments-${profile.id}`)
+      .channel(`worker-realtime-${profile.id}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'device_assignments',
         filter: `assigned_to_user_id=eq.${profile.id}`,
-      }, () => {
-        loadData();
-      })
+      }, () => loadData(false))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'devices',
+      }, () => loadData(false))
       .subscribe();
-    return () => supabase.removeChannel(channel);
+
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(false);
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(timer);
+    };
   }, [profile]);
 
   const handleUnlock = (e) => {

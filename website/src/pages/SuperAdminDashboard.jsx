@@ -64,13 +64,27 @@ export default function SuperAdminDashboard() {
   };
 
   useEffect(() => {
-    if (profile) {
-      loadData(true);
-      const timer = setInterval(() => {
+    if (!profile) return;
+    loadData(true);
+
+    const channel = supabase
+      .channel('super_admin_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'machine_bindings' }, () => loadData(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => loadData(false))
+      .subscribe();
+
+    // Fallback slow sync (5 minutes) only when the browser tab is actively visible
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
         loadData(false);
-      }, 5000);
-      return () => clearInterval(timer);
-    }
+      }
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(timer);
+    };
   }, [profile]);
 
   const handleClaimBinding = async (e) => {
