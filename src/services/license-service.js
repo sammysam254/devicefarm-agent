@@ -111,13 +111,15 @@ function getRandomCacheTTL() {
   return Math.floor(Math.random() * (CACHE_TTL_MAX - CACHE_TTL_MIN + 1)) + CACHE_TTL_MIN;
 }
 
-// ─── Supabase client ──────────────────────────────────────────────────────────
+const security = require('../utils/security');
 
 function getSupabaseClient() {
-  // PRIORITY: Read from environment variables for security
-  // Falls back to config.json only if env vars not set
-  const url = process.env.SUPABASE_URL || loadConfig().supabaseUrl;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || loadConfig().supabaseServiceRoleKey || loadConfig().supabaseAnonKey;
+  const creds = (security && typeof security.getDecryptedSystemCredentials === 'function')
+    ? security.getDecryptedSystemCredentials()
+    : {};
+  const cfg = loadConfig();
+  const url = process.env.SUPABASE_URL || cfg.supabaseUrl || creds.supabaseUrl;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || cfg.supabaseServiceRoleKey || cfg.supabaseAnonKey || creds.supabaseServiceRoleKey || creds.supabaseAnonKey;
   
   if (!url || !key) return null;
   return axios.create({

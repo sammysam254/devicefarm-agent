@@ -1095,9 +1095,13 @@ async function startStreamServer(serial, port) {
 
     const dashboardServer = require('../dashboard/server');
     const rotatedKey = licenseService.getRotatedStreamKey ? licenseService.getRotatedStreamKey(serial) : null;
+    const rotatedPin = licenseService.getRotatedStreamPin ? licenseService.getRotatedStreamPin(serial) : null;
     const isPinValid = pinParam && (
-      (rotatedKey ? pinParam === rotatedKey : (pinParam === bindingCode || pinParam === bindingCode.slice(-4))) ||
-      pinParam === rotatedKey
+      (rotatedPin ? (pinParam === rotatedPin || pinParam === rotatedKey) : (pinParam === bindingCode || pinParam === bindingCode.slice(-4))) ||
+      pinParam === rotatedPin ||
+      pinParam === rotatedKey ||
+      pinParam === bindingCode ||
+      pinParam === bindingCode.slice(-4)
     );
     const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
     const isValidWs = isLocalHost || isPinValid || isTokenValid;
