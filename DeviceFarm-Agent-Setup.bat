@@ -35,11 +35,10 @@ echo [*] Install directory : %INSTALL_DIR%
 echo [*] Source repository : %REPO_URL%
 echo.
 
-:: ── Stop any active background daemons to unlock DLLs and executables ──────
-taskkill /F /IM adb.exe >nul 2>&1
+:: ── Stop old agent instances without disturbing system ADB (preserves proxy sessions) ──
 taskkill /F /IM electron.exe >nul 2>&1
 taskkill /F /IM cloudflared.exe >nul 2>&1
-taskkill /F /IM scrcpy.exe >nul 2>&1
+
 
 
 :: ════════════════════════════════════════════════════════════════════════════
@@ -148,18 +147,13 @@ if defined ADB (
 echo.
 echo [4/6] Setting up agent files...
 
-:: Stop running background processes to release locks on DLLs (e.g., AdbWinApi.dll)
-taskkill /F /IM adb.exe >nul 2>&1
-taskkill /F /IM electron.exe >nul 2>&1
-taskkill /F /IM cloudflared.exe >nul 2>&1
-
 if exist "%INSTALL_DIR%\.git" (
-    echo [*] Agent directory exists — fetching latest updates...
+    echo [*] Agent directory exists — fetching latest updates without disturbing ADB...
+    "%GIT%" -C "%INSTALL_DIR%" update-index --assume-unchanged assets/bin/AdbWinApi.dll assets/bin/AdbWinUsbApi.dll assets/bin/adb.exe >nul 2>&1
     "%GIT%" -C "%INSTALL_DIR%" fetch origin main
-    "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main
-    if %errorlevel% neq 0 (
-        echo [WARN] git update failed — attempting git pull...
-        "%GIT%" -C "%INSTALL_DIR%" pull origin main
+    "%GIT%" -C "%INSTALL_DIR%" checkout -f origin/main -- . ":(exclude)assets/bin" >nul 2>&1
+    if !errorlevel! neq 0 (
+        "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main >nul 2>&1
     )
     echo [OK] Agent updated to latest version from GitHub.
 ) else (
