@@ -44,9 +44,9 @@ function decrypt(encryptedText) {
 
 // Pre-encrypted Production Credentials Payload
 const SECURE_PAYLOAD = {
-  encryptedSupabaseUrl: encrypt('https://dnpuqnmukawehtjxfqct.supabase.co'),
-  encryptedSupabaseAnonKey: encrypt('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRucHVxbm11a2F3ZWh0anhmcWN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0ODg2NjUsImV4cCI6MjEwMTA2NDY2NX0.Sg455y5OYkT1OvUarfXt6-E_tRukEZ62GawXPhIjEng'),
-  encryptedSupabaseServiceRoleKey: encrypt('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRucHVxbm11a2F3ZWh0anhmcWN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTQ4ODY2NSwiZXhwIjoyMTAwNTQ4ODA1fQ.ShfY3xyc01tZVEtcIlufacZdaGsCSpcUTLf2M3P0f4c'),
+  encryptedSupabaseUrl: encrypt('https://lazdyihryfvrlczczvxz.supabase.co'),
+  encryptedSupabaseAnonKey: encrypt('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNzYxNjgsImV4cCI6MjEwMjk1MjE2OH0.fUBdMbDgV8e0Fk4mfVB8DqQc88vrw8oA6MdHXHFsXAs'),
+  encryptedSupabaseServiceRoleKey: encrypt('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzM3NjE2OCwiZXhwIjoyMTAyOTUyMTY4fQ.6hAOEa2_nUTQh_Z3oU2e8QX2nP5EwzHmKiEZ06X7UWc'),
   encryptedAppUrl: encrypt('https://devicepay.netlify.app'),
   encryptedPaystackPublicKey: encrypt('pk_live_558e1ed8114c63c09b135b1523443ecfffb60524'),
   encryptedNowPaymentsKey: encrypt('QNJ3N44-2JP4AKM-PGPJXCK-3AQPC3T'),

@@ -65,8 +65,8 @@ async function handleDeviceAdd(device) {
     const axios = require('axios');
     let isStealthOn = true;
     try {
-      const supabaseUrl = process.env.SUPABASE_URL || 'https://dnpuqnmukawehtjxfqct.supabase.co';
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRucHVxbm11a2F3ZWh0anhmcWN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTQ4ODY2NSwiZXhwIjoyMTAwNTQ4ODA1fQ.ShfY3xyc01tZVEtcIlufacZdaGsCSpcUTLf2M3P0f4c';
+      const supabaseUrl = process.env.SUPABASE_URL || 'https://lazdyihryfvrlczczvxz.supabase.co';
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzM3NjE2OCwiZXhwIjoyMTAyOTUyMTY4fQ.6hAOEa2_nUTQh_Z3oU2e8QX2nP5EwzHmKiEZ06X7UWc';
       const res = await axios.get(`${supabaseUrl}/rest/v1/device_rentals?serial_number=eq.${encodeURIComponent(serial)}&select=stealth_root_enabled`, {
         headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
         timeout: 3000
