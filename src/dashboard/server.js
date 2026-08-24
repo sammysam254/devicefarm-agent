@@ -127,6 +127,19 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
+      if (url === '/api/system-logs') {
+        const logRelayService = require('../services/log-relay-service');
+        const limit = parseInt(fullUrl.searchParams.get('limit') || '100', 10);
+        const logs = logRelayService.getRecentLogs ? logRelayService.getRecentLogs(limit) : [];
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-cache',
+        });
+        res.end(JSON.stringify({ logs, total: logs.length }));
+        return;
+      }
+
       if (url === '/download/installer' || url === '/download/agent') {
         const setupBatPath = path.join(__dirname, '..', '..', 'DeviceFarm-Agent-Setup.bat');
         if (fs.existsSync(setupBatPath)) {

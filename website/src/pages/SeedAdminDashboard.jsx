@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff, Zap, Power, Wifi, WifiOff, HelpCircle, Activity } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
+import SystemLogsModal from '../components/SystemLogsModal';
 import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
 
 export default function SeedAdminDashboard() {
@@ -19,6 +20,7 @@ export default function SeedAdminDashboard() {
   const [wakingBindingCode, setWakingBindingCode] = useState(null);
   const [wolModalOpen, setWolModalOpen] = useState(false);
   const [wolSelectedMachine, setWolSelectedMachine] = useState(null);
+  const [logsModalOpen, setLogsModalOpen] = useState(false);
 
   const loadData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -252,9 +254,18 @@ export default function SeedAdminDashboard() {
             Owner rights (sammyseth260@gmail.com). Manage Super Admin licenses, binding codes, and system modes.
           </p>
         </div>
-        <button onClick={loadData} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button 
+            onClick={() => setLogsModalOpen(true)} 
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}
+          >
+            <Activity size={16} /> Live System Logs
+          </button>
+          <button onClick={loadData} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stats Summary */}
@@ -666,6 +677,12 @@ export default function SeedAdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Real-time System Logs Console */}
+      <SystemLogsModal 
+        isOpen={logsModalOpen} 
+        onClose={() => setLogsModalOpen(false)} 
+      />
     </DashboardLayout>
   );
 }

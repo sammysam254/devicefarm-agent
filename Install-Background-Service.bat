@@ -58,6 +58,13 @@ echo  [*] Target Directory : %AGENT_DIR%
 echo  [*] Silent Launcher  : %VBS_LAUNCHER%
 echo.
 
+:: ─── Stop and terminate any existing background agent/watchdog processes ──
+echo [*] Terminating any previous agent or watchdog processes...
+taskkill /F /IM electron.exe /FI "STATUS eq RUNNING" >nul 2>&1
+taskkill /F /IM node.exe /FI "WINDOWTITLE eq *watchdog*" >nul 2>&1
+taskkill /F /IM node.exe /FI "WINDOWTITLE eq *service-watchdog*" >nul 2>&1
+timeout /t 1 /nobreak >nul
+
 :: ─── Remove any old conflicting tasks ─────────────────────────────────────
 schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
 schtasks /delete /tn "%TASK_BOOT%" /f >nul 2>&1

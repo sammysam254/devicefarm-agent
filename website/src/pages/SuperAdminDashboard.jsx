@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2, RotateCcw } from 'lucide-react';
+import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2, RotateCcw, Activity } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
+import SystemLogsModal from '../components/SystemLogsModal';
 import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
 
 export default function SuperAdminDashboard() {
@@ -17,6 +18,7 @@ export default function SuperAdminDashboard() {
   const [blockingId, setBlockingId] = useState(null);
   const [blockReasonModal, setBlockReasonModal] = useState(null);
   const [blockReason, setBlockReason] = useState('');
+  const [logsModalOpen, setLogsModalOpen] = useState(false);
 
   const loadData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -207,9 +209,18 @@ export default function SuperAdminDashboard() {
             Add 8-digit binding codes from setup scripts to fetch and manage connected devices.
           </p>
         </div>
-        <button onClick={loadData} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh Devices
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button 
+            onClick={() => setLogsModalOpen(true)} 
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}
+          >
+            <Activity size={16} /> Live System Logs
+          </button>
+          <button onClick={loadData} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <RefreshCw size={16} /> Refresh Devices
+          </button>
+        </div>
       </div>
 
       {/* Claim Machine Binding Code */}
@@ -413,6 +424,12 @@ export default function SuperAdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Real-time System Logs Console */}
+      <SystemLogsModal 
+        isOpen={logsModalOpen} 
+        onClose={() => setLogsModalOpen(false)} 
+      />
     </DashboardLayout>
   );
 }

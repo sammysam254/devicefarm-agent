@@ -294,6 +294,14 @@ app.whenReady().then(async () => {
   autoSync.startAutoSync(30 * 60 * 1000);
   startTrayRefreshInterval();
 
+  // Initialize Real-time System Log Relay for admin monitoring
+  try {
+    const logRelayService = require('../services/log-relay-service');
+    logRelayService.initLogRelay(logger);
+  } catch (e) {
+    logger.warn('Log relay initialization notice:', e.message);
+  }
+
   // Sync machine hardware identity & network MAC to Supabase
   try {
     await bindingService.syncMachineBinding();
