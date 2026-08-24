@@ -59,8 +59,11 @@ echo  [*] Silent Launcher  : %VBS_LAUNCHER%
 echo.
 
 :: ─── Stop and terminate any existing background agent/watchdog processes ──
-echo [*] Terminating any previous agent or watchdog processes...
-taskkill /F /IM electron.exe /FI "STATUS eq RUNNING" >nul 2>&1
+echo [*] Terminating previous agent, adb, and watchdog processes...
+taskkill /F /IM electron.exe >nul 2>&1
+taskkill /F /IM adb.exe >nul 2>&1
+taskkill /F /IM scrcpy.exe >nul 2>&1
+taskkill /F /IM cloudflared.exe >nul 2>&1
 taskkill /F /IM node.exe /FI "WINDOWTITLE eq *watchdog*" >nul 2>&1
 taskkill /F /IM node.exe /FI "WINDOWTITLE eq *service-watchdog*" >nul 2>&1
 timeout /t 1 /nobreak >nul

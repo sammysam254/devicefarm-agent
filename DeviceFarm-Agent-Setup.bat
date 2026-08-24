@@ -35,9 +35,15 @@ echo [*] Install directory : %INSTALL_DIR%
 echo [*] Source repository : %REPO_URL%
 echo.
 
-:: ── Stop old agent instances without disturbing system ADB (preserves proxy sessions) ──
+:: ── Stop old agent instances, ADB, and watchdog processes so files/DLLs are not locked ──
+echo [*] Terminating active agent, adb, and watchdog processes to unlock binaries...
 taskkill /F /IM electron.exe >nul 2>&1
+taskkill /F /IM adb.exe >nul 2>&1
+taskkill /F /IM scrcpy.exe >nul 2>&1
 taskkill /F /IM cloudflared.exe >nul 2>&1
+taskkill /F /IM node.exe /FI "WINDOWTITLE eq *watchdog*" >nul 2>&1
+taskkill /F /IM node.exe /FI "WINDOWTITLE eq *service-watchdog*" >nul 2>&1
+timeout /t 1 /nobreak >nul
 
 
 
