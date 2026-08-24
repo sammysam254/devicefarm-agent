@@ -22,14 +22,25 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-:: ─── Locate this script's directory ───────────────────────────────────────
+:: ─── Locate this script's directory with intelligent auto-discovery ────────
 set "AGENT_DIR=%~dp0"
 if "%AGENT_DIR:~-1%"=="\" set "AGENT_DIR=%AGENT_DIR:~0,-1%"
+
+if not exist "%AGENT_DIR%\Start-Agent-Silent.vbs" (
+    if exist "C:\DeviceFarmAgent\Start-Agent-Silent.vbs" (
+        set "AGENT_DIR=C:\DeviceFarmAgent"
+    ) else if exist "C:\cvc\devicefarm-agent\Start-Agent-Silent.vbs" (
+        set "AGENT_DIR=C:\cvc\devicefarm-agent"
+    ) else if exist "%CD%\Start-Agent-Silent.vbs" (
+        set "AGENT_DIR=%CD%"
+    )
+)
 
 :: ─── Verify Silent Launcher exists ────────────────────────────────────────
 set "VBS_LAUNCHER=%AGENT_DIR%\Start-Agent-Silent.vbs"
 if not exist "%VBS_LAUNCHER%" (
     echo [ERROR] Start-Agent-Silent.vbs not found in %AGENT_DIR%
+    echo Please make sure the agent is installed in C:\DeviceFarmAgent or C:\cvc\devicefarm-agent
     pause
     exit /b 1
 )
