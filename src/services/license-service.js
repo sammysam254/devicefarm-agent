@@ -345,6 +345,91 @@ async function markDeviceOffline(serial) {
   } catch (_) {}
 }
 
+const devicePinCache = new Map(); // Map<serial, { pins: Set<string>, keys: Set<string>, at: number }>
+
+/**
+ * Validate a user PIN or key for a device with multi-source fallback:
+ * 1. Hardware Binding Code (full 8-digit or last 4-digit)
+ * 2. In-memory rotated key / pin
+ * 3. Supabase device_assignments table (access_password) & devices table (stream_url)
+ */
+async function validateDevicePin(serial, rawInputPin, bindingCode) {
+  if (!rawInputPin) return false;
+  const pin = String(rawInputPin).trim().replace(/[^a-zA-Z0-9]/g, '');
+  if (!pin) return false;
+
+  // 1. Direct match with hardware binding code or last 4 digits
+  if (bindingCode) {
+    const cleanBinding = String(bindingCode).trim();
+    if (pin === cleanBinding || pin === cleanBinding.slice(-4)) return true;
+  }
+
+  // 2. Direct match with in-memory rotated key / pin
+  const memKey = ROTATED_STREAM_KEYS.get(serial);
+  const memPin = ROTATED_STREAM_PINS.get(serial);
+  if (memPin && pin === String(memPin).trim()) return true;
+  if (memKey && pin === String(memKey).trim()) return true;
+
+  // 3. Check cached pins from Supabase (valid for 30 seconds)
+  const cached = devicePinCache.get(serial);
+  if (cached && (Date.now() - cached.at < 30000)) {
+    if (cached.pins.has(pin) || cached.keys.has(pin)) return true;
+  }
+
+  // 4. Query Supabase for assigned PINs and rotated URL keys
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const validPins = new Set();
+    const validKeys = new Set();
+
+    // Query devices table for stream_url keys/pins
+    const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=id,stream_url`);
+    let devId = null;
+    if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0) {
+      devId = devRes.data[0].id;
+      const urlStr = devRes.data[0].stream_url || '';
+      const kMatch = urlStr.match(/key=([^&]+)/);
+      const pMatch = urlStr.match(/pin=([^&]+)/);
+      if (kMatch) {
+        const k = kMatch[1].trim();
+        validKeys.add(k);
+        ROTATED_STREAM_KEYS.set(serial, k);
+      }
+      if (pMatch) {
+        const p = pMatch[1].trim();
+        validPins.add(p);
+        ROTATED_STREAM_PINS.set(serial, p);
+      }
+    }
+
+    // Query device_assignments table for access_password
+    if (devId) {
+      const assignRes = await client.get(`/device_assignments?device_id=eq.${encodeURIComponent(devId)}&select=access_password`);
+      if (assignRes.data && Array.isArray(assignRes.data)) {
+        for (const row of assignRes.data) {
+          if (row.access_password) {
+            const cleanP = String(row.access_password).trim();
+            validPins.add(cleanP);
+            ROTATED_STREAM_PINS.set(serial, cleanP);
+          }
+        }
+      }
+    }
+
+    devicePinCache.set(serial, { pins: validPins, keys: validKeys, at: Date.now() });
+
+    if (validPins.has(pin) || validKeys.has(pin)) {
+      return true;
+    }
+  } catch (err) {
+    logger.warn(`[LicenseService] PIN validation cloud check notice for ${serial}: ${err.message}`);
+  }
+
+  return false;
+}
+
 module.exports = {
   checkLicenseStatus,
   syncDeviceToCloud,
@@ -356,4 +441,5 @@ module.exports = {
   setRotatedStreamKey,
   getRotatedStreamPin,
   setRotatedStreamPin,
+  validateDevicePin,
 };
