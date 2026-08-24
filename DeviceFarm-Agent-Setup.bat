@@ -154,13 +154,9 @@ echo.
 echo [4/6] Setting up agent files...
 
 if exist "%INSTALL_DIR%\.git" (
-    echo [*] Agent directory exists — fetching latest updates without disturbing ADB...
-    "%GIT%" -C "%INSTALL_DIR%" update-index --assume-unchanged assets/bin/AdbWinApi.dll assets/bin/AdbWinUsbApi.dll assets/bin/adb.exe >nul 2>&1
+    echo [*] Agent directory exists — updating cleanly to latest version...
     "%GIT%" -C "%INSTALL_DIR%" fetch origin main
-    "%GIT%" -C "%INSTALL_DIR%" checkout -f origin/main -- . ":(exclude)assets/bin" >nul 2>&1
-    if !errorlevel! neq 0 (
-        "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main >nul 2>&1
-    )
+    "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main
     echo [OK] Agent updated to latest version from GitHub.
 ) else (
     echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
@@ -381,23 +377,43 @@ taskkill /F /IM lt.cmd >nul 2>&1
 ping 127.0.0.1 -n 3 >nul 2>nul
 echo [OK] Previous instances stopped.
 
-:: ── Launch fresh via Silent Background Service ─────────────────────────
-echo [*] Launching DeviceFarm Agent Background Service...
+:: ── Register and launch 24/7 Silent Background Service ──────────────────
+echo [*] Configuring and registering Windows 24/7 Background Service...
 
-if exist "%CD%\Start-Agent-Silent.vbs" (
-    wscript.exe "%CD%\Start-Agent-Silent.vbs"
+set "TASK_BOOT=DeviceFarm_Agent_BootService"
+set "TASK_LOGON=DeviceFarm_Agent_LogonService"
+set "VBS_LAUNCHER=%INSTALL_DIR%\Start-Agent-Silent.vbs"
+
+:: Remove old conflicting tasks
+schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
+schtasks /delete /tn "%TASK_BOOT%" /f >nul 2>&1
+schtasks /delete /tn "%TASK_LOGON%" /f >nul 2>&1
+
+:: Register Boot Task (starts when PC turns on / restarts)
+schtasks /create /tn "%TASK_BOOT%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONSTART /ru "SYSTEM" /rl HIGHEST /f >nul 2>&1
+
+:: Register Logon Task (starts when user logs in)
+schtasks /create /tn "%TASK_LOGON%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
+
+:: Redundant All-Users Startup Shortcut
+set "STARTUP_ALL=%ProgramData%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "LNK_ALL=%STARTUP_ALL%\DeviceFarm-Agent-Service.lnk"
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_ALL%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%VBS_LAUNCHER%\"'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.WindowStyle = 0; $s.Description = 'DeviceFarm Agent Autonomous Background Service'; $s.Save()" >nul 2>&1
+
+echo [OK] Windows 24/7 background service registered.
+
+:: Start service silently right now in the background
+echo [*] Starting DeviceFarm Agent silently in the background...
+if exist "%VBS_LAUNCHER%" (
+    wscript.exe "%VBS_LAUNCHER%"
 ) else (
     set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
     if exist "%ELECTRON_BIN%" (
-        start "" "%CD%\%ELECTRON_BIN%" "%CD%\src\main\index.js"
+        start "" "%INSTALL_DIR%\%ELECTRON_BIN%" "%INSTALL_DIR%\src\main\index.js"
     ) else (
-        start "" "%NPM%" exec -- electron "%CD%"
+        start "" "%NPM%" exec -- electron "%INSTALL_DIR%"
     )
-)
-
-:: Automatically register background auto-start service
-if exist "%CD%\Install-AutoStart.bat" (
-    call "%CD%\Install-AutoStart.bat" >nul 2>&1
 )
 
 echo [*] Waiting for Dashboard...
@@ -411,7 +427,7 @@ echo  ================================================================
 echo  [OK] DeviceFarm Agent is running continuously in the background!
 echo       Dashboard : http://localhost:7400
 echo       Install   : %INSTALL_DIR%
-echo       Status    : Active Background Service (Auto-starts on Boot)
+echo       Status    : Active 24/7 Background Service (Auto-starts on Boot)
 echo  ================================================================
 echo.
 echo  Setup complete. This window will close automatically.
