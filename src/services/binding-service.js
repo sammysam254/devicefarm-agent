@@ -4,8 +4,25 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const logger = require('../utils/logger');
-const licenseService = require('./license-service');
+let logger;
+try {
+  logger = require('../utils/logger');
+} catch (_) {
+  logger = {
+    info: (...a) => console.log('[INFO]', ...a),
+    warn: (...a) => console.warn('[WARN]', ...a),
+    error: (...a) => console.error('[ERROR]', ...a),
+  };
+}
+let licenseService = null;
+function getLicenseService() {
+  if (!licenseService) {
+    try {
+      licenseService = require('./license-service');
+    } catch (_) {}
+  }
+  return licenseService;
+}
 
 function loadConfigPath() {
   const candidates = [
@@ -32,6 +49,62 @@ function saveConfig(cfg) {
 }
 
 /**
+ * Extract physical network details: MAC Address, Local IPv4, and Subnet Broadcast IP.
+ */
+function getHardwareNetworkInfo() {
+  const interfaces = os.networkInterfaces();
+  let mac = '';
+  let localIp = '';
+  let netmask = '';
+
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name]) {
+      // Prioritize non-internal IPv4 interfaces with a valid MAC
+      if (!net.internal && net.family === 'IPv4' && net.mac && net.mac !== '00:00:00:00:00:00') {
+        mac = net.mac.toUpperCase();
+        localIp = net.address;
+        netmask = net.netmask;
+        break;
+      }
+    }
+    if (mac && localIp) break;
+  }
+
+  // Fallback MAC search
+  if (!mac) {
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name]) {
+        if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
+          mac = net.mac.toUpperCase();
+          break;
+        }
+      }
+      if (mac) break;
+    }
+  }
+
+  // Calculate subnet broadcast address
+  let broadcastIp = '255.255.255.255';
+  if (localIp && netmask) {
+    try {
+      const ipParts = localIp.split('.').map(Number);
+      const maskParts = netmask.split('.').map(Number);
+      const broadParts = ipParts.map((part, i) => (part | (~maskParts[i] & 255)));
+      broadcastIp = broadParts.join('.');
+    } catch (_) {
+      broadcastIp = '255.255.255.255';
+    }
+  }
+
+  return {
+    mac: mac || '00:00:00:00:00:00',
+    localIp: localIp || '127.0.0.1',
+    broadcastIp: broadcastIp || '255.255.255.255',
+    hostname: os.hostname() || process.env.COMPUTERNAME || 'Windows-Machine',
+  };
+}
+
+/**
  * Derives a static, deterministic 8-digit machine binding code based on machine hardware identity.
  * This guarantees the exact same computer ALWAYS keeps the exact same binding code across setup script reruns.
  */
@@ -41,37 +114,27 @@ function getOrGenerateBindingCode() {
     return cfg.machineBindingCode;
   }
 
-  const hostname = os.hostname() || process.env.COMPUTERNAME || 'Windows-Machine';
-  const interfaces = os.networkInterfaces();
-  let mac = '';
-  for (const name of Object.keys(interfaces)) {
-    for (const net of interfaces[name]) {
-      if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
-        mac = net.mac;
-        break;
-      }
-    }
-    if (mac) break;
-  }
-
-  const rawSeed = `${hostname.toLowerCase()}-${mac.toLowerCase() || 'default-mac'}`;
+  const netInfo = getHardwareNetworkInfo();
+  const rawSeed = `${netInfo.hostname.toLowerCase()}-${netInfo.mac.toLowerCase() || 'default-mac'}`;
   const hash = crypto.createHash('sha256').update(rawSeed).digest('hex');
   const bindingCode = (parseInt(hash.substring(0, 8), 16) % 90000000 + 10000000).toString();
 
   cfg.machineBindingCode = bindingCode;
   saveConfig(cfg);
-  logger.info(`[BindingService] Derived hardware machine code for ${hostname}: ${bindingCode}`);
+  logger.info(`[BindingService] Derived hardware machine code for ${netInfo.hostname}: ${bindingCode}`);
   return bindingCode;
 }
 
+let machineHeartbeatTimer = null;
+
 /**
- * Sync machine binding to Supabase machine_bindings table.
+ * Sync machine binding and hardware info to Supabase machine_bindings table.
  */
 async function syncMachineBinding() {
   const bindingCode = getOrGenerateBindingCode();
   const cfg = loadConfig();
+  const netInfo = getHardwareNetworkInfo();
   
-  // PRIORITY: Read from environment variables for security
   const supabaseUrl = process.env.SUPABASE_URL || cfg.supabaseUrl;
   const apiKey = process.env.SUPABASE_SERVICE_ROLE_KEY || cfg.supabaseServiceRoleKey || cfg.supabaseAnonKey;
 
@@ -90,18 +153,52 @@ async function syncMachineBinding() {
       },
     });
 
-    // Upsert machine_bindings with on_conflict=binding_code
-    await client.post('/machine_bindings?on_conflict=binding_code', {
+    const payload = {
       binding_code: bindingCode,
-      machine_name: process.env.COMPUTERNAME || os.hostname() || 'Windows Agent Machine',
+      machine_name: process.env.COMPUTERNAME || netInfo.hostname || 'Windows Agent Machine',
+      mac_address: netInfo.mac,
+      local_ip: netInfo.localIp,
+      broadcast_ip: netInfo.broadcastIp,
+      status: 'online',
+      last_seen: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    }, {
+    };
+
+    // Upsert machine_bindings with on_conflict=binding_code
+    await client.post('/machine_bindings?on_conflict=binding_code', payload, {
       headers: { Prefer: 'resolution=merge-duplicates' },
     });
 
-    logger.info(`[BindingService] Machine binding code ${bindingCode} synced to Supabase`);
+    logger.info(`[BindingService] Machine hardware (${netInfo.mac} / ${netInfo.localIp}) & code ${bindingCode} synced`);
   } catch (err) {
-    logger.warn(`[BindingService] Sync notice: ${err.message}`);
+    // If optional columns are missing in older schema, fallback to minimal payload
+    try {
+      const axios = require('axios');
+      const client = axios.create({
+        baseURL: `${supabaseUrl.replace(/\/$/, '')}/rest/v1`,
+        timeout: 6000,
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: apiKey,
+          Authorization: `Bearer ${apiKey}`,
+          Prefer: 'resolution=merge-duplicates',
+        },
+      });
+      await client.post('/machine_bindings?on_conflict=binding_code', {
+        binding_code: bindingCode,
+        machine_name: process.env.COMPUTERNAME || netInfo.hostname || 'Windows Agent Machine',
+        updated_at: new Date().toISOString(),
+      }, {
+        headers: { Prefer: 'resolution=merge-duplicates' },
+      });
+    } catch (_) {}
+  }
+
+  // Start periodic machine status heartbeat every 60 seconds
+  if (!machineHeartbeatTimer) {
+    machineHeartbeatTimer = setInterval(() => {
+      syncMachineBinding().catch(() => {});
+    }, 60000);
   }
 
   return bindingCode;
@@ -112,26 +209,29 @@ async function syncMachineBinding() {
  * Called each time device connects or tunnel URL changes.
  */
 async function syncDeviceUrl(serial, streamUrl, opts = {}) {
-  // Disable cloud sync if explicitly requested
   if (process.env.DISABLE_CLOUD_SYNC === 'true' || process.env.DISABLE_CLOUD_SYNC === '1') {
     logger.info(`[BindingService] Cloud sync disabled for ${serial} (DISABLE_CLOUD_SYNC env var set)`);
     return;
   }
   
   const bindingCode = getOrGenerateBindingCode();
-  await licenseService.syncDeviceToCloud({
-    serial,
-    model: opts.model,
-    brand: opts.brand,
-    streamUrl,
-    localUrl: opts.localUrl,
-    port: opts.port,
-    bindingCode,
-    status: 'online',
-  });
+  const svc = getLicenseService();
+  if (svc) {
+    await svc.syncDeviceToCloud({
+      serial,
+      model: opts.model,
+      brand: opts.brand,
+      streamUrl,
+      localUrl: opts.localUrl,
+      port: opts.port,
+      bindingCode,
+      status: 'online',
+    });
+  }
 }
 
 module.exports = {
+  getHardwareNetworkInfo,
   getOrGenerateBindingCode,
   syncMachineBinding,
   syncDeviceUrl,

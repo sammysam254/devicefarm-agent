@@ -19,11 +19,16 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 2. MACHINE BINDINGS TABLE (Stores 8-digit binding code printed by setup script)
+-- 2. MACHINE BINDINGS TABLE (Stores 8-digit binding code & hardware network identity)
 CREATE TABLE IF NOT EXISTS public.machine_bindings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     binding_code TEXT UNIQUE NOT NULL,
     machine_name TEXT DEFAULT 'Windows Agent Machine',
+    mac_address TEXT DEFAULT NULL,
+    local_ip TEXT DEFAULT NULL,
+    broadcast_ip TEXT DEFAULT '255.255.255.255',
+    status TEXT DEFAULT 'online',
+    last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     super_admin_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     is_licensed BOOLEAN DEFAULT TRUE,
     license_mode TEXT DEFAULT 'licensed' CHECK (license_mode IN ('licensed', 'free')),
@@ -31,6 +36,13 @@ CREATE TABLE IF NOT EXISTS public.machine_bindings (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Ensure machine_bindings columns exist for hardware remote management & Wake-on-LAN
+ALTER TABLE public.machine_bindings ADD COLUMN IF NOT EXISTS mac_address TEXT;
+ALTER TABLE public.machine_bindings ADD COLUMN IF NOT EXISTS local_ip TEXT;
+ALTER TABLE public.machine_bindings ADD COLUMN IF NOT EXISTS broadcast_ip TEXT DEFAULT '255.255.255.255';
+ALTER TABLE public.machine_bindings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'online';
+ALTER TABLE public.machine_bindings ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 
 -- 3. DEVICES TABLE (Stores connected device streams & live Cloudflare URLs)
 CREATE TABLE IF NOT EXISTS public.devices (

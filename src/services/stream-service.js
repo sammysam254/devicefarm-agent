@@ -150,6 +150,8 @@ function handleControl(type, data, serial, engine) {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
   } else if (type === 'expand_notifications' || type === 'notifications') {
     exec(`"${ADB_BIN}" -s ${serial} shell cmd statusbar expand`);
+  } else if (type === 'wake' || type === 'refresh') {
+    try { adbInput(serial, 'input keyevent 0'); } catch (_) {}
   }
 }
 
@@ -210,13 +212,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
 <!-- Header Bar -->
 <div class="header">
   <div class="hdr-left">
-    <button class="hdr-btn" onclick="if(history.length>1)history.back();else window.close()" title="Back">&#x2190;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="if(history.length>1)history.back();else window.close()" title="Back">&#x2190;</button>
     <div class="hdr-title" id="hdrTitle">Stream ${serial}</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
-    <button class="hdr-btn" onclick="reconnectStream()" title="Refresh Stream">&#x21BB;</button>
-    <button class="hdr-btn" onclick="toggleDebugModal()" title="Stream Diagnostics">&#128030;</button>
-    <button class="hdr-btn" onclick="popOutWindow()" title="Pop Out Chrome Window">&#x2197;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="reconnectStream()" title="Refresh Stream">&#x21BB;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="toggleDebugModal()" title="Stream Diagnostics">&#128030;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="popOutWindow()" title="Pop Out Chrome Window">&#x2197;</button>
     <div class="badge" id="badge"><span class="dot"></span><span id="modeText">CONNECTING</span></div>
     <span style="font-size:10px;color:#64748b;font-family:monospace" id="fps">--fps</span>
   </div>
@@ -229,23 +231,23 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   <!-- Sleek Dark Control Sidebar (Right Side) -->
   <div class="sidebar">
-    <button class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
-    <button class="btn btn-red" onclick="key(26)" title="Power">&#9211;</button>
-    <button class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
-    <button class="btn btn-red" onclick="rotateScreen()" title="Rotate Screen">&#x21BB;</button>
-    <button class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
-    <button class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
-    <button class="btn" onclick="key(4)" title="Back">&#x25C0;</button>
-    <button class="btn" onclick="key(3)" title="Home">&#9711;</button>
-    <button class="btn" onclick="key(187)" title="Recents">&#9633;</button>
-    <button class="btn" onclick="screenshot()" title="Screenshot">&#128247;</button>
-    <button class="btn" onclick="openText()" title="Send Text / Keyboard">&#9000;</button>
-    <button class="btn" onclick="openUpload()" title="Upload File / APK">&#128228;</button>
-    <button class="btn" id="muteBtn" onclick="toggleMute()" title="Mute/Unmute Audio">&#128266;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="key(26)" title="Power">&#9211;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="rotateScreen()" title="Rotate Screen">&#x21BB;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(4)" title="Back">&#x25C0;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(3)" title="Home">&#9711;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(187)" title="Recents">&#9633;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="screenshot()" title="Screenshot">&#128247;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="openText()" title="Send Text / Keyboard">&#9000;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="openUpload()" title="Upload File / APK">&#128228;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" id="muteBtn" onclick="toggleMute()" title="Mute/Unmute Audio">&#128266;</button>
     
     <!-- Vertical Green Volume Slider -->
     <div class="vol-slider-box" title="Volume Slider">
-      <input type="range" min="0" max="100" value="100" class="volume-slider-v" id="volSlider" oninput="setVolume(this.value)"/>
+      <input tabindex="-1" onfocus="this.blur()" type="range" min="0" max="100" value="100" class="volume-slider-v" id="volSlider" oninput="setVolume(this.value)"/>
     </div>
   </div>
 </div>
@@ -556,8 +558,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
         } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
           ntype = u8[i+4] & 0x1f;
         }
-        // WebCodecs requires NAL unit 5 (IDR keyframe) to initialize decoding
-        if (ntype === 5) return true;
+        // WebCodecs key/config types: NAL 5 (IDR keyframe), NAL 7 (SPS), NAL 8 (PPS)
+        if (ntype === 5 || ntype === 7 || ntype === 8) return true;
       }
     }
     return false;
@@ -614,10 +616,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
       lastFrameReceivedTime = 0;
       modeText.textContent = 'LIVE 60FPS';
       resetDecoder();
+      initDecoder();
       audioNextPlayTime = 0;
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
+      // Instantly nudge Android encoder to generate fresh keyframe
+      send({ type: 'wake' });
     };
 
     ws.onmessage = function(e) {
@@ -810,13 +815,61 @@ function buildPlayerHtml(serial, screenW, screenH) {
     send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH - 50, c.y + d)), duration: 150 });
   }, { passive:false });
 
-  // keyboard
+  // ── Keyboard handling (Spacebar protection & full Android keys) ────────
   document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT') return;
-    if (e.key === 'Backspace') key(67);
-    else if (e.key === 'Enter') key(66);
-    else if (e.key === 'Escape') key(4);
-    else if (e.key.length === 1) send({ type:'text', text:e.key });
+    // Never intercept if typing into an input/textarea inside a modal dialog
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+
+    // Immediately blur any active button so Space cannot trigger click events on it
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement !== canvas) {
+      document.activeElement.blur();
+    }
+
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      key(62); // Android KEYCODE_SPACE = 62
+    } else if (e.key === 'Backspace') {
+      e.preventDefault();
+      key(67); // Android KEYCODE_DEL = 67
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      key(66); // Android KEYCODE_ENTER = 66
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      key(4);  // Android KEYCODE_BACK = 4
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      key(61); // Android KEYCODE_TAB = 61
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      key(19);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      key(20);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      key(21);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      key(22);
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      send({ type:'text', text:e.key });
+    }
+  });
+
+  // Ensure all buttons instantly blur upon click or touch so they never retain keyboard focus
+  window.addEventListener('pointerdown', (e) => {
+    if (e.target && (e.target.tagName === 'BUTTON' || e.target.closest('button'))) {
+      const btn = e.target.tagName === 'BUTTON' ? e.target : e.target.closest('button');
+      setTimeout(() => { if (btn) btn.blur(); }, 0);
+    }
+  });
+  window.addEventListener('click', (e) => {
+    if (e.target && (e.target.tagName === 'BUTTON' || e.target.closest('button'))) {
+      const btn = e.target.tagName === 'BUTTON' ? e.target : e.target.closest('button');
+      setTimeout(() => { if (btn) btn.blur(); }, 0);
+    }
   });
 
   function key(code) { send({ type:'code', code }); }

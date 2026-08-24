@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff } from 'lucide-react';
+import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff, Zap, Power, Wifi, WifiOff, HelpCircle, Activity } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
 import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
@@ -16,6 +16,9 @@ export default function SeedAdminDashboard() {
   const [blockingId, setBlockingId] = useState(null);
   const [blockReason, setBlockReason] = useState('');
   const [blockReasonModal, setBlockReasonModal] = useState(null); // profile to block
+  const [wakingBindingCode, setWakingBindingCode] = useState(null);
+  const [wolModalOpen, setWolModalOpen] = useState(false);
+  const [wolSelectedMachine, setWolSelectedMachine] = useState(null);
 
   const loadData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -205,6 +208,36 @@ export default function SeedAdminDashboard() {
     }
   };
 
+  const handleWakeOnLan = async (machine) => {
+    if (!machine.mac_address || machine.mac_address === '00:00:00:00:00:00') {
+      alert(`⚠️ No MAC address recorded for ${machine.machine_name || 'this machine'}.\n\nPlease ensure the agent has connected at least once to sync its hardware network identity.`);
+      return;
+    }
+
+    setWakingBindingCode(machine.binding_code);
+    try {
+      // Broadcast Wake-on-LAN Magic Packet dispatch request over Supabase Realtime
+      const channel = supabase.channel('wol_broadcast_channel');
+      await channel.send({
+        type: 'broadcast',
+        event: 'WAKE_MACHINE',
+        payload: {
+          mac: machine.mac_address,
+          broadcastAddress: machine.broadcast_ip || '255.255.255.255',
+          machineName: machine.machine_name,
+          bindingCode: machine.binding_code,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      alert(`⚡ Wake-on-LAN Magic Packet sent to:\n\nMachine: ${machine.machine_name}\nMAC: ${machine.mac_address}\nBroadcast: ${machine.broadcast_ip || '255.255.255.255'}\n\nOnline farm relay agents will broadcast the UDP Magic Packet to wake the computer.`);
+    } catch (err) {
+      alert('Error sending Wake-on-LAN request: ' + err.message);
+    } finally {
+      setTimeout(() => setWakingBindingCode(null), 2000);
+    }
+  };
+
   const isSeedOwner = (p) => p.email?.toLowerCase() === 'sammyseth260@gmail.com';
 
   return (
@@ -362,11 +395,25 @@ export default function SeedAdminDashboard() {
         )}
       </div>
 
-      {/* Machine Bindings & License Management */}
+      {/* Machine Bindings & Hardware Remote Power-On */}
       <div className="card" style={{ marginBottom: '32px' }}>
-        <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Key size={18} color="var(--primary)" /> Machine Binding Codes & License Enforcement
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Key size={18} color="var(--primary)" /> Machine Binding Codes & Remote Hardware Power-On
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '2px' }}>
+              Autonomous 24/7 background agent nodes with remote Wake-on-LAN power management.
+            </p>
+          </div>
+          <button 
+            onClick={() => setWolModalOpen(true)}
+            className="btn btn-secondary"
+            style={{ fontSize: '12px', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <HelpCircle size={14} color="var(--accent)" /> Wake-on-LAN Setup Guide
+          </button>
+        </div>
 
         {loading ? (
           <div>Loading machine bindings...</div>
@@ -379,50 +426,85 @@ export default function SeedAdminDashboard() {
                 <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px' }}>
                   <th style={{ padding: '12px' }}>BINDING CODE</th>
                   <th style={{ padding: '12px' }}>MACHINE NAME</th>
+                  <th style={{ padding: '12px' }}>HARDWARE NETWORK (MAC / IP)</th>
+                  <th style={{ padding: '12px' }}>LIVE STATUS</th>
                   <th style={{ padding: '12px' }}>MODE</th>
-                  <th style={{ padding: '12px' }}>LICENSE STATUS</th>
-                  <th style={{ padding: '12px', textAlign: 'right' }}>ACTIONS</th>
+                  <th style={{ padding: '12px' }}>LICENSE</th>
+                  <th style={{ padding: '12px', textAlign: 'right' }}>REMOTE POWER & ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
-                {bindings.map(b => (
-                  <tr key={b.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '14px 12px', fontFamily: 'monospace', fontWeight: 700, fontSize: '16px', color: 'var(--primary)' }}>
-                      {b.binding_code}
-                    </td>
-                    <td style={{ padding: '14px 12px' }}>{b.machine_name || 'Windows Machine'}</td>
-                    <td style={{ padding: '14px 12px' }}>
-                      <span className={`badge ${b.license_mode === 'free' ? 'badge-warning' : 'badge-info'}`}>
-                        {b.license_mode.toUpperCase()}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px 12px' }}>
-                      <span className={`badge ${b.is_licensed ? 'badge-success' : 'badge-danger'}`}>
-                        {b.is_licensed ? <CheckCircle size={12} /> : <XCircle size={12} />}
-                        {b.is_licensed ? 'LICENSED' : 'REVOKED'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: '8px' }}>
-                        <button 
-                          onClick={() => toggleMode(b.binding_code, b.license_mode)}
-                          className="btn btn-secondary"
-                          style={{ padding: '6px 12px', fontSize: '12px' }}
-                        >
-                          Mode: {b.license_mode === 'free' ? 'Set Licensed' : 'Set Free Mode'}
-                        </button>
-                        <button 
-                          onClick={() => toggleLicense(b.binding_code, b.is_licensed)}
-                          className={`btn ${b.is_licensed ? 'btn-danger' : 'btn-primary'}`}
-                          style={{ padding: '6px 12px', fontSize: '12px' }}
-                        >
-                          {b.is_licensed ? <Lock size={14} /> : <Unlock size={14} />}
-                          {b.is_licensed ? 'Revoke License' : 'Activate License'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {bindings.map(b => {
+                  const now = new Date().getTime();
+                  const lastTime = b.last_seen || b.updated_at ? new Date(b.last_seen || b.updated_at).getTime() : 0;
+                  const isOnline = lastTime > 0 && (now - lastTime < 180000);
+                  const isWaking = wakingBindingCode === b.binding_code;
+
+                  return (
+                    <tr key={b.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace', fontWeight: 700, fontSize: '16px', color: 'var(--primary)' }}>
+                        {b.binding_code}
+                      </td>
+                      <td style={{ padding: '14px 12px', fontWeight: 600 }}>{b.machine_name || 'Windows Machine'}</td>
+                      <td style={{ padding: '14px 12px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: 'monospace', fontSize: '12px' }}>
+                          <span style={{ color: 'var(--text-main)', fontWeight: 600 }}>MAC: {b.mac_address || 'Not Synced'}</span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>IP: {b.local_ip || '127.0.0.1'}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        {isOnline ? (
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Activity size={11} /> ONLINE (24/7)
+                          </span>
+                        ) : (
+                          <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Power size={11} /> ASLEEP / OFFLINE
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        <span className={`badge ${b.license_mode === 'free' ? 'badge-warning' : 'badge-info'}`}>
+                          {b.license_mode.toUpperCase()}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        <span className={`badge ${b.is_licensed ? 'badge-success' : 'badge-danger'}`}>
+                          {b.is_licensed ? <CheckCircle size={12} /> : <XCircle size={12} />}
+                          {b.is_licensed ? 'LICENSED' : 'REVOKED'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <button 
+                            onClick={() => handleWakeOnLan(b)}
+                            disabled={isWaking || !b.mac_address}
+                            className="btn btn-warning"
+                            style={{ padding: '5px 10px', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            title="Send Wake-on-LAN Magic Packet to turn on this computer remotely"
+                          >
+                            <Zap size={12} /> {isWaking ? 'Waking...' : '⚡ Wake Machine'}
+                          </button>
+                          <button 
+                            onClick={() => toggleMode(b.binding_code, b.license_mode)}
+                            className="btn btn-secondary"
+                            style={{ padding: '5px 10px', fontSize: '11px' }}
+                          >
+                            {b.license_mode === 'free' ? 'Set Licensed' : 'Set Free'}
+                          </button>
+                          <button 
+                            onClick={() => toggleLicense(b.binding_code, b.is_licensed)}
+                            className={`btn ${b.is_licensed ? 'btn-danger' : 'btn-primary'}`}
+                            style={{ padding: '5px 10px', fontSize: '11px' }}
+                          >
+                            {b.is_licensed ? <Lock size={12} /> : <Unlock size={12} />}
+                            {b.is_licensed ? 'Revoke' : 'Activate'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -546,6 +628,41 @@ export default function SeedAdminDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Wake-on-LAN Guide Modal */}
+      {wolModalOpen && (
+        <div className="modal-overlay" onClick={() => setWolModalOpen(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '560px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
+              <Zap size={20} /> Remote Power-On (Wake-on-LAN) Setup Guide
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', lineHeight: '1.5', marginBottom: '16px' }}>
+              Wake-on-LAN sends a network <strong>UDP Magic Packet</strong> to power on or wake up sleeping farm host computers autonomously over Ethernet/Wi-Fi.
+            </p>
+
+            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '14px', marginBottom: '16px', fontSize: '13px', lineHeight: '1.6' }}>
+              <div style={{ fontWeight: 700, color: 'var(--accent)', marginBottom: '6px' }}>🔧 Prerequisite Computer Setup (One-Time):</div>
+              <ol style={{ paddingLeft: '20px', margin: 0, color: 'var(--text-main)' }}>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Windows Device Manager:</strong> Open <em>Device Manager</em> → expand <em>Network Adapters</em> → Right click Ethernet/Wi-Fi Card → <em>Properties</em> → <em>Power Management</em> tab → check <strong>"Allow this device to wake the computer"</strong> and <strong>"Only allow a magic packet to wake the computer"</strong>.
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Advanced Tab:</strong> In the same network properties window, switch to the <em>Advanced</em> tab and set <strong>"Wake on Magic Packet"</strong> to <em>Enabled</em>.
+                </li>
+                <li>
+                  <strong>BIOS / UEFI:</strong> On computer boot (press DEL or F2), go to Power Management and enable <strong>"Power On by PCI-E"</strong> or <strong>"Wake-on-LAN (WoL)"</strong>.
+                </li>
+              </ol>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setWolModalOpen(false)} className="btn btn-primary">
+                Got It, Close Guide
+              </button>
+            </div>
           </div>
         </div>
       )}

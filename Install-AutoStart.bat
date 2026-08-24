@@ -11,8 +11,9 @@ set "AGENT_DIR=%~dp0"
 if "%AGENT_DIR:~-1%"=="\" set "AGENT_DIR=%AGENT_DIR:~0,-1%"
 
 :: ─── Verify the main launch script exists ─────────────────────────────────
-if not exist "%AGENT_DIR%\DeviceFarm-Agent-Setup.bat" (
-    echo [ERROR] DeviceFarm-Agent-Setup.bat not found in %AGENT_DIR%
+:: ─── Verify the silent launch script exists ─────────────────────────────────
+if not exist "%AGENT_DIR%\Start-Agent-Silent.vbs" (
+    echo [ERROR] Start-Agent-Silent.vbs not found in %AGENT_DIR%
     pause
     exit /b 1
 )
@@ -25,27 +26,25 @@ schtasks /delete /tn "%TASK_NAME%" /f >nul 2>&1
 
 :: ─── Register the task ────────────────────────────────────────────────────
 :: Trigger: At logon of any user
-:: Action:  Run DeviceFarm-Agent-Setup.bat (minimized, no window)
+:: Action:  Run Start-Agent-Silent.vbs (100% invisible, no console window)
 :: Run level: Highest (so ADB and process management work properly)
 
 schtasks /create ^
   /tn "%TASK_NAME%" ^
-  /tr "cmd /c start /min \"\" \"%AGENT_DIR%\\DeviceFarm-Agent-Setup.bat\"" ^
+  /tr "wscript.exe \"%AGENT_DIR%\\Start-Agent-Silent.vbs\"" ^
   /sc ONLOGON ^
   /rl HIGHEST ^
-  /delay 0001:00 ^
   /f ^
   >nul 2>&1
 
 if %errorlevel% equ 0 (
     echo.
     echo  ================================================================
-    echo  [OK] DeviceFarm Agent will now start automatically at login!
+    echo  [OK] DeviceFarm Agent will now start silently at Windows startup!
     echo       Task:     "%TASK_NAME%"
     echo       Location: %AGENT_DIR%
     echo  ================================================================
     echo.
-    echo  The agent will launch 1 minute after you log in.
     echo  To remove auto-start, run: schtasks /delete /tn "%TASK_NAME%" /f
     echo.
 ) else (
@@ -64,9 +63,10 @@ if %errorlevel% equ 0 (
     PowerShell -NoProfile -ExecutionPolicy Bypass -Command ^
         "$ws = New-Object -ComObject WScript.Shell;" ^
         "$s = $ws.CreateShortcut('%LNK_PATH%');" ^
-        "$s.TargetPath = '%AGENT_DIR%\DeviceFarm-Agent-Setup.bat';" ^
+        "$s.TargetPath = 'wscript.exe';" ^
+        "$s.Arguments = '\"%AGENT_DIR%\\Start-Agent-Silent.vbs\"';" ^
         "$s.WorkingDirectory = '%AGENT_DIR%';" ^
-        "$s.WindowStyle = 7;" ^
+        "$s.WindowStyle = 0;" ^
         "$s.Description = 'DeviceFarm Agent AutoStart';" ^
         "$s.Save()"
 

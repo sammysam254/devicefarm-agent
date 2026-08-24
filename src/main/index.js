@@ -10,6 +10,8 @@ const adbTracker = require('../services/adb-tracker');
 const apiClient = require('../services/api-client');
 const autoSync = require('../services/auto-sync-service');
 const { isCloudflaredAvailable } = require('../services/tunnel-service');
+const bindingService = require('../services/binding-service');
+const wolService = require('../services/wol-service');
 const { startDashboardServer, openInChrome, stopDashboardServer, getDashboardUrl } = require('../dashboard/server');
 
 // ──────────────────────────────────────────────────────────
@@ -292,9 +294,32 @@ app.whenReady().then(async () => {
   autoSync.startAutoSync(30 * 60 * 1000);
   startTrayRefreshInterval();
 
+  // Sync machine hardware identity & network MAC to Supabase
+  try {
+    await bindingService.syncMachineBinding();
+  } catch (e) {
+    logger.warn('Machine binding sync notice:', e.message);
+  }
+
+  // Initialize Wake-on-LAN listener
+  try {
+    const cfg = require('../services/binding-service');
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://vrmzfgfxrycbrtqfygit.supabase.co';
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+    if (supabaseUrl && supabaseKey) {
+      wolService.startWolRemoteListener(supabaseUrl, supabaseKey);
+    }
+  } catch (e) {}
+
   try {
     const { url } = await startDashboardServer(7400);
-    openInChrome(url);
+    // Only open Chrome window if NOT running in hidden / background service mode
+    const isHidden = process.argv.includes('--hidden') || process.env.BACKGROUND_SERVICE === '1';
+    if (!isHidden) {
+      openInChrome(url);
+    } else {
+      logger.info(`DeviceFarm Agent running silently in background. Dashboard accessible at ${url}`);
+    }
   } catch (err) {
     logger.error('Failed to start Dashboard server', { error: err.message });
   }

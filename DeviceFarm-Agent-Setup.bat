@@ -375,29 +375,39 @@ taskkill /F /IM lt.cmd >nul 2>&1
 ping 127.0.0.1 -n 3 >nul 2>nul
 echo [OK] Previous instances stopped.
 
-:: ── Launch fresh ───────────────────────────────────────────────────────────
-set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
-if exist "%ELECTRON_BIN%" (
-    echo [*] Launching DeviceFarm Agent...
-    start "" "%CD%\%ELECTRON_BIN%" "%CD%\src\main\index.js"
+:: ── Launch fresh via Silent Background Service ─────────────────────────
+echo [*] Launching DeviceFarm Agent Background Service...
+
+if exist "%CD%\Start-Agent-Silent.vbs" (
+    wscript.exe "%CD%\Start-Agent-Silent.vbs"
 ) else (
-    echo [*] Falling back to npm exec electron...
-    start "" "%NPM%" exec -- electron "%CD%"
+    set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
+    if exist "%ELECTRON_BIN%" (
+        start "" "%CD%\%ELECTRON_BIN%" "%CD%\src\main\index.js"
+    ) else (
+        start "" "%NPM%" exec -- electron "%CD%"
+    )
+)
+
+:: Automatically register background auto-start service
+if exist "%CD%\Install-AutoStart.bat" (
+    call "%CD%\Install-AutoStart.bat" >nul 2>&1
 )
 
 echo [*] Waiting for Dashboard...
-ping 127.0.0.1 -n 5 >nul 2>nul
+ping 127.0.0.1 -n 4 >nul 2>nul
 start "" "http://localhost:7400"
 
 :end_launch
 
 echo.
 echo  ================================================================
-echo  [OK] DeviceFarm Agent is running!
+echo  [OK] DeviceFarm Agent is running continuously in the background!
 echo       Dashboard : http://localhost:7400
 echo       Install   : %INSTALL_DIR%
+echo       Status    : Active Background Service (Auto-starts on Boot)
 echo  ================================================================
 echo.
-echo  You can close this window. The agent runs in the system tray.
-echo.
-pause >nul
+echo  Setup complete. This window will close automatically.
+ping 127.0.0.1 -n 3 >nul 2>nul
+exit /b 0

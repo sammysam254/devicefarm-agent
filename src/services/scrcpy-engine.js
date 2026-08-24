@@ -225,10 +225,18 @@ class ScrcpyEngine extends EventEmitter {
    */
   addClient(ws) {
     this.wsClients.add(ws);
+    // Send cached SPS/PPS config & keyframe immediately so WebCodecs decodes in <10ms
+    if (this._configPacket && ws.readyState === 1) {
+      try { ws.send(this._configPacket, { binary: true }); } catch (_) {}
+    }
     const initialPacket = this._keyframeBuffer || this._configPacket;
     if (initialPacket && ws.readyState === 1) {
       try { ws.send(initialPacket, { binary: true }); } catch (_) {}
     }
+    // Nudge Android window compositor to immediately produce a fresh frame
+    try {
+      this._adb(['shell', 'input', 'keyevent', '0']).catch(() => {});
+    } catch (_) {}
   }
 
   removeClient(ws) {
@@ -304,12 +312,12 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=2500000',
+      'video_bit_rate=3000000',
       'max_fps=60',
-      'video_codec_options=i-frame-interval=2',
+      'video_codec_options=i-frame-interval=1',
       'send_frame_meta=true',
       'show_touches=false',
-      'stay_awake=false',
+      'stay_awake=true',
     ];
 
     logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
