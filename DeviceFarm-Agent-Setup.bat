@@ -26,6 +26,8 @@ echo.
 :: ── Where to install the agent ─────────────────────────────────────────────
 set "INSTALL_DIR=C:\DeviceFarmAgent"
 set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
+set "CURRENT_DIR=%~dp0"
+if "%CURRENT_DIR:~-1%"=="\" set "CURRENT_DIR=%CURRENT_DIR:~0,-1%"
 
 :: ── Full path to PowerShell (never rely on PATH for this) ──────────────────
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -35,14 +37,17 @@ echo [*] Install directory : %INSTALL_DIR%
 echo [*] Source repository : %REPO_URL%
 echo.
 
-:: ── Stop old agent instances, ADB, and watchdog processes so files/DLLs are not locked ──
-echo [*] Terminating active agent, adb, and watchdog processes to unlock binaries...
-taskkill /F /IM electron.exe >nul 2>&1
-taskkill /F /IM adb.exe >nul 2>&1
-taskkill /F /IM scrcpy.exe >nul 2>&1
-taskkill /F /IM cloudflared.exe >nul 2>&1
-taskkill /F /IM node.exe /FI "WINDOWTITLE eq *watchdog*" >nul 2>&1
-taskkill /F /IM node.exe /FI "WINDOWTITLE eq *service-watchdog*" >nul 2>&1
+:: ── Stop old agent instances and watchdog processes (strictly scoped to agent directory) ──
+echo [*] Stopping previous DeviceFarm Agent processes (scoped to agent directory)...
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$dirs = @('%INSTALL_DIR%', '%CURRENT_DIR%') | Where-Object { $_ -and (Test-Path $_) };" ^
+  "Get-CimInstance Win32_Process | Where-Object {" ^
+  "  $p = $_; if ($p.ProcessId -eq $PID) { return $false };" ^
+  "  $matchDir = $false;" ^
+  "  foreach ($d in $dirs) { if (($p.ExecutablePath -and $p.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase)) -or ($p.CommandLine -and $p.CommandLine.IndexOf($d, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) { $matchDir = $true; break } };" ^
+  "  $isWatchdog = ($p.Name -like 'node*' -and $p.CommandLine -and ($p.CommandLine.IndexOf('service-watchdog.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $p.CommandLine.IndexOf('DeviceFarm', [System.StringComparison]::OrdinalIgnoreCase) -ge 0));" ^
+  "  return (($matchDir -or $isWatchdog) -and ($p.Name -match '^(electron|node|cloudflared|scrcpy|adb|DeviceFarm Agent)\.exe$'))" ^
+  "} | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
 timeout /t 1 /nobreak >nul
 
 
@@ -282,9 +287,8 @@ echo [*] Resetting ADB server to force fresh USB authorization prompt...
 set "ADB_BIN=%INSTALL_DIR%\assets\bin\adb.exe"
 if not exist "%ADB_BIN%" set "ADB_BIN=adb"
 
-:: Kill every existing ADB server (bundled + any system-wide one)
+:: Kill bundled ADB server
 "%ADB_BIN%" kill-server >nul 2>&1
-taskkill /F /IM adb.exe >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
 
 :: Restart ADB server with bundled binary
@@ -353,28 +357,18 @@ echo   STEP 3: LAUNCHING DEVICEFARM AGENT
 echo  ================================================================
 echo.
 
-:: ── Stop any existing DeviceFarm Agent processes ───────────────────────────
-echo [*] Stopping any running DeviceFarm Agent instances...
-
-:: Kill Electron processes running from the install dir
-tasklist /FI "IMAGENAME eq electron.exe" 2>nul | find /I "electron.exe" >nul
-if %errorlevel% equ 0 (
-    echo [*] Killing electron.exe processes...
-    taskkill /F /IM electron.exe >nul 2>&1
-)
-
-:: Kill any node.exe processes from the install dir (verify-payment, tunnels, etc.)
-for /f "tokens=2" %%P in ('netstat -ano 2^>nul ^| findstr ":7400 "') do (
-    echo [*] Killing process on port 7400 ^(PID %%P^)...
-    taskkill /F /PID %%P >nul 2>&1
-)
-
-:: Also kill localtunnel / cloudflared that may be holding ports
-taskkill /F /IM cloudflared.exe >nul 2>&1
-taskkill /F /IM lt.cmd >nul 2>&1
-
-:: Give processes a moment to fully exit
-ping 127.0.0.1 -n 3 >nul 2>nul
+:: ── Stop any existing DeviceFarm Agent processes safely ───────────────────
+echo [*] Ensuring previous DeviceFarm Agent instances are stopped...
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$dirs = @('%INSTALL_DIR%', '%CURRENT_DIR%') | Where-Object { $_ -and (Test-Path $_) };" ^
+  "Get-CimInstance Win32_Process | Where-Object {" ^
+  "  $p = $_; if ($p.ProcessId -eq $PID) { return $false };" ^
+  "  $matchDir = $false;" ^
+  "  foreach ($d in $dirs) { if (($p.ExecutablePath -and $p.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase)) -or ($p.CommandLine -and $p.CommandLine.IndexOf($d, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) { $matchDir = $true; break } };" ^
+  "  $isWatchdog = ($p.Name -like 'node*' -and $p.CommandLine -and ($p.CommandLine.IndexOf('service-watchdog.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $p.CommandLine.IndexOf('DeviceFarm', [System.StringComparison]::OrdinalIgnoreCase) -ge 0));" ^
+  "  return (($matchDir -or $isWatchdog) -and ($p.Name -match '^(electron|node|cloudflared|scrcpy|adb|DeviceFarm Agent)\.exe$'))" ^
+  "} | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
+ping 127.0.0.1 -n 2 >nul 2>nul
 echo [OK] Previous instances stopped.
 
 :: ── Register and launch 24/7 Silent Background Service ──────────────────
