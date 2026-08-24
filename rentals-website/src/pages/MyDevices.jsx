@@ -100,9 +100,10 @@ export default function MyDevices() {
   };
 
   const isDeviceOnline = (d) => {
-    if (!d || d.status !== 'online' || !d.stream_url || d.is_deleted_from_view) return false;
-    const lastTime = d.updated_at || d.last_seen ? new Date(d.updated_at || d.last_seen).getTime() : 0;
-    return (new Date().getTime() - lastTime) < 45000;
+    if (!d || d.is_deleted_from_view) return false;
+    if (d.status === 'offline') return false;
+    if (d.status === 'online' && d.stream_url) return true;
+    return Boolean(d.stream_url);
   };
 
   return (
