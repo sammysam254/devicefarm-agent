@@ -70,7 +70,12 @@ export default function MyDevices() {
     if (inputPassword.trim() === unlockModal.access_password.trim()) {
       let streamUrl = unlockModal.devices?.stream_url;
       if (streamUrl) {
-        if (!streamUrl.includes('pin=')) {
+        try {
+          const u = new URL(streamUrl);
+          u.searchParams.set('pin', unlockModal.access_password.trim());
+          streamUrl = u.toString();
+        } catch (_) {
+          streamUrl = streamUrl.replace(/([?&])pin=[^&]*/g, '$1');
           streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(unlockModal.access_password.trim());
         }
         const w = 510, h = 900;
