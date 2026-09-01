@@ -211,7 +211,7 @@ class ScrcpyEngine extends EventEmitter {
     this.videoHeight = 0;
     this._jarPushed = false;
     this._screencapActive = false;
-    this.enableAudio = true;
+    this.enableAudio = false;
     this.audioSocket = null;
   }
 
@@ -809,7 +809,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
     buf.writeInt32BE(0, 24);              // action_button = 0
-    buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
+    buf.writeInt32BE(0, 28);              // buttons = 0 (touch events in Android must have buttonState=0)
     try {
       this.controlSocket.cork();
       this.controlSocket.write(buf);

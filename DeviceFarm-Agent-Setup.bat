@@ -509,10 +509,7 @@ schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
 schtasks /delete /tn "%TASK_BOOT%" /f >nul 2>&1
 schtasks /delete /tn "%TASK_LOGON%" /f >nul 2>&1
 
-:: Register Boot Task (starts when PC turns on / restarts)
-schtasks /create /tn "%TASK_BOOT%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONSTART /ru "SYSTEM" /rl HIGHEST /f >nul 2>&1
-
-:: Register Logon Task (starts when user logs in)
+:: Register Logon Task (starts when user logs in with active desktop session)
 schtasks /create /tn "%TASK_LOGON%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
 
 :: Redundant All-Users Startup Shortcut

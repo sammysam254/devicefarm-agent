@@ -5,12 +5,30 @@
  *
  * Supervises the DeviceFarm Agent process. If the agent crashes, is closed,
  * or terminates unexpectedly, the watchdog automatically relaunches it
- * after a 3-second delay, ensuring 24/7 continuous unattended operation.
+ * after a delay, ensuring 24/7 continuous unattended operation.
+ * Includes a singleton guard so multiple watchdogs never fight for control.
  */
 
 const path = require('path');
 const fs = require('fs');
+const net = require('net');
 const { spawn } = require('child_process');
+
+// ── Singleton Guard for Watchdog ─────────────────────────────────────────────
+const WATCHDOG_LOCK_PORT = 7419;
+const lockServer = net.createServer();
+
+lockServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    // Another watchdog instance is already active and supervising. Exit cleanly.
+    process.exit(0);
+  }
+});
+
+lockServer.listen(WATCHDOG_LOCK_PORT, '127.0.0.1', () => {
+  // Lock acquired — proceed as primary supervisor
+  startWatchdog();
+});
 
 const rootDir = path.resolve(__dirname, '..', '..');
 let activeChild = null;
@@ -25,12 +43,15 @@ function getElectronPath() {
   return 'electron';
 }
 
+function startWatchdog() {
+  startAgent();
+}
+
 function startAgent() {
   if (isStopping) return;
 
   const electronExe = getElectronPath();
   const mainScript = path.join(rootDir, 'src', 'main', 'index.js');
-
   const args = [mainScript, '--hidden'];
 
   try {
@@ -42,12 +63,11 @@ function startAgent() {
       env: { ...process.env, BACKGROUND_SERVICE: '1' }
     });
 
-    activeChild.on('error', (err) => {
-      // Avoid crash on spawn error, retry after delay
+    activeChild.on('error', () => {
       scheduleRestart();
     });
 
-    activeChild.on('exit', (code, signal) => {
+    activeChild.on('exit', (code) => {
       activeChild = null;
       if (!isStopping) {
         scheduleRestart();
@@ -74,6 +94,7 @@ process.on('SIGINT', () => {
   if (activeChild) {
     try { activeChild.kill(); } catch (_) {}
   }
+  try { lockServer.close(); } catch (_) {}
   process.exit(0);
 });
 
@@ -82,8 +103,6 @@ process.on('SIGTERM', () => {
   if (activeChild) {
     try { activeChild.kill(); } catch (_) {}
   }
+  try { lockServer.close(); } catch (_) {}
   process.exit(0);
 });
-
-// Start the initial supervised agent process
-startAgent();

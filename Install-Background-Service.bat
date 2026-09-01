@@ -76,23 +76,7 @@ schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
 schtasks /delete /tn "%TASK_BOOT%" /f >nul 2>&1
 schtasks /delete /tn "%TASK_LOGON%" /f >nul 2>&1
 
-:: ─── 1. Register Task for System Boot (Starts when PC turns on) ───────────
-echo [*] Registering Windows Boot Trigger (starts when PC turns on)...
-schtasks /create ^
-  /tn "%TASK_BOOT%" ^
-  /tr "wscript.exe \"%VBS_LAUNCHER%\"" ^
-  /sc ONSTART ^
-  /ru "SYSTEM" ^
-  /rl HIGHEST ^
-  /f >nul 2>&1
-
-if %errorlevel% equ 0 (
-    echo [OK] Boot Service Task successfully registered!
-) else (
-    echo [INFO] System-level task notice, creating user-level logon task...
-)
-
-:: ─── 2. Register Task for User Logon (Starts at desktop login) ────────────
+:: ─── 1. Register Task for User Logon (Starts at desktop login with full ADB session) ───
 echo [*] Registering User Logon Trigger (starts when user logs in)...
 schtasks /create ^
   /tn "%TASK_LOGON%" ^
