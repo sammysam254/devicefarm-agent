@@ -258,11 +258,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 process.on('SIGINT', () => {
-  gracefulShutdown();
+  const isHidden = process.argv.includes('--hidden') || process.env.BACKGROUND_SERVICE === '1';
+  if (!isHidden) gracefulShutdown();
 });
 
 process.on('SIGTERM', () => {
-  gracefulShutdown();
+  const isHidden = process.argv.includes('--hidden') || process.env.BACKGROUND_SERVICE === '1';
+  if (!isHidden) gracefulShutdown();
 });
 
 // ──────────────────────────────────────────────────────────
