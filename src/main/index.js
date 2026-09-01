@@ -1,6 +1,4 @@
-'use strict';
-
-const { app, Tray, Menu, nativeImage, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
@@ -35,6 +33,7 @@ app.on('second-instance', () => {
 // ──────────────────────────────────────────────────────────
 
 let tray = null;
+let bgAnchorWindow = null;
 let isShuttingDown = false;
 
 // ──────────────────────────────────────────────────────────
@@ -278,6 +277,18 @@ app.whenReady().then(async () => {
   logger.info(`  Electron: ${process.versions.electron}`);
   logger.info(`  Node: ${process.versions.node}`);
   logger.info('====================================');
+
+  // Anchor Electron process with a hidden background window so it never auto-quits
+  try {
+    bgAnchorWindow = new BrowserWindow({
+      show: false,
+      width: 10,
+      height: 10,
+      focusable: false,
+      skipTaskbar: true,
+      webPreferences: { backgroundThrottling: false }
+    });
+  } catch (_) {}
 
   await runStartupChecks();
 
