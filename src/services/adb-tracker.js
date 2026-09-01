@@ -60,26 +60,28 @@ async function handleDeviceAdd(device) {
 
   logger.info(`Device connected: ${serial} (type: ${device.type})`);
 
-  // Apply bootloader hiding & anti-detection stealth config before running apps
-  try {
-    const axios = require('axios');
-    let isStealthOn = true;
+  // Apply bootloader hiding & anti-detection stealth config asynchronously in background
+  (async () => {
     try {
-      const supabaseUrl = process.env.SUPABASE_URL || 'https://lazdyihryfvrlczczvxz.supabase.co';
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzM3NjE2OCwiZXhwIjoyMTAyOTUyMTY4fQ.6hAOEa2_nUTQh_Z3oU2e8QX2nP5EwzHmKiEZ06X7UWc';
-      const res = await axios.get(`${supabaseUrl}/rest/v1/device_rentals?serial_number=eq.${encodeURIComponent(serial)}&select=stealth_root_enabled`, {
-        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
-        timeout: 3000
-      });
-      if (res.data && res.data.length > 0 && res.data[0].stealth_root_enabled === false) {
-        isStealthOn = false;
-      }
-    } catch (_) {}
+      const axios = require('axios');
+      let isStealthOn = true;
+      try {
+        const supabaseUrl = process.env.SUPABASE_URL || 'https://lazdyihryfvrlczczvxz.supabase.co';
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzM3NjE2OCwiZXhwIjoyMTAyOTUyMTY4fQ.6hAOEa2_nUTQh_Z3oU2e8QX2nP5EwzHmKiEZ06X7UWc';
+        const res = await axios.get(`${supabaseUrl}/rest/v1/device_rentals?serial_number=eq.${encodeURIComponent(serial)}&select=stealth_root_enabled`, {
+          headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
+          timeout: 3000
+        });
+        if (res.data && res.data.length > 0 && res.data[0].stealth_root_enabled === false) {
+          isStealthOn = false;
+        }
+      } catch (_) {}
 
-    await stealthService.applyDeviceStealth(serial, isStealthOn);
-  } catch (stealthErr) {
-    logger.warn(`Stealth setup notice for ${serial}: ${stealthErr.message}`);
-  }
+      await stealthService.applyDeviceStealth(serial, isStealthOn);
+    } catch (stealthErr) {
+      logger.warn(`Stealth setup notice for ${serial}: ${stealthErr.message}`);
+    }
+  })().catch(() => {});
 
   try {
     // 1. Read device properties
