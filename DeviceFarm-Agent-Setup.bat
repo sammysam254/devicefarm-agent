@@ -529,7 +529,7 @@ echo [OK] Windows 24/7 background service registered.
 :: Start service silently right now in the background
 echo [*] Starting DeviceFarm Agent in the background...
 if exist "%VBS_LAUNCHER%" (
-    wscript.exe "%VBS_LAUNCHER%"
+    start "" wscript.exe "%VBS_LAUNCHER%"
 ) else (
     set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
     if exist "!ELECTRON_BIN!" (
