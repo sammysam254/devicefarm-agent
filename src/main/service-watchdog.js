@@ -59,7 +59,7 @@ function startAgent() {
       cwd: rootDir,
       windowsHide: true,
       stdio: 'ignore',
-      detached: false,
+      detached: true,
       env: { ...process.env, BACKGROUND_SERVICE: '1' }
     });
 
