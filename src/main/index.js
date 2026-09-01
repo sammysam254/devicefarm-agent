@@ -339,4 +339,7 @@ app.whenReady().then(async () => {
 
   setTimeout(() => refreshTrayMenu(), 3000);
   logger.info('DeviceFarm Agent is fully operational');
+
+  // Keep Electron event loop active indefinitely in headless / background service mode
+  setInterval(() => {}, 60000);
 });
