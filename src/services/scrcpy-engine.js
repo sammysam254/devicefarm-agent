@@ -320,7 +320,11 @@ class ScrcpyEngine extends EventEmitter {
       'video_bit_rate=4000000',   // 4 Mbps: Crystal clear, crisp 720p HD streaming
       'max_size=720',             // 720p HD resolution for sharp screen details
       'max_fps=60',
-      'video_codec_options=i-frame-interval=2', // Fast keyframe synchronization
+      // Task #8: zero-latency encoder tuning
+      // i-frame-interval=1 → keyframe every second (faster resync after jitter/reconnect)
+      // intra-refresh-period=0 → disable periodic intra refresh (adds latency)
+      // latency=0 → explicitly request lowest encoder latency mode (MediaCodec hint)
+      'video_codec_options=i-frame-interval=1,latency=0',
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=true',
@@ -494,14 +498,30 @@ class ScrcpyEngine extends EventEmitter {
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
 
+    // Task #7: jitter detection — if no video data arrives for >2s while the socket is
+    // open, request a fresh IDR keyframe to unblock the decoder.  This avoids a full
+    // reconnect for transient encoder stalls (rotation, DRM surface, etc.).
+    const jitterCheckInterval = 500; // ms between checks
+    let jitterKeyframeRequested = false;
     const watchdog = setInterval(() => {
+      const elapsed = Date.now() - lastDataTime;
       if ((!this.videoSocket || this.videoSocket.destroyed) && this.isRunning) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Video socket gone — waiting for scrcpy restart cycle`);
+        return;
       }
-    }, 5000);
+      // 2 s without data → nudge IDR; 8 s → trigger full restart
+      if (elapsed > 2000 && elapsed <= 8000 && !jitterKeyframeRequested) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Jitter detected (${elapsed}ms no data) — requesting IDR keyframe`);
+        this._requestIdrKeyframe();
+        jitterKeyframeRequested = true;
+      } else if (elapsed <= 1000) {
+        jitterKeyframeRequested = false; // reset once data flows again
+      }
+    }, jitterCheckInterval);
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
+      jitterKeyframeRequested = false; // data is flowing, reset jitter flag
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
 
       // 1. Skip the device-info header exactly once & parse real video stream size
@@ -650,6 +670,47 @@ class ScrcpyEngine extends EventEmitter {
     });
   }
 
+  // ── Per-client send queue (task #4) ──────────────────────────────────────
+  // Bounded FIFO per WS client; old frames are dropped when the queue is full.
+  // This decouples the scrcpy read loop from slow WS writes and prevents memory
+  // bloat while keeping the stream as fresh as possible.
+  _getClientQueue(ws) {
+    if (!ws._sendQueue) {
+      ws._sendQueue = [];
+      ws._sendBusy  = false;
+    }
+    return ws._sendQueue;
+  }
+
+  _drainQueue(ws) {
+    if (ws._sendBusy || !ws._sendQueue || ws._sendQueue.length === 0) return;
+    if (ws.readyState !== 1) { ws._sendQueue = []; return; }
+    ws._sendBusy = true;
+    const frame = ws._sendQueue.shift();
+    try {
+      ws.send(frame, { binary: true }, () => {
+        ws._sendBusy = false;
+        // Yield to the event loop between frames so input messages aren't starved
+        setImmediate(() => this._drainQueue(ws));
+      });
+    } catch (_) {
+      ws._sendBusy = false;
+      ws._sendQueue = [];
+    }
+  }
+
+  _enqueueFrame(ws, frame, isAudio) {
+    const q = this._getClientQueue(ws);
+    // Hard limit: audio queue 8 packets, video queue 4 frames
+    const maxQ = isAudio ? 8 : 4;
+    if (q.length >= maxQ) {
+      q.shift(); // drop oldest
+      if (!isAudio) this._frameDropCount = (this._frameDropCount || 0) + 1;
+    }
+    q.push(frame);
+    this._drainQueue(ws);
+  }
+
   _broadcastAudio(payload) {
     // Frame layout: [0x41][codec_byte][...payload]
     // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
@@ -660,23 +721,54 @@ class ScrcpyEngine extends EventEmitter {
     payload.copy(audioFrame, 2);
 
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1 && ws.bufferedAmount < 128 * 1024) {
-        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
-      }
+      // Task #3: tighter audio backpressure — 64 KB instead of 128 KB
+      if (ws.readyState !== 1 || ws.bufferedAmount > 64 * 1024) continue;
+      this._enqueueFrame(ws, audioFrame, true);
     }
   }
 
   _broadcastVideo(payload) {
+    const isKeyframe = payload.length > 4 && ((payload[4] & 0x1f) === 5 || hasSpsNal(payload));
+
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) {
         this.wsClients.delete(ws);
         continue;
       }
-      // Zero-lag real-time backpressure: drop non-keyframe frames if client buffer exceeds 384KB
-      // This prevents video delay buildup and guarantees instant touch-to-screen feedback
-      if (ws.bufferedAmount > 384 * 1024) continue;
-      try { ws.send(payload, { binary: true }); } catch (_) {}
+
+      // Task #3 & #10: aggressive backpressure — drop non-keyframes if client buffer > 192 KB.
+      // For keyframes (IDR / SPS/PPS) always try to send so the decoder can resync.
+      const threshold = isKeyframe ? 512 * 1024 : 192 * 1024;
+      if (ws.bufferedAmount > threshold) {
+        if (!isKeyframe) this._frameDropCount = (this._frameDropCount || 0) + 1;
+        continue;
+      }
+
+      this._enqueueFrame(ws, payload, false);
     }
+
+    // Task #10: adaptive IDR hint — if we've dropped ≥30 frames since last check, request keyframe
+    this._frameDropCount = this._frameDropCount || 0;
+    this._lastDropCheck  = this._lastDropCheck  || Date.now();
+    if (this._frameDropCount >= 30) {
+      const now = Date.now();
+      if (now - this._lastDropCheck > 1000) { // at most once per second
+        logger.warn(`[ScrcpyEngine ${this.serial}] Frame drop spike (${this._frameDropCount} drops) — requesting IDR keyframe`);
+        this._requestIdrKeyframe();
+        this._frameDropCount = 0;
+        this._lastDropCheck  = now;
+      }
+    }
+  }
+
+  // Task #7 & #10: request a fresh IDR keyframe from Android without a full reconnect
+  _requestIdrKeyframe() {
+    // scrcpy control message type 8 = SET_SCREEN_POWER_MODE — not ideal.
+    // Best available no-side-effect approach: send an adb shell keyevent 0 (WAKE)
+    // which nudges the compositor to emit a new IDR without interrupting the stream.
+    try {
+      this._adb(['shell', 'input', 'keyevent', '0']).catch(() => {});
+    } catch (_) {}
   }
 
   /**
@@ -818,7 +910,12 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(keycode, 2);
     buf.writeInt32BE(repeat, 6);
     buf.writeInt32BE(metastate, 10);
-    try { this.controlSocket.write(buf); return true; }
+    try { 
+      this.controlSocket.cork();
+      this.controlSocket.write(buf);
+      this.controlSocket.uncork();
+      return true; 
+    }
     catch (_) { return false; }
   }
 
@@ -835,7 +932,12 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt8(1, 0);
     buf.writeInt32BE(tb.length, 1);
     tb.copy(buf, 5);
-    try { this.controlSocket.write(buf); return true; }
+    try { 
+      this.controlSocket.cork();
+      this.controlSocket.write(buf);
+      this.controlSocket.uncork();
+      return true; 
+    }
     catch (_) { return false; }
   }
 

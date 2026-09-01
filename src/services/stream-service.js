@@ -31,6 +31,61 @@ const ADB_BIN = resolveAdbBin();
 
 const activeServers = new Map();
 
+// ─── Token-bucket rate limiter (task #1 & #9) ────────────────────────────────
+// Allows short-duration bursts while enforcing a sustained rate cap per client.
+// Used to prevent event flooding (touch-move spam, wheel spam) without adding
+// artificial latency to high-priority events like tap DOWN/UP.
+class TokenBucket {
+  /**
+   * @param {number} capacity  - max burst tokens (e.g. 10 taps)
+   * @param {number} refillRate - tokens added per millisecond (e.g. 0.1 = 100/s)
+   */
+  constructor(capacity, refillRate) {
+    this.capacity   = capacity;
+    this.refillRate = refillRate;
+    this.tokens     = capacity;
+    this.lastRefill = Date.now();
+  }
+
+  consume(cost = 1) {
+    const now = Date.now();
+    this.tokens = Math.min(this.capacity, this.tokens + (now - this.lastRefill) * this.refillRate);
+    this.lastRefill = now;
+    if (this.tokens < cost) return false; // rate-limited
+    this.tokens -= cost;
+    return true;
+  }
+}
+
+// Per-WS-client rate limiters, keyed by ws object
+const inputBuckets  = new WeakMap(); // move/drag events  → 90/s burst-20
+const wheelBuckets  = new WeakMap(); // wheel/scroll       → 15/s burst-5
+const swiperBuckets = new WeakMap(); // programmatic swipe → 5/s burst-3
+
+function getInputBucket(ws)  { if (!inputBuckets.has(ws))  inputBuckets.set(ws,  new TokenBucket(20, 0.09)); return inputBuckets.get(ws); }
+function getWheelBucket(ws)  { if (!wheelBuckets.has(ws))  wheelBuckets.set(ws,  new TokenBucket(5,  0.015)); return wheelBuckets.get(ws); }
+function getSwiperBucket(ws) { if (!swiperBuckets.has(ws)) swiperBuckets.set(ws, new TokenBucket(3,  0.005)); return swiperBuckets.get(ws); }
+
+// ─── Server-side move-event coalescing (task #2) ──────────────────────────────
+// Per-client pending MOVE state: only the latest move is applied per engine frame.
+// This discards intermediate pointer positions that arrived between engine ticks,
+// matching the rAF coalescing already done on the client side.
+const pendingMoves = new WeakMap(); // ws → { x, y, width, height, pressure, timer }
+
+function coalesceMoveEvent(ws, data, serial, engine) {
+  const existing = pendingMoves.get(ws);
+  if (existing) clearTimeout(existing.timer);
+  // Schedule the move for next tick — if another move arrives before it fires,
+  // the timer is cancelled above and only the freshest coords are applied.
+  const timer = setImmediate(() => {
+    pendingMoves.delete(ws);
+    const W = parseFloat(data.width)  || engine.screenWidth  || 720;
+    const H = parseFloat(data.height) || engine.screenHeight || 1600;
+    engine.sendTouchEvent(2, parseFloat(data.x), parseFloat(data.y), W, H, parseFloat(data.pressure) || 0.65);
+  });
+  pendingMoves.set(ws, { timer });
+}
+
 // ─── Persistent ADB input shell (fallback when scrcpy not ready) ─────────────
 
 const inputShells = new Map();
@@ -87,7 +142,7 @@ function get(data, key) {
   return typeof data.get === 'function' ? data.get(key) : data[key];
 }
 
-function handleControl(type, data, serial, engine) {
+function handleControl(type, data, serial, engine, ws) {
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
 
@@ -98,12 +153,25 @@ function handleControl(type, data, serial, engine) {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
+
+    if (action === 2) {
+      // MOVE event — task #1: rate-limit move spam, task #2: coalesce to one per tick
+      if (ws && !getInputBucket(ws).consume(1)) return; // rate-limited
+      if (ws) {
+        coalesceMoveEvent(ws, data, serial, engine);
+        return;
+      }
+    }
+    // DOWN (0) and UP (1) are always passed through immediately — no rate limiting
     engine.sendTouchEvent(action, x, y, W, H);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
     engine.sendTouchEvent(0, x, y, W, H, 0.4);
     setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 80);
   } else if (type === 'swipe') {
+    // Task #1: rate-limit programmatic swipe spam (e.g. wheel events spawning many swipes)
+    if (ws && !getSwiperBucket(ws).consume(1)) return; // drop if overloaded
+
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 160;
@@ -841,12 +909,21 @@ function buildPlayerHtml(serial, screenW, screenH) {
   canvas.addEventListener('pointercancel', releasePointer);
   window.addEventListener('pointerup', releasePointer);
 
-  // wheel scroll — 300ms debounce throttle, 150ms natural swipe gesture
-  let wheelT = null;
+  // wheel scroll — token-bucket throttle (task #9): allows a burst of 3 quick
+  // scrolls then limits to ~8 scroll events/sec, preventing overspeeding while
+  // keeping the first scroll instant.  Replaced the old 300ms hard block.
+  const wheelBucket = { tokens: 3, maxTokens: 3, refillRate: 8 / 1000, last: performance.now() };
+  function wheelConsume() {
+    const now = performance.now();
+    wheelBucket.tokens = Math.min(wheelBucket.maxTokens, wheelBucket.tokens + (now - wheelBucket.last) * wheelBucket.refillRate);
+    wheelBucket.last = now;
+    if (wheelBucket.tokens < 1) return false;
+    wheelBucket.tokens -= 1;
+    return true;
+  }
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (wheelT) return;
-    wheelT = setTimeout(() => { wheelT = null; }, 300);
+    if (!wheelConsume()) return; // rate-limited
     const c = coords(e);
     const d = e.deltaY > 0 ? -400 : 400;
     send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH - 50, c.y + d)), duration: 150 });
@@ -1208,7 +1285,7 @@ async function startStreamServer(serial, port) {
     }
 
     if (p === '/control') {
-      handleControl(url.searchParams.get('type'), url.searchParams, serial, engine);
+      handleControl(url.searchParams.get('type'), url.searchParams, serial, engine, null);
       res.writeHead(200, {'Content-Type':'application/json'});
       res.end('{"status":"ok"}'); return;
     }
@@ -1270,10 +1347,14 @@ async function startStreamServer(serial, port) {
     }, 60000);
 
     ws.on('message', (msg) => {
-      try {
-        const data = JSON.parse(msg.toString());
-        handleControl(data.type, data, serial, engine);
-      } catch (_) {}
+      // Task #5: run input handling on a dedicated setImmediate tick so it doesn't
+      // block the video relay path and gets scheduled before any pending I/O callbacks.
+      setImmediate(() => {
+        try {
+          const data = JSON.parse(msg.toString());
+          handleControl(data.type, data, serial, engine, ws);
+        } catch (_) {}
+      });
     });
     ws.on('close', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
     ws.on('error', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
