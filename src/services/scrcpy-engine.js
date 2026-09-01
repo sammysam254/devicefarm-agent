@@ -209,6 +209,8 @@ class ScrcpyEngine extends EventEmitter {
     this._keyframeBuffer = null;
     this.videoWidth = 0;
     this.videoHeight = 0;
+    this.scrcpyServerWidth = 0;
+    this.scrcpyServerHeight = 0;
     this._jarPushed = false;
     this._screencapActive = false;
     this.enableAudio = false;
@@ -513,6 +515,8 @@ class ScrcpyEngine extends EventEmitter {
           if (w > 0 && h > 0 && w < 10000 && h < 10000) {
             this.videoWidth = w;
             this.videoHeight = h;
+            this.scrcpyServerWidth = w;
+            this.scrcpyServerHeight = h;
             logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy stream resolution: ${w}x${h}`);
           }
         } catch (_) {}
@@ -754,9 +758,10 @@ class ScrcpyEngine extends EventEmitter {
       return false;
     }
 
-    // Use videoWidth (from SPS NAL, most reliable) → videoWidth from header → screenWidth from wm size → defaults
-    let targetW = this.videoWidth;
-    let targetH = this.videoHeight;
+    // Use scrcpyServerWidth/Height (the EXACT videoSize scrcpy server negotiated on device)
+    // This guarantees scrcpy server never drops touch events with "different device size" mismatch
+    let targetW = this.scrcpyServerWidth || this.videoWidth;
+    let targetH = this.scrcpyServerHeight || this.videoHeight;
     if (!targetW || !targetH) {
       targetW = this.screenWidth || 1080;
       targetH = this.screenHeight || 2340;
