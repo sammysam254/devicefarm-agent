@@ -185,7 +185,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     /* Stage - Fit to Screen for desktop & mobile */
     .stage{flex:1;display:flex;flex-direction:row !important;align-items:center;justify-content:center;gap:12px;width:100%;height:calc(100vh - 44px);min-height:0;padding:8px 12px;box-sizing:border-box;position:relative}
     .wrap{position:relative;background:#000;border-radius:20px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 35px rgba(56,189,248,.2),0 20px 40px rgba(0,0,0,.8);overflow:hidden;touch-action:none;display:flex;align-items:center;justify-content:center;height:100%;max-height:calc(100vh - 58px);max-width:calc(100vw - 75px);width:auto;aspect-ratio:9/19.5;flex-shrink:1}
-    canvas{display:block;width:100%;height:100%;object-fit:contain;cursor:crosshair;touch-action:none;-webkit-tap-highlight-color:transparent}
+    canvas{display:block;width:100%;height:100%;object-fit:contain;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent}
 
     /* Sidebar ALWAYS on the right side */
     .sidebar{display:flex !important;flex-direction:column;align-items:center;gap:5px;background:rgba(15,23,42,.95);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:8px 6px;max-height:calc(100vh - 58px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 30px rgba(0,0,0,.6);z-index:20}

@@ -213,7 +213,9 @@ class ScrcpyEngine extends EventEmitter {
     this.scrcpyServerHeight = 0;
     this._jarPushed = false;
     this._screencapActive = false;
-    this.enableAudio = false;
+    this.enableAudio = true;
+    this._audioDisabled = false;
+    this._audioCodec = 'opus';
     this.audioSocket = null;
   }
 
@@ -315,10 +317,10 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=2000000',   // Reduced 3→2 Mbps: less buffering over Cloudflare tunnels
-      'max_size=480',             // 480p — lower bandwidth, faster decode, still crisp on phone screens
+      'video_bit_rate=4000000',   // 4 Mbps: Crystal clear, crisp 720p HD streaming
+      'max_size=720',             // 720p HD resolution for sharp screen details
       'max_fps=60',
-      'video_codec_options=i-frame-interval=2', // Keyframe every 2s (was 1s) — halves keyframe overhead
+      'video_codec_options=i-frame-interval=2', // Fast keyframe synchronization
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=true',
@@ -332,7 +334,6 @@ class ScrcpyEngine extends EventEmitter {
     });
 
     // Return a Promise that resolves when scrcpy prints its "Device:" ready line.
-    // This avoids the race condition where we connect sockets before the server is ready.
     this._serverReady = new Promise((resolve) => {
       let resolved = false;
       const done = () => { if (!resolved) { resolved = true; resolve(); } };
@@ -340,8 +341,12 @@ class ScrcpyEngine extends EventEmitter {
       this.serverProc.stdout.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
-        // scrcpy prints "Device: <model> (<WxH>)" once the encoder is initialised.
-        // Parse the negotiated resolution so touch events use the exact same dimensions.
+        
+        if (msg.includes('Audio disabled') || msg.includes('Audio: error') || msg.includes('Audio capture error')) {
+          this._audioDisabled = true;
+          logger.warn(`[ScrcpyEngine ${this.serial}] Audio disabled on device`);
+        }
+
         const dimMatch = msg.match(/\((\d+)x(\d+)\)/);
         if (dimMatch) {
           const sw = parseInt(dimMatch[1], 10);
@@ -358,9 +363,12 @@ class ScrcpyEngine extends EventEmitter {
       this.serverProc.stderr.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
+        if (msg.includes('Audio disabled') || msg.includes('Audio: error')) {
+          this._audioDisabled = true;
+        }
       });
 
-      // Safety timeout — if no "Device:" within 8s, proceed anyway (slow devices need more time)
+      // Safety timeout — if no "Device:" within 8s, proceed anyway
       setTimeout(done, 8000);
     });
 
@@ -422,12 +430,9 @@ class ScrcpyEngine extends EventEmitter {
   // ── Socket connection ─────────────────────────────────────────────────────
 
   async _connectSockets() {
-    // Wait for scrcpy server to print its "Device:" ready signal before connecting.
-    // This eliminates the race condition where we connected before the server was ready.
     logger.info(`[ScrcpyEngine ${this.serial}] Waiting for scrcpy server ready signal...`);
     if (this._serverReady) await this._serverReady;
 
-    // Small additional buffer to ensure the ADB forward socket is fully open
     await new Promise(r => setTimeout(r, 200));
 
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting video socket...`);
@@ -438,11 +443,11 @@ class ScrcpyEngine extends EventEmitter {
 
     await new Promise(r => setTimeout(r, 150));
 
-    // tunnel_forward socket 2 = audio stream (when audio=true)
-    if (this.enableAudio) {
+    // tunnel_forward socket 2 = audio stream (when audio=true and audio is supported)
+    if (this.enableAudio && !this._audioDisabled) {
       try {
         logger.info(`[ScrcpyEngine ${this.serial}] Connecting audio socket...`);
-        this.audioSocket = await this._connectOne(this.videoPort);
+        this.audioSocket = await this._connectOne(this.videoPort, 15);
         this.audioSocket.setNoDelay(true);
         this._pipeAudioToClients(this.audioSocket);
         await new Promise(r => setTimeout(r, 150));
@@ -451,9 +456,9 @@ class ScrcpyEngine extends EventEmitter {
       }
     }
 
-    // tunnel_forward socket 3 = control socket
+    // tunnel_forward socket (last) = control socket
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting control socket...`);
-    this.controlSocket = await this._connectOne(this.videoPort);
+    this.controlSocket = await this._connectOne(this.videoPort, 25);
     this.controlSocket.setNoDelay(true);
     this.controlSocket.setKeepAlive(true, 1000);
 
