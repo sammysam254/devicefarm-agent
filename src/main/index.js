@@ -25,6 +25,11 @@ if (!gotLock) {
   process.exit(0);
 }
 
+app.on('second-instance', () => {
+  logger.info('[SingleInstance] Second instance launch requested — opening dashboard.');
+  try { openInChrome(getDashboardUrl()); } catch (_) {}
+});
+
 // ──────────────────────────────────────────────────────────
 //  Globals
 // ──────────────────────────────────────────────────────────
