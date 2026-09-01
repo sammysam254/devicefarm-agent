@@ -317,8 +317,8 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=3500000',
-      'max_size=720',
+      'video_bit_rate=8000000',   // 8 Mbps: Crystal clear 1080p Full HD streaming
+      'max_size=1080',            // 1080p Full HD resolution
       'max_fps=60',
       'video_codec_options=i-frame-interval=2',
       'send_frame_meta=true',
