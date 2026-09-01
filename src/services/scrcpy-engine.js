@@ -481,31 +481,13 @@ class ScrcpyEngine extends EventEmitter {
    * Zero-copy buffer slicing & minimal latency stream pipeline.
    */
   _pipeVideoToClients(socket) {
-    // Use a dynamic growing buffer instead of Buffer.concat on every chunk.
-    // This eliminates per-chunk heap allocation and GC pressure that caused micro-stutters.
-    let bufParts = [];
-    let bufTotal  = 0;
-    let buf       = Buffer.alloc(0); // merged lazily only when needed
+    let buf = Buffer.alloc(0);
     let headerDone = false;
     let lastDataTime = Date.now();
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
 
-    // Flush the part-list into a single contiguous buffer when we need random access
-    const flush = () => {
-      if (bufParts.length > 1) {
-        buf = Buffer.concat(bufParts, bufTotal);
-        bufParts = [buf];
-      } else if (bufParts.length === 1) {
-        buf = bufParts[0];
-      } else {
-        buf = Buffer.alloc(0);
-      }
-    };
-
     const watchdog = setInterval(() => {
-      // If the video socket has silently gone away, the proc-exit handler will
-      // schedule a scrcpy restart automatically. Nothing to do here except log.
       if ((!this.videoSocket || this.videoSocket.destroyed) && this.isRunning) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Video socket gone — waiting for scrcpy restart cycle`);
       }
@@ -513,13 +495,11 @@ class ScrcpyEngine extends EventEmitter {
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
-      bufParts.push(chunk);
-      bufTotal += chunk.length;
+      buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
 
       // 1. Skip the device-info header exactly once & parse real video stream size
       if (!headerDone) {
-        if (bufTotal < DEVICE_HEADER_LEN) return;
-        flush();
+        if (buf.length < DEVICE_HEADER_LEN) return;
 
         try {
           // scrcpy 2.4 video socket header layout (77 bytes total):
@@ -548,14 +528,12 @@ class ScrcpyEngine extends EventEmitter {
         } else {
           buf = buf.subarray(DEVICE_HEADER_LEN);
         }
-        bufParts = [buf]; bufTotal = buf.length;
 
         logger.info(`[ScrcpyEngine ${this.serial}] Device-info header consumed, stream parsing started`);
         headerDone = true;
       }
 
-      // 2. Process video frame packets — flush to contiguous buffer for readUInt32BE
-      if (bufParts.length > 1) flush();
+      // 2. Process video frame packets
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
         if (buf.length < META + pktSize) break;
@@ -563,31 +541,26 @@ class ScrcpyEngine extends EventEmitter {
         const ptsHigh  = buf.readUInt32BE(0);
         const payload  = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);
-        bufParts = [buf]; bufTotal = buf.length;
 
         const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
         const isSps = hasSpsNal(payload);
         const isIdr = nalType === 5;
         const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
-        const isKeyframe = isConfig || isIdr || isSps;
 
         if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
           logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
 
           // Parse width/height from SPS NAL — the most authoritative source.
-          // If parsing fails, keep the dimensions we already have.
           try {
             const spsW = parseSpsWidth(payload);
             const spsH = parseSpsHeight(payload);
             if (spsW > 16 && spsH > 16 && spsW < 10000 && spsH < 10000) {
               if (this.videoWidth !== spsW || this.videoHeight !== spsH) {
-                logger.info(`[ScrcpyEngine ${this.serial}] SPS resolution: ${spsW}x${spsH} (previously ${this.videoWidth}x${this.videoHeight})`);
+                logger.info(`[ScrcpyEngine ${this.serial}] SPS resolution: ${spsW}x${spsH}`);
               }
               this.videoWidth  = spsW;
               this.videoHeight = spsH;
-            } else {
-              logger.warn(`[ScrcpyEngine ${this.serial}] SPS parse gave invalid dims ${spsW}x${spsH}, keeping ${this.videoWidth}x${this.videoHeight}`);
             }
           } catch (err) {
             logger.warn(`[ScrcpyEngine ${this.serial}] SPS parse error: ${err.message}`);
@@ -606,9 +579,9 @@ class ScrcpyEngine extends EventEmitter {
       }
 
       // Safety reset
-      if (bufTotal > 1024 * 1024) {
+      if (buf.length > 1024 * 1024) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow — resetting`);
-        buf = Buffer.alloc(0); bufParts = []; bufTotal = 0;
+        buf = Buffer.alloc(0);
       }
     });
 
