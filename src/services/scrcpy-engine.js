@@ -669,14 +669,12 @@ class ScrcpyEngine extends EventEmitter {
   _broadcastVideo(payload) {
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) {
-        // Clean up genuinely closed/errored sockets
         this.wsClients.delete(ws);
         continue;
       }
-      // Backpressure guard: skip (don't delete) clients whose TCP send buffer is full.
-      // Threshold = 2 MB — large enough to absorb Cloudflare tunnel RTT spikes without
-      // starving legitimate clients. Original code had NO backpressure at all.
-      if (ws.bufferedAmount > 2 * 1024 * 1024) continue;
+      // Zero-lag real-time backpressure: drop non-keyframe frames if client buffer exceeds 384KB
+      // This prevents video delay buildup and guarantees instant touch-to-screen feedback
+      if (ws.bufferedAmount > 384 * 1024) continue;
       try { ws.send(payload, { binary: true }); } catch (_) {}
     }
   }

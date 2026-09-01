@@ -75,7 +75,7 @@ const _inProgress = new Set();
  * @param {Function} onDeviceRemove – same handler as adb-tracker's handleDeviceRemove
  * @param {number} intervalMs      – polling interval, default 12000ms
  */
-function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 12000) {
+function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 30000) {
   _addDeviceCallback = onDeviceAdd;
   _removeDeviceCallback = onDeviceRemove;
 

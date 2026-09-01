@@ -768,12 +768,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Pointer & Drag Control (Smooth Human Motion & Zero Shaking) ───────────
+  // ── Pointer & Drag Control (Ultra-Low Latency 60/120Hz Hardware Sync) ──
   let down = false;
   let activePointerId = null;
   let downStartTime = 0;
   let downCoords = null;
   let hasMoved = false;
+  let pendingMoveCoords = null;
+  let moveRafId = null;
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -785,7 +787,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const c = coords(e);
     downCoords = c;
     hasMoved = false;
-    // Human touch down pressure (0.42)
+    pendingMoveCoords = null;
+    // Human touch down pressure (0.42) — sent immediately with zero delay
     send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.42 });
   });
 
@@ -798,13 +801,24 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const dy = Math.abs(c.y - downCoords.y);
       if (dx > 3 || dy > 3) hasMoved = true;
     }
-    // Dynamic human touch drag pressure (0.65)
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.65 });
+    pendingMoveCoords = c;
+    if (!moveRafId) {
+      moveRafId = requestAnimationFrame(() => {
+        moveRafId = null;
+        if (down && pendingMoveCoords) {
+          send({ type:'touch', action:2, x:pendingMoveCoords.x, y:pendingMoveCoords.y, width:nativeW, height:nativeH, pressure:0.65 });
+        }
+      });
+    }
   });
 
   function releasePointer(e) {
     if (!down) return;
     down = false;
+    if (moveRafId) {
+      cancelAnimationFrame(moveRafId);
+      moveRafId = null;
+    }
     if (activePointerId !== null) {
       try { canvas.releasePointerCapture(activePointerId); } catch (_) {}
       activePointerId = null;
@@ -1242,6 +1256,7 @@ async function startStreamServer(serial, port) {
       return;
     }
 
+    try { req.socket.setNoDelay(true); } catch (_) {}
     logger.info(`[StreamServer] WS connected for ${serial}`);
     engine.addClient(ws);
 
