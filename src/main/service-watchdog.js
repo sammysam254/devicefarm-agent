@@ -30,6 +30,9 @@ lockServer.listen(WATCHDOG_LOCK_PORT, '127.0.0.1', () => {
   startWatchdog();
 });
 
+// Ensure watchdog event loop stays active indefinitely
+const keepAliveTimer = setInterval(() => {}, 60000);
+
 const rootDir = path.resolve(__dirname, '..', '..');
 let activeChild = null;
 let restartCount = 0;
