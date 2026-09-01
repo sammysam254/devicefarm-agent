@@ -63,17 +63,25 @@ const fileRotateTransport = new winston.transports.DailyRotateFile({
   zippedArchive: false,
 });
 
-const consoleTransport = new winston.transports.Console({
-  format: winston.format.combine(
-    winston.format.colorize(),
-    winston.format.printf(({ timestamp, level, message, ...meta }) => {
-      // Clean ASCII string sanitize for Windows CMD / PowerShell compatibility
-      const cleanMessage = sanitizeMessage(String(message)).replace(/[^\x00-\x7F]/g, '');
-      const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
-      return `${timestamp} [${level}] ${cleanMessage}${metaStr}`;
-    }),
-  ),
-});
+const transports = [fileRotateTransport];
+
+// Only add console transport if stdout is a valid writable stream
+if (process.stdout && typeof process.stdout.write === 'function') {
+  try {
+    const consoleTransport = new winston.transports.Console({
+      handleExceptions: false,
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.printf(({ timestamp, level, message, ...meta }) => {
+          const cleanMessage = sanitizeMessage(String(message)).replace(/[^\x00-\x7F]/g, '');
+          const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+          return `${timestamp} [${level}] ${cleanMessage}${metaStr}`;
+        }),
+      ),
+    });
+    transports.push(consoleTransport);
+  } catch (_) {}
+}
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -81,7 +89,6 @@ const logger = winston.createLogger({
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
     winston.format.errors({ stack: true }),
     winston.format.printf(({ timestamp, level, message, ...meta }) => {
-      // Sanitize message before formatting to JSON
       const sanitized = sanitizeMessage(String(message));
       return JSON.stringify({
         timestamp,
@@ -92,7 +99,7 @@ const logger = winston.createLogger({
     }),
   ),
   defaultMeta: { service: 'device-agent' },
-  transports: [consoleTransport, fileRotateTransport],
+  transports,
 });
 
 process.on('unhandledRejection', (reason) => {
