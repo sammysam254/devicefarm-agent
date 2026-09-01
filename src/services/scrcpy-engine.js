@@ -317,8 +317,8 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=8000000',   // 8 Mbps: Crystal clear 1080p Full HD streaming
-      'max_size=1080',            // 1080p Full HD resolution
+      'max_size=0',               // 0 = 100% RAW native display resolution (1:1 direct pixel mirror)
+      'video_bit_rate=12000000',  // 12 Mbps uncompressed raw fidelity
       'max_fps=60',
       'video_codec_options=i-frame-interval=2',
       'send_frame_meta=true',
@@ -666,47 +666,6 @@ class ScrcpyEngine extends EventEmitter {
     });
   }
 
-  // ── Per-client send queue (task #4) ──────────────────────────────────────
-  // Bounded FIFO per WS client; old frames are dropped when the queue is full.
-  // This decouples the scrcpy read loop from slow WS writes and prevents memory
-  // bloat while keeping the stream as fresh as possible.
-  _getClientQueue(ws) {
-    if (!ws._sendQueue) {
-      ws._sendQueue = [];
-      ws._sendBusy  = false;
-    }
-    return ws._sendQueue;
-  }
-
-  _drainQueue(ws) {
-    if (ws._sendBusy || !ws._sendQueue || ws._sendQueue.length === 0) return;
-    if (ws.readyState !== 1) { ws._sendQueue = []; return; }
-    ws._sendBusy = true;
-    const frame = ws._sendQueue.shift();
-    try {
-      ws.send(frame, { binary: true }, () => {
-        ws._sendBusy = false;
-        // Yield to the event loop between frames so input messages aren't starved
-        setImmediate(() => this._drainQueue(ws));
-      });
-    } catch (_) {
-      ws._sendBusy = false;
-      ws._sendQueue = [];
-    }
-  }
-
-  _enqueueFrame(ws, frame, isAudio) {
-    const q = this._getClientQueue(ws);
-    // Hard limit: audio queue 8 packets, video queue 4 frames
-    const maxQ = isAudio ? 8 : 4;
-    if (q.length >= maxQ) {
-      q.shift(); // drop oldest
-      if (!isAudio) this._frameDropCount = (this._frameDropCount || 0) + 1;
-    }
-    q.push(frame);
-    this._drainQueue(ws);
-  }
-
   _broadcastAudio(payload) {
     // Frame layout: [0x41][codec_byte][...payload]
     // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
@@ -717,42 +676,18 @@ class ScrcpyEngine extends EventEmitter {
     payload.copy(audioFrame, 2);
 
     for (const ws of this.wsClients) {
-      // Task #3: tighter audio backpressure — 64 KB instead of 128 KB
-      if (ws.readyState !== 1 || ws.bufferedAmount > 64 * 1024) continue;
-      this._enqueueFrame(ws, audioFrame, true);
+      if (ws.readyState === 1) {
+        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
+      }
     }
   }
 
   _broadcastVideo(payload) {
-    const isKeyframe = payload.length > 4 && ((payload[4] & 0x1f) === 5 || hasSpsNal(payload));
-
     for (const ws of this.wsClients) {
-      if (ws.readyState !== 1) {
+      if (ws.readyState === 1) {
+        try { ws.send(payload, { binary: true }); } catch (_) {}
+      } else {
         this.wsClients.delete(ws);
-        continue;
-      }
-
-      // Task #3 & #10: aggressive backpressure — drop non-keyframes if client buffer > 192 KB.
-      // For keyframes (IDR / SPS/PPS) always try to send so the decoder can resync.
-      const threshold = isKeyframe ? 512 * 1024 : 192 * 1024;
-      if (ws.bufferedAmount > threshold) {
-        if (!isKeyframe) this._frameDropCount = (this._frameDropCount || 0) + 1;
-        continue;
-      }
-
-      this._enqueueFrame(ws, payload, false);
-    }
-
-    // Task #10: adaptive IDR hint — if we've dropped ≥30 frames since last check, request keyframe
-    this._frameDropCount = this._frameDropCount || 0;
-    this._lastDropCheck  = this._lastDropCheck  || Date.now();
-    if (this._frameDropCount >= 30) {
-      const now = Date.now();
-      if (now - this._lastDropCheck > 1000) { // at most once per second
-        logger.warn(`[ScrcpyEngine ${this.serial}] Frame drop spike (${this._frameDropCount} drops) — requesting IDR keyframe`);
-        this._requestIdrKeyframe();
-        this._frameDropCount = 0;
-        this._lastDropCheck  = now;
       }
     }
   }
