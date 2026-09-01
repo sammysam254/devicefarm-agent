@@ -62,6 +62,7 @@ function startAgent() {
       detached: true,
       env: { ...process.env, BACKGROUND_SERVICE: '1' }
     });
+    try { activeChild.unref(); } catch (_) {}
 
     activeChild.on('error', () => {
       scheduleRestart();
