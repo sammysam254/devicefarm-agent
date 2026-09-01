@@ -48,7 +48,7 @@ echo [*] Stopping previous DeviceFarm Agent processes (scoped to agent directory
   "  $isWatchdog = ($p.Name -like 'node*' -and $p.CommandLine -and ($p.CommandLine.IndexOf('service-watchdog.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $p.CommandLine.IndexOf('DeviceFarm', [System.StringComparison]::OrdinalIgnoreCase) -ge 0));" ^
   "  return (($matchDir -or $isWatchdog) -and ($p.Name -match '^(electron|node|cloudflared|scrcpy|adb|DeviceFarm Agent)\.exe$'))" ^
   "} | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul 2>nul
 
 
 
@@ -162,112 +162,118 @@ echo.
 echo [4/6] Setting up agent files...
 echo.
 
-if exist "%INSTALL_DIR%\.git" (
-    echo [*] Agent directory exists ^| Pulling latest changes from GitHub...
-    echo.
+if exist "%INSTALL_DIR%\.git" goto do_pull
+goto do_clone
 
-    :: ── Live progress bar + commit log. Git stderr progress is suppressed
-    :: ── (it always goes to stderr, not stdout, and confuses PowerShell).
-    :: ── On real failure we re-run the command to capture and print the error.
-    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "Write-Progress -Activity 'DeviceFarm Agent Update' -Status 'Fetching remote changes from GitHub...' -PercentComplete 10;" ^
-        "& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>$null;" ^
-        "$fetchCode = $LASTEXITCODE;" ^
-        "if ($fetchCode -ne 0) {" ^
-        "  Write-Progress -Activity 'DeviceFarm Agent Update' -Completed;" ^
-        "  Write-Host '';" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  Write-Host ' [ERROR] git fetch FAILED (exit code ' + $fetchCode + ')' -ForegroundColor Red;" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  $errOut = (& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>&1) | Out-String;" ^
-        "  Write-Host $errOut -ForegroundColor Red;" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  exit 1" ^
-        "};" ^
-        "Write-Progress -Activity 'DeviceFarm Agent Update' -Status 'Resetting working tree to origin/main...' -PercentComplete 55;" ^
-        "& '%GIT%' -C '%INSTALL_DIR%' reset --hard origin/main 2>$null;" ^
-        "$resetCode = $LASTEXITCODE;" ^
-        "if ($resetCode -ne 0) {" ^
-        "  Write-Progress -Activity 'DeviceFarm Agent Update' -Completed;" ^
-        "  Write-Host '';" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  Write-Host ' [ERROR] git reset FAILED (exit code ' + $resetCode + ')' -ForegroundColor Red;" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  $errOut = (& '%GIT%' -C '%INSTALL_DIR%' reset --hard origin/main 2>&1) | Out-String;" ^
-        "  Write-Host $errOut -ForegroundColor Red;" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  exit 1" ^
-        "};" ^
-        "Write-Progress -Activity 'DeviceFarm Agent Update' -Status 'Reading latest commit information...' -PercentComplete 90;" ^
-        "$hash   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>$null) -join '';" ^
-        "$short  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>$null) -join '';" ^
-        "$msg    = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>$null) -join '';" ^
-        "$author = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%an' 2>$null) -join '';" ^
-        "$date   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%ci' 2>$null) -join '';" ^
-        "Write-Progress -Activity 'DeviceFarm Agent Update' -Completed;" ^
-        "Write-Host '';" ^
-        "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
-        "Write-Host '   LATEST COMMIT PULLED SUCCESSFULLY' -ForegroundColor Green;" ^
-        "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
-        "Write-Host ('  Commit  : ' + $hash)   -ForegroundColor White;" ^
-        "Write-Host ('  Short   : ' + $short)  -ForegroundColor Yellow;" ^
-        "Write-Host ('  Message : ' + $msg)    -ForegroundColor White;" ^
-        "Write-Host ('  Author  : ' + $author) -ForegroundColor White;" ^
-        "Write-Host ('  Date    : ' + $date)   -ForegroundColor White;" ^
-        "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
-        "Write-Host '';"
-    if !errorlevel! neq 0 (
-        echo.
-        echo [ERROR] Git update failed — see error output above.
-        echo         Check your internet connection and try again.
-        pause & exit /b 1
-    )
-) else (
-    echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
-    echo.
+:do_pull
+echo [*] Agent directory exists ^| Pulling latest changes from GitHub...
+echo.
 
-    :: ── Clone with progress bar + commit log. Suppress stderr progress chatter.
-    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "Write-Progress -Activity 'DeviceFarm Agent Setup' -Status 'Cloning repository (shallow clone for speed)...' -PercentComplete 5;" ^
-        "& '%GIT%' clone --depth 1 --single-branch --branch main '%REPO_URL%' '%INSTALL_DIR%' 2>$null;" ^
-        "$cloneCode = $LASTEXITCODE;" ^
-        "if ($cloneCode -ne 0) {" ^
-        "  Write-Progress -Activity 'DeviceFarm Agent Setup' -Completed;" ^
-        "  Write-Host '';" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  Write-Host ' [ERROR] git clone FAILED (exit code ' + $cloneCode + ')' -ForegroundColor Red;" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  $errOut = (& '%GIT%' clone --depth 1 --single-branch --branch main '%REPO_URL%' '%INSTALL_DIR%' 2>&1) | Out-String;" ^
-        "  Write-Host $errOut -ForegroundColor Red;" ^
-        "  Write-Host '================================================================' -ForegroundColor Red;" ^
-        "  exit 1" ^
-        "};" ^
-        "Write-Progress -Activity 'DeviceFarm Agent Setup' -Status 'Reading latest commit information...' -PercentComplete 90;" ^
-        "$hash   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>$null) -join '';" ^
-        "$short  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>$null) -join '';" ^
-        "$msg    = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>$null) -join '';" ^
-        "$author = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%an' 2>$null) -join '';" ^
-        "$date   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%ci' 2>$null) -join '';" ^
-        "Write-Progress -Activity 'DeviceFarm Agent Setup' -Completed;" ^
-        "Write-Host '';" ^
-        "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
-        "Write-Host '   REPOSITORY CLONED SUCCESSFULLY' -ForegroundColor Green;" ^
-        "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
-        "Write-Host ('  Commit  : ' + $hash)   -ForegroundColor White;" ^
-        "Write-Host ('  Short   : ' + $short)  -ForegroundColor Yellow;" ^
-        "Write-Host ('  Message : ' + $msg)    -ForegroundColor White;" ^
-        "Write-Host ('  Author  : ' + $author) -ForegroundColor White;" ^
-        "Write-Host ('  Date    : ' + $date)   -ForegroundColor White;" ^
-        "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
-        "Write-Host '';"
-    if !errorlevel! neq 0 (
-        echo.
-        echo [ERROR] Git clone failed — see error output above.
-        echo         Check your internet connection and try again.
-        pause & exit /b 1
-    )
-    echo [OK] Agent cloned successfully.
+:: ── Live progress bar + commit log. Git stderr progress is suppressed
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "Write-Progress -Activity 'DeviceFarm Agent Update' -Status 'Fetching remote changes from GitHub...' -PercentComplete 10;" ^
+    "& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>$null;" ^
+    "$fetchCode = $LASTEXITCODE;" ^
+    "if ($fetchCode -ne 0) {" ^
+    "  Write-Progress -Activity 'DeviceFarm Agent Update' -Completed;" ^
+    "  Write-Host '';" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  Write-Host ' [ERROR] git fetch FAILED (exit code ' + $fetchCode + ')' -ForegroundColor Red;" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  $errOut = (& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>&1) | Out-String;" ^
+    "  Write-Host $errOut -ForegroundColor Red;" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  exit 1" ^
+    "};" ^
+    "Write-Progress -Activity 'DeviceFarm Agent Update' -Status 'Resetting working tree to origin/main...' -PercentComplete 55;" ^
+    "& '%GIT%' -C '%INSTALL_DIR%' reset --hard origin/main 2>$null;" ^
+    "$resetCode = $LASTEXITCODE;" ^
+    "if ($resetCode -ne 0) {" ^
+    "  Write-Progress -Activity 'DeviceFarm Agent Update' -Completed;" ^
+    "  Write-Host '';" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  Write-Host ' [ERROR] git reset FAILED (exit code ' + $resetCode + ')' -ForegroundColor Red;" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  $errOut = (& '%GIT%' -C '%INSTALL_DIR%' reset --hard origin/main 2>&1) | Out-String;" ^
+    "  Write-Host $errOut -ForegroundColor Red;" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  exit 1" ^
+    "};" ^
+    "Write-Progress -Activity 'DeviceFarm Agent Update' -Status 'Reading latest commit information...' -PercentComplete 90;" ^
+    "$hash   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>$null) -join '';" ^
+    "$short  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>$null) -join '';" ^
+    "$msg    = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>$null) -join '';" ^
+    "$author = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%an' 2>$null) -join '';" ^
+    "$date   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%ci' 2>$null) -join '';" ^
+    "Write-Progress -Activity 'DeviceFarm Agent Update' -Completed;" ^
+    "Write-Host '';" ^
+    "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
+    "Write-Host '   LATEST COMMIT PULLED SUCCESSFULLY' -ForegroundColor Green;" ^
+    "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
+    "Write-Host ('  Commit  : ' + $hash)   -ForegroundColor White;" ^
+    "Write-Host ('  Short   : ' + $short)  -ForegroundColor Yellow;" ^
+    "Write-Host ('  Message : ' + $msg)    -ForegroundColor White;" ^
+    "Write-Host ('  Author  : ' + $author) -ForegroundColor White;" ^
+    "Write-Host ('  Date    : ' + $date)   -ForegroundColor White;" ^
+    "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
+    "Write-Host '';"
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Git update failed — see error output above.
+    echo         Check your internet connection and try again.
+    pause & exit /b 1
 )
+goto done_git_step
+
+:do_clone
+echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
+echo.
+
+:: ── Clone with progress bar + commit log. Suppress stderr progress chatter.
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "Write-Progress -Activity 'DeviceFarm Agent Setup' -Status 'Cloning repository (shallow clone for speed)...' -PercentComplete 5;" ^
+    "& '%GIT%' clone --depth 1 --single-branch --branch main '%REPO_URL%' '%INSTALL_DIR%' 2>$null;" ^
+    "$cloneCode = $LASTEXITCODE;" ^
+    "if ($cloneCode -ne 0) {" ^
+    "  Write-Progress -Activity 'DeviceFarm Agent Setup' -Completed;" ^
+    "  Write-Host '';" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  Write-Host ' [ERROR] git clone FAILED (exit code ' + $cloneCode + ')' -ForegroundColor Red;" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  $errOut = (& '%GIT%' clone --depth 1 --single-branch --branch main '%REPO_URL%' '%INSTALL_DIR%' 2>&1) | Out-String;" ^
+    "  Write-Host $errOut -ForegroundColor Red;" ^
+    "  Write-Host '================================================================' -ForegroundColor Red;" ^
+    "  exit 1" ^
+    "};" ^
+    "Write-Progress -Activity 'DeviceFarm Agent Setup' -Status 'Reading latest commit information...' -PercentComplete 90;" ^
+    "$hash   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>$null) -join '';" ^
+    "$short  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>$null) -join '';" ^
+    "$msg    = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>$null) -join '';" ^
+    "$author = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%an' 2>$null) -join '';" ^
+    "$date   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%ci' 2>$null) -join '';" ^
+    "Write-Progress -Activity 'DeviceFarm Agent Setup' -Completed;" ^
+    "Write-Host '';" ^
+    "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
+    "Write-Host '   REPOSITORY CLONED SUCCESSFULLY' -ForegroundColor Green;" ^
+    "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
+    "Write-Host ('  Commit  : ' + $hash)   -ForegroundColor White;" ^
+    "Write-Host ('  Short   : ' + $short)  -ForegroundColor Yellow;" ^
+    "Write-Host ('  Message : ' + $msg)    -ForegroundColor White;" ^
+    "Write-Host ('  Author  : ' + $author) -ForegroundColor White;" ^
+    "Write-Host ('  Date    : ' + $date)   -ForegroundColor White;" ^
+    "Write-Host '  ===========================================================' -ForegroundColor Cyan;" ^
+    "Write-Host '';"
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Git clone failed — see error output above.
+    echo         Check your internet connection and try again.
+    pause & exit /b 1
+)
+echo [OK] Agent cloned successfully.
+
+:done_git_step
 
 :: Switch working directory to the install dir for all remaining steps
 cd /d "%INSTALL_DIR%"
@@ -521,32 +527,40 @@ set "LNK_ALL=%STARTUP_ALL%\DeviceFarm-Agent-Service.lnk"
 echo [OK] Windows 24/7 background service registered.
 
 :: Start service silently right now in the background
-echo [*] Starting DeviceFarm Agent silently in the background...
+echo [*] Starting DeviceFarm Agent in the background...
 if exist "%VBS_LAUNCHER%" (
     wscript.exe "%VBS_LAUNCHER%"
 ) else (
     set "ELECTRON_BIN=node_modules\electron\dist\electron.exe"
-    if exist "%ELECTRON_BIN%" (
-        start "" "%INSTALL_DIR%\%ELECTRON_BIN%" "%INSTALL_DIR%\src\main\index.js"
+    if exist "!ELECTRON_BIN!" (
+        start "" "%INSTALL_DIR%\!ELECTRON_BIN!" "%INSTALL_DIR%\src\main\index.js" --hidden
     ) else (
-        start "" "%NPM%" exec -- electron "%INSTALL_DIR%"
+        start "" "%NPM%" exec -- electron "%INSTALL_DIR%" --hidden
     )
 )
 
-echo [*] Waiting for Dashboard...
-ping 127.0.0.1 -n 4 >nul 2>nul
-start "" "http://localhost:7400"
+echo [*] Waiting for Dashboard server to initialize on port 7400...
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ready = $false;" ^
+    "for ($i = 0; $i -lt 12; $i++) {" ^
+    "  Start-Sleep -Seconds 1;" ^
+    "  try {" ^
+    "    $r = Invoke-WebRequest -Uri 'http://localhost:7400/api/devices' -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop;" ^
+    "    if ($r.StatusCode -eq 200) { $ready = $true; break }" ^
+    "  } catch {}" ^
+    "};" ^
+    "Start-Process 'http://localhost:7400'"
 
 :end_launch
 
 echo.
 echo  ================================================================
-echo  [OK] DeviceFarm Agent is running continuously in the background!
-echo       Dashboard : http://localhost:7400
-echo       Install   : %INSTALL_DIR%
-echo       Status    : Active 24/7 Background Service (Auto-starts on Boot)
+echo   [OK] DeviceFarm Agent is running continuously in the background
+echo        Dashboard : http://localhost:7400
+echo        Install   : %INSTALL_DIR%
+echo        Status    : Active 24/7 Background Service (Auto-starts on Boot)
 echo  ================================================================
 echo.
-echo  Setup complete. This window will close automatically.
+echo   Setup complete. This window will close automatically.
 ping 127.0.0.1 -n 3 >nul 2>nul
 exit /b 0
