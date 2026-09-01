@@ -294,7 +294,21 @@ app.whenReady().then(async () => {
     logger.warn('Tray icon init warning:', e.message);
   }
 
-  await adbTracker.startTracking();
+  // Start Dashboard server immediately so dashboard is instantly accessible
+  try {
+    const { url } = await startDashboardServer(7400);
+    const isHidden = process.argv.includes('--hidden') || process.env.BACKGROUND_SERVICE === '1';
+    if (!isHidden) {
+      openInChrome(url);
+    } else {
+      logger.info(`DeviceFarm Agent running silently in background. Dashboard accessible at ${url}`);
+    }
+  } catch (err) {
+    logger.error('Failed to start Dashboard server', { error: err.message });
+  }
+
+  // Start device tracking, cloud heartbeat, and sync
+  adbTracker.startTracking().catch(err => logger.error('ADB tracker error:', err));
   apiClient.startHeartbeat(() => processManager.getActiveSerials());
   autoSync.startAutoSync(30 * 60 * 1000);
   startTrayRefreshInterval();
@@ -316,26 +330,12 @@ app.whenReady().then(async () => {
 
   // Initialize Wake-on-LAN listener
   try {
-    const cfg = require('../services/binding-service');
     const supabaseUrl = process.env.SUPABASE_URL || 'https://vrmzfgfxrycbrtqfygit.supabase.co';
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
     if (supabaseUrl && supabaseKey) {
       wolService.startWolRemoteListener(supabaseUrl, supabaseKey);
     }
   } catch (e) {}
-
-  try {
-    const { url } = await startDashboardServer(7400);
-    // Only open Chrome window if NOT running in hidden / background service mode
-    const isHidden = process.argv.includes('--hidden') || process.env.BACKGROUND_SERVICE === '1';
-    if (!isHidden) {
-      openInChrome(url);
-    } else {
-      logger.info(`DeviceFarm Agent running silently in background. Dashboard accessible at ${url}`);
-    }
-  } catch (err) {
-    logger.error('Failed to start Dashboard server', { error: err.message });
-  }
 
   setTimeout(() => refreshTrayMenu(), 3000);
   logger.info('DeviceFarm Agent is fully operational');
