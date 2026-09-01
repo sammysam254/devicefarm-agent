@@ -566,14 +566,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let wsRetryTimer = null;
   let lastFrameReceivedTime = 0;
 
-  // Fallback watchdog: only fires if WS is connected but no frames arrive for >15s.
-  // 15s gives scrcpy time to start up before we fall back to HTTP screencap.
+  // Watchdog: if WS is connected but no frames arrive for >15s, reconnect the stream.
   setInterval(function() {
     if (!wsOk) return;
     if (lastFrameReceivedTime === 0) return;
-    if (Date.now() - lastFrameReceivedTime > 15000 && !fbRunning) {
-      console.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
-      startFallback();
+    if (Date.now() - lastFrameReceivedTime > 15000) {
+      console.warn('[Watchdog] No frames for 15s — reconnecting stream');
+      reconnectStream();
     }
   }, 1000);
 

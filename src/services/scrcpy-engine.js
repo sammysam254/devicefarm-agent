@@ -289,8 +289,8 @@ class ScrcpyEngine extends EventEmitter {
       logger.info(`[ScrcpyEngine ${this.serial}] High-speed 60FPS Scrcpy H264 engine active`);
 
     } catch (err) {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — falling back to screenrecord stream`);
-      this._startScreenrecordFallback();
+      logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — will retry in 3s`);
+      setTimeout(() => { if (this.isRunning) this._restart(); }, 3000);
     }
   }
 
@@ -380,68 +380,23 @@ class ScrcpyEngine extends EventEmitter {
 
       this._cleanup();
 
-      // Only restart if we weren't already in fallback mode
-      if (!this._fallbackActive) {
+      // Always restart scrcpy — no screenrecord fallback.
+      // Back off longer if it died quickly (likely a startup error).
+      if (!this._restartPending) {
         this._restartPending = true;
-        // Back off longer if it died quickly (likely a startup error)
         const delay = uptime < 3000 ? 4000 : 1500;
-        logger.info(`[ScrcpyEngine ${this.serial}] Restarting in ${delay}ms...`);
+        logger.info(`[ScrcpyEngine ${this.serial}] Restarting scrcpy in ${delay}ms...`);
         setTimeout(() => {
           this._restartPending = false;
-          if (this.isRunning && !this._fallbackActive) this._restart();
+          if (this.isRunning) this._restart();
         }, delay);
       }
     });
   }
 
-  _startScreenrecordFallback() {
-    if (this._fallbackActive) return;
-    this._fallbackActive = true;
-    logger.info(`[ScrcpyEngine ${this.serial}] Starting hardware screenrecord fallback...`);
-
-    const args = [
-      '-s', this.serial, 'exec-out',
-      'screenrecord',
-      '--output-format=h264',
-      '--size', '480x854',   // 480p portrait — matches primary stream resolution
-      '--bit-rate', '1500000',
-      '-'
-    ];
-
-    const proc = spawn(ADB_BIN, args, {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-
-    this._fallbackProc = proc;
-
-    proc.stdout.on('data', (chunk) => {
-      this._broadcastVideo(chunk, false);
-    });
-
-    proc.on('close', () => {
-      this._fallbackProc = null;
-      if (this.isRunning && this._fallbackActive) {
-        setTimeout(() => {
-          this._fallbackActive = false;
-          if (this.isRunning) this._startScreenrecordFallback();
-        }, 1000);
-      }
-    });
-
-    proc.on('error', (err) => {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Screenrecord process error: ${err.message}`);
-    });
-  }
 
   stop() {
     this.isRunning = false;
-    this._screencapActive = false;
-    this._fallbackActive = false;
-    if (this._fallbackProc) {
-      try { this._fallbackProc.kill(); } catch (_) {}
-      this._fallbackProc = null;
-    }
     this._cleanup();
     this.wsClients.clear();
     this.emit('stopped');
@@ -549,12 +504,12 @@ class ScrcpyEngine extends EventEmitter {
     };
 
     const watchdog = setInterval(() => {
-      // Only trigger fallback if video socket is destroyed or disconnected
-      if ((!this.videoSocket || this.videoSocket.destroyed) && !this._fallbackActive && this.isRunning) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Video socket disconnected — starting screenrecord fallback`);
-        this._startScreenrecordFallback();
+      // If the video socket has silently gone away, the proc-exit handler will
+      // schedule a scrcpy restart automatically. Nothing to do here except log.
+      if ((!this.videoSocket || this.videoSocket.destroyed) && this.isRunning) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Video socket gone — waiting for scrcpy restart cycle`);
       }
-    }, 2000);
+    }, 5000);
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
@@ -661,12 +616,7 @@ class ScrcpyEngine extends EventEmitter {
       clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
-      if (this.isRunning && !this._fallbackActive) {
-        // Notify all browsers to reset their decoders BEFORE we start a new stream.
-        // Without this the browser's WebCodecs decoder gets stale SPS/PPS and shows black.
-        this._resetStreamState();
-        this._startScreenrecordFallback();
-      }
+      // scrcpy proc-exit handler will schedule the restart automatically.
     });
 
     socket.on('error', (e) => {
@@ -741,10 +691,10 @@ class ScrcpyEngine extends EventEmitter {
         this.wsClients.delete(ws);
         continue;
       }
-      // Backpressure guard: skip (don't delete) slow clients whose send buffer is full.
-      // A slow client should not cause other clients or the encode pipeline to stall.
-      // 256 KB is ample for ~2 full 720p H264 frames at 2 Mbps.
-      if (ws.bufferedAmount > 256 * 1024) continue;
+      // Backpressure guard: skip (don't delete) clients whose TCP send buffer is full.
+      // Threshold = 2 MB — large enough to absorb Cloudflare tunnel RTT spikes without
+      // starving legitimate clients. Original code had NO backpressure at all.
+      if (ws.bufferedAmount > 2 * 1024 * 1024) continue;
       try { ws.send(payload, { binary: true }); } catch (_) {}
     }
   }
