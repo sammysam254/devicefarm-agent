@@ -307,7 +307,7 @@ function killTunnel(tunnelProcess) {
   if (typeof tunnelProcess.kill === 'function' && tunnelProcess.pid !== 'localtunnel' && tunnelProcess.exitCode === null) {
     try {
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/F', '/T', '/PID', String(tunnelProcess.pid)], { stdio: 'ignore', windowsHide: true });
+        spawn('taskkill', ['/F', '/PID', String(tunnelProcess.pid)], { stdio: 'ignore', windowsHide: true });
       } else {
         tunnelProcess.kill('SIGTERM');
       }
