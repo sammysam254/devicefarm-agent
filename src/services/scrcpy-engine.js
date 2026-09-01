@@ -225,15 +225,16 @@ class ScrcpyEngine extends EventEmitter {
    */
   addClient(ws) {
     this.wsClients.add(ws);
-    // Send cached SPS/PPS config & keyframe immediately so WebCodecs decodes in <10ms
-    if (this._configPacket && ws.readyState === 1) {
-      try { ws.send(this._configPacket, { binary: true }); } catch (_) {}
+    // Send exactly one bootstrap packet: the combined SPS/PPS+IDR keyframe if available,
+    // otherwise just the SPS/PPS config. Sending both separately causes duplicate-init
+    // errors in WebCodecs VideoDecoder which can leave the decoder in a broken state.
+    if (ws.readyState === 1) {
+      const bootstrap = this._keyframeBuffer || this._configPacket;
+      if (bootstrap) {
+        try { ws.send(bootstrap, { binary: true }); } catch (_) {}
+      }
     }
-    const initialPacket = this._keyframeBuffer || this._configPacket;
-    if (initialPacket && ws.readyState === 1) {
-      try { ws.send(initialPacket, { binary: true }); } catch (_) {}
-    }
-    // Nudge Android window compositor to immediately produce a fresh frame
+    // Nudge Android window compositor to immediately produce a fresh IDR keyframe
     try {
       this._adb(['shell', 'input', 'keyevent', '0']).catch(() => {});
     } catch (_) {}
@@ -312,9 +313,10 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=3000000',
+      'video_bit_rate=2000000',   // Reduced 3→2 Mbps: less buffering over Cloudflare tunnels
+      'max_size=480',             // 480p — lower bandwidth, faster decode, still crisp on phone screens
       'max_fps=60',
-      'video_codec_options=i-frame-interval=1',
+      'video_codec_options=i-frame-interval=2', // Keyframe every 2s (was 1s) — halves keyframe overhead
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=true',
@@ -356,8 +358,8 @@ class ScrcpyEngine extends EventEmitter {
         if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
       });
 
-      // Safety timeout — if no "Device:" within 5s, proceed anyway
-      setTimeout(done, 5000);
+      // Safety timeout — if no "Device:" within 8s, proceed anyway (slow devices need more time)
+      setTimeout(done, 8000);
     });
 
     this.serverProc.on('error', (e) => {
@@ -401,8 +403,8 @@ class ScrcpyEngine extends EventEmitter {
       '-s', this.serial, 'exec-out',
       'screenrecord',
       '--output-format=h264',
-      '--size', '720x1280',
-      '--bit-rate', '2500000',
+      '--size', '480x854',   // 480p portrait — matches primary stream resolution
+      '--bit-rate', '1500000',
       '-'
     ];
 
@@ -524,11 +526,27 @@ class ScrcpyEngine extends EventEmitter {
    * Zero-copy buffer slicing & minimal latency stream pipeline.
    */
   _pipeVideoToClients(socket) {
-    let buf = Buffer.alloc(0);
+    // Use a dynamic growing buffer instead of Buffer.concat on every chunk.
+    // This eliminates per-chunk heap allocation and GC pressure that caused micro-stutters.
+    let bufParts = [];
+    let bufTotal  = 0;
+    let buf       = Buffer.alloc(0); // merged lazily only when needed
     let headerDone = false;
     let lastDataTime = Date.now();
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
+
+    // Flush the part-list into a single contiguous buffer when we need random access
+    const flush = () => {
+      if (bufParts.length > 1) {
+        buf = Buffer.concat(bufParts, bufTotal);
+        bufParts = [buf];
+      } else if (bufParts.length === 1) {
+        buf = bufParts[0];
+      } else {
+        buf = Buffer.alloc(0);
+      }
+    };
 
     const watchdog = setInterval(() => {
       // Only trigger fallback if video socket is destroyed or disconnected
@@ -540,11 +558,13 @@ class ScrcpyEngine extends EventEmitter {
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
-      buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+      bufParts.push(chunk);
+      bufTotal += chunk.length;
 
       // 1. Skip the device-info header exactly once & parse real video stream size
       if (!headerDone) {
-        if (buf.length < DEVICE_HEADER_LEN) return;
+        if (bufTotal < DEVICE_HEADER_LEN) return;
+        flush();
 
         try {
           // scrcpy 2.4 video socket header layout (77 bytes total):
@@ -573,12 +593,14 @@ class ScrcpyEngine extends EventEmitter {
         } else {
           buf = buf.subarray(DEVICE_HEADER_LEN);
         }
+        bufParts = [buf]; bufTotal = buf.length;
 
         logger.info(`[ScrcpyEngine ${this.serial}] Device-info header consumed, stream parsing started`);
         headerDone = true;
       }
 
-      // 2. Process video frame packets zero-copy
+      // 2. Process video frame packets — flush to contiguous buffer for readUInt32BE
+      if (bufParts.length > 1) flush();
       while (buf.length >= META) {
         const pktSize = buf.readUInt32BE(8);
         if (buf.length < META + pktSize) break;
@@ -586,6 +608,7 @@ class ScrcpyEngine extends EventEmitter {
         const ptsHigh  = buf.readUInt32BE(0);
         const payload  = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);
+        bufParts = [buf]; bufTotal = buf.length;
 
         const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
         const isSps = hasSpsNal(payload);
@@ -628,9 +651,9 @@ class ScrcpyEngine extends EventEmitter {
       }
 
       // Safety reset
-      if (buf.length > 1024 * 1024) {
+      if (bufTotal > 1024 * 1024) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow — resetting`);
-        buf = Buffer.alloc(0);
+        buf = Buffer.alloc(0); bufParts = []; bufTotal = 0;
       }
     });
 
@@ -639,6 +662,9 @@ class ScrcpyEngine extends EventEmitter {
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
       if (this.isRunning && !this._fallbackActive) {
+        // Notify all browsers to reset their decoders BEFORE we start a new stream.
+        // Without this the browser's WebCodecs decoder gets stale SPS/PPS and shows black.
+        this._resetStreamState();
         this._startScreenrecordFallback();
       }
     });
@@ -710,11 +736,16 @@ class ScrcpyEngine extends EventEmitter {
 
   _broadcastVideo(payload) {
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
-      } else {
+      if (ws.readyState !== 1) {
+        // Clean up genuinely closed/errored sockets
         this.wsClients.delete(ws);
+        continue;
       }
+      // Backpressure guard: skip (don't delete) slow clients whose send buffer is full.
+      // A slow client should not cause other clients or the encode pipeline to stall.
+      // 256 KB is ample for ~2 full 720p H264 frames at 2 Mbps.
+      if (ws.bufferedAmount > 256 * 1024) continue;
+      try { ws.send(payload, { binary: true }); } catch (_) {}
     }
   }
 

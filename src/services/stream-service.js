@@ -522,14 +522,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
-          const h = frame.displayHeight || frame.codedHeight || frame.height;
-          if (w && h && (canvas.width !== w || canvas.height !== h)) {
-            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-          }
-          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-          frame.close();
-          countFrame();
+          // Always route through the rAF queue so frames are drawn on the next paint tick.
+          // Drawing directly here (outside rAF) causes dropped frames under CPU load.
+          queueDraw(frame);
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
@@ -582,14 +577,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }, 1000);
 
-  // Separate first-frame watchdog — if WS is open but no frame ever arrives in 12s, fallback
+  // Separate first-frame watchdog — if WS is open but no frame ever arrives in 12s, reconnect
   let firstFrameTimer = null;
   function startFirstFrameWatchdog() {
     if (firstFrameTimer) clearTimeout(firstFrameTimer);
     firstFrameTimer = setTimeout(function() {
       if (wsOk && lastFrameReceivedTime === 0 && !fbRunning) {
-        console.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
-        startFallback();
+        console.warn('[Watchdog] No first frame within 12s — reconnecting stream');
+        reconnectStream();
       }
     }, 12000);
   }
@@ -621,8 +616,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
-      // Instantly nudge Android encoder to generate fresh keyframe
+      // Nudge Android encoder to generate a fresh IDR keyframe immediately on connect
       send({ type: 'wake' });
+      // Second nudge at +500ms in case the first fires before the encoder is ready
+      setTimeout(function() { if (wsOk) send({ type: 'wake' }); }, 500);
+      startFirstFrameWatchdog();
     };
 
     ws.onmessage = function(e) {
@@ -712,7 +710,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
       wsOk = false;
       wsFailCount++;
       if (wsFailCount >= 15 && !fbRunning) startFallback();
-      const delay = wsFailCount < 5 ? 500 : 1000;
+      // Exponential back-off: immediate on first failure, then 200ms, 400ms... capped at 2s
+      const delay = wsFailCount <= 1 ? 0 : Math.min(200 * Math.pow(2, wsFailCount - 2), 2000);
       wsRetryTimer = setTimeout(connectWS, delay);
     };
   }

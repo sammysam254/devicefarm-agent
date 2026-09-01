@@ -1,12 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2 } from 'lucide-react';
+import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, ExternalLink } from 'lucide-react';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cctvLocked, setCctvLocked] = useState(false);
   const [focusDevice, setFocusDevice] = useState(null);
+  // Track a reload counter per device-id so we can force-remount stale iframes
+  const [reloadKeys, setReloadKeys] = useState({});
+  const prevDevicesRef = useRef([]);
 
   const fetchDevicesAndLockState = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -48,6 +51,32 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       if (isInitial) setLoading(false);
     }
   };
+
+  // When devices list updates, check which devices had their stream_url or status change.
+  // For those devices, bump the reloadKey so React tears down and remounts the iframe,
+  // preventing stale black iframes after a stream restarts.
+  useEffect(() => {
+    const prev = prevDevicesRef.current;
+    if (prev.length > 0) {
+      const changed = {};
+      for (const d of devices) {
+        const p = prev.find(x => x.id === d.id);
+        if (!p) {
+          changed[d.id] = true; // new device — force fresh iframe
+        } else if (p.stream_url !== d.stream_url || p.status !== d.status || p.serial !== d.serial) {
+          changed[d.id] = true; // stream changed — reload iframe
+        }
+      }
+      if (Object.keys(changed).length > 0) {
+        setReloadKeys(prev => {
+          const next = { ...prev };
+          for (const id of Object.keys(changed)) next[id] = (next[id] || 0) + 1;
+          return next;
+        });
+      }
+    }
+    prevDevicesRef.current = devices;
+  }, [devices]);
 
   useEffect(() => {
     fetchDevicesAndLockState(true);
@@ -208,10 +237,11 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 {/* Viewport Frame */}
                 <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
                   {streamUrl && !isFocused ? (
-                    <iframe 
-                      src={streamUrl} 
-                      style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} 
-                      title={d.serial} 
+                    <iframe
+                      key={`stream-${d.id}-${reloadKeys[d.id] || 0}`}
+                      src={streamUrl}
+                      style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }}
+                      title={d.serial}
                       referrerPolicy="no-referrer"
                       allow="autoplay; fullscreen"
                     />
@@ -220,8 +250,10 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                       ⚡ Focused in Active Modal
                     </div>
                   ) : (
-                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-                      Device Offline
+                    // Animated pulsing placeholder — shows stream is loading, not just dead black
+                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', background: 'linear-gradient(180deg, #060911 0%, #0b1220 100%)' }}>
+                      <div style={{ width: '32px', height: '32px', border: '2px solid rgba(56,189,248,0.3)', borderTop: '2px solid #38bdf8', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }} />
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600 }}>Connecting stream…</span>
                     </div>
                   )}
 

@@ -294,3 +294,17 @@ body {
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.3);
   transform: translateY(-2px);
 }
+
+/* ── Utility animations ──────────────────────────────────────────────── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* CCTV wall hover overlay */
+.cctv-hover-target {
+  pointer-events: none;
+}
+.card:hover .cctv-hover-target {
+  opacity: 1 !important;
+}
