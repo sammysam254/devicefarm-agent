@@ -167,11 +167,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
   <title>Stream ${serial}</title>
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-    html,body{height:100%;background:#04060a;color:#f8fafc;font-family:system-ui;overflow:hidden}
-    body{display:flex;flex-direction:column;align-items:center;padding:0;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+    html,body{height:100%;width:100%;background:#020617;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden;display:flex;flex-direction:column}
+    body{user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
     
-    /* Top Header Bar inside window */
-    .header{display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 12px;background:rgba(15,23,42,.95);border-bottom:1px solid rgba(255,255,255,.1);flex-shrink:0;z-index:10}
+    /* Top Header Bar */
+    .header{display:flex;align-items:center;justify-content:space-between;width:100%;height:44px;padding:0 12px;background:rgba(15,23,42,.98);border-bottom:1px solid rgba(255,255,255,.08);flex-shrink:0;z-index:20}
     .hdr-left{display:flex;align-items:center;gap:10px}
     .hdr-title{font-weight:700;font-size:14px;color:#f8fafc;letter-spacing:.3px}
     .hdr-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#f8fafc;border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease}
@@ -182,29 +182,33 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .dot{width:6px;height:6px;background:#38bdf8;border-radius:50%;animation:pulse 1s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-    .stage{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0;padding:8px}
-    .wrap{position:relative;background:#000;border-radius:18px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 30px rgba(56,189,248,.2);overflow:hidden;touch-action:none;flex-shrink:0;-webkit-tap-highlight-color:transparent}
-    canvas{display:block;max-height:calc(100vh - 60px);width:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
+    /* Stage - Fit to Screen for desktop & mobile */
+    .stage{flex:1;display:flex;flex-direction:row !important;align-items:center;justify-content:center;gap:12px;width:100%;height:calc(100vh - 44px);min-height:0;padding:8px 12px;box-sizing:border-box;position:relative}
+    .wrap{position:relative;background:#000;border-radius:20px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 35px rgba(56,189,248,.2),0 20px 40px rgba(0,0,0,.8);overflow:hidden;touch-action:none;display:flex;align-items:center;justify-content:center;height:100%;max-height:calc(100vh - 58px);max-width:calc(100vw - 75px);width:auto;aspect-ratio:9/19.5;flex-shrink:1}
+    canvas{display:block;width:100%;height:100%;object-fit:contain;cursor:crosshair;touch-action:none;-webkit-tap-highlight-color:transparent}
 
     /* Sidebar ALWAYS on the right side */
-    .sidebar{display:flex !important;flex-direction:column;align-items:center;gap:5px;background:rgba(15,23,42,.95);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:8px 5px;max-height:calc(100vh - 52px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 25px rgba(0,0,0,.5);z-index:10}
-    .btn{width:36px;height:36px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#f1f5f9;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease;user-select:none}
+    .sidebar{display:flex !important;flex-direction:column;align-items:center;gap:5px;background:rgba(15,23,42,.95);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:8px 6px;max-height:calc(100vh - 58px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 30px rgba(0,0,0,.6);z-index:20}
+    .btn{width:36px;height:36px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#f1f5f9;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all .15s ease;user-select:none}
     .btn:hover{background:rgba(56,189,248,.25);border-color:rgba(56,189,248,.5);color:#38bdf8}
     .btn:active{transform:scale(.88)}
     .btn-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.3)}
     .btn-red:hover{background:rgba(248,113,113,.3);border-color:rgba(248,113,113,.6);color:#ef4444}
     
     .vol-slider-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 2px;width:100%}
-    .volume-slider-v{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:bt-lr;width:6px;height:75px;background:rgba(255,255,255,.15);border-radius:4px;outline:none;cursor:pointer;accent-color:#22c55e}
+    .volume-slider-v{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:bt-lr;width:6px;height:70px;background:rgba(255,255,255,.15);border-radius:4px;outline:none;cursor:pointer;accent-color:#22c55e}
 
-    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:20;align-items:center;justify-content:center}
+    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:30;align-items:center;justify-content:center}
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:380px;box-shadow:0 20px 30px rgba(0,0,0,.6)}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
 
-    .mobile-nav{display:none !important}
-    .stage{flex:1;display:flex;flex-direction:row !important;align-items:center;justify-content:center;gap:10px;width:100%;min-height:0;padding:6px 10px}
-    canvas{display:block;max-height:calc(100vh - 55px);max-width:calc(100vw - 65px);width:auto;height:auto;cursor:default;touch-action:none;-webkit-tap-highlight-color:transparent}
+    @media (max-width: 580px){
+      .stage{padding:4px;gap:6px}
+      .wrap{max-height:calc(100vh - 52px);max-width:calc(100vw - 56px)}
+      .sidebar{padding:5px 3px;gap:3px;border-radius:12px}
+      .btn{width:32px;height:32px;font-size:13px;border-radius:8px}
+    }
   </style>
 </head>
 <body>
@@ -315,6 +319,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     const h = f.displayHeight || f.codedHeight || f.height;
     if (w && h && (canvas.width !== w || canvas.height !== h)) {
       canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+      wrap.style.aspectRatio = w + ' / ' + h;
       console.log('[Canvas] Resized to ' + w + 'x' + h);
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
@@ -763,27 +768,38 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Pointer & Drag Control (Smooth & Zero Shaking) ──────────────────────
+  // ── Pointer & Drag Control (Smooth Human Motion & Zero Shaking) ───────────
   let down = false;
   let activePointerId = null;
+  let downStartTime = 0;
+  let downCoords = null;
+  let hasMoved = false;
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     down = true;
+    downStartTime = performance.now();
     activePointerId = e.pointerId;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    // Initial contact pressure (0.35 = realistic finger touch down)
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.35 });
+    downCoords = c;
+    hasMoved = false;
+    // Human touch down pressure (0.42)
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.42 });
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
     const c = coords(e);
-    // Active drag pressure (0.70 = firm finger drag)
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.70 });
+    if (downCoords) {
+      const dx = Math.abs(c.x - downCoords.x);
+      const dy = Math.abs(c.y - downCoords.y);
+      if (dx > 3 || dy > 3) hasMoved = true;
+    }
+    // Dynamic human touch drag pressure (0.65)
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.65 });
   });
 
   function releasePointer(e) {
@@ -794,8 +810,17 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    // Release pressure (0.0 = finger lifted off screen)
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+    const duration = performance.now() - downStartTime;
+    
+    // Quick click / tap duration protection (<70ms):
+    // Android View click listeners require a minimum touch duration to trigger clicks reliably.
+    if (!hasMoved && duration < 70) {
+      setTimeout(() => {
+        send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+      }, 70 - duration);
+    } else {
+      send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+    }
   }
 
   canvas.addEventListener('pointerup', releasePointer);
