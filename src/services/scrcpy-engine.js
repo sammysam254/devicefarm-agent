@@ -317,10 +317,10 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'max_size=0',               // 0 = 100% RAW native display resolution (1:1 direct pixel mirror)
-      'video_bit_rate=12000000',  // 12 Mbps uncompressed raw fidelity
+      'max_size=1080',            // Crisp 1080p Full HD resolution
+      'video_bit_rate=4000000',   // 4.0 Mbps: Instant hardware encoding on phone CPU with zero network delay
       'max_fps=60',
-      'video_codec_options=i-frame-interval=2',
+      'video_codec_options=i-frame-interval=1',
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=true',

@@ -505,9 +505,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          // Always route through the rAF queue so frames are drawn on the next paint tick.
-          // Drawing directly here (outside rAF) causes dropped frames under CPU load.
-          queueDraw(frame);
+          const w = frame.displayWidth  || frame.codedWidth  || frame.width;
+          const h = frame.displayHeight || frame.codedHeight || frame.height;
+          if (w && h && (canvas.width !== w || canvas.height !== h)) {
+            canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
+            wrap.style.aspectRatio = w + ' / ' + h;
+          }
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          frame.close();
+          countFrame();
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
