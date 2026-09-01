@@ -317,14 +317,10 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=4000000',   // 4 Mbps: Crystal clear, crisp 720p HD streaming
-      'max_size=720',             // 720p HD resolution for sharp screen details
+      'video_bit_rate=3500000',
+      'max_size=720',
       'max_fps=60',
-      // Task #8: zero-latency encoder tuning
-      // i-frame-interval=1 → keyframe every second (faster resync after jitter/reconnect)
-      // intra-refresh-period=0 → disable periodic intra refresh (adds latency)
-      // latency=0 → explicitly request lowest encoder latency mode (MediaCodec hint)
-      'video_codec_options=i-frame-interval=1,latency=0',
+      'video_codec_options=i-frame-interval=2',
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=true',
@@ -884,12 +880,9 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(0, 24);              // action_button = 0
     buf.writeInt32BE(0, 28);              // buttons = 0 (touch events in Android must have buttonState=0)
     try {
-      this.controlSocket.cork();
       this.controlSocket.write(buf);
-      this.controlSocket.uncork();
       return true;
     } catch (e) { 
-      logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message}`);
       return false; 
     }
   }
@@ -911,9 +904,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(repeat, 6);
     buf.writeInt32BE(metastate, 10);
     try { 
-      this.controlSocket.cork();
       this.controlSocket.write(buf);
-      this.controlSocket.uncork();
       return true; 
     }
     catch (_) { return false; }
@@ -933,9 +924,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(tb.length, 1);
     tb.copy(buf, 5);
     try { 
-      this.controlSocket.cork();
       this.controlSocket.write(buf);
-      this.controlSocket.uncork();
       return true; 
     }
     catch (_) { return false; }
