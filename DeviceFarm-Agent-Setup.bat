@@ -366,35 +366,36 @@ if %errorlevel% equ 0 (
     if exist "%INSTALL_DIR%\.git" (
         echo [*] Syncing latest GitHub changes...
         "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-            "$ErrorActionPreference = 'Stop';" ^
             "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Fetching remote changes...' -PercentComplete 20;" ^
-            "$fetch = & '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>&1;" ^
+            "& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>$null;" ^
             "if ($LASTEXITCODE -ne 0) {" ^
             "  Write-Progress -Activity 'DeviceFarm Live Update' -Completed;" ^
             "  Write-Host '';" ^
             "  Write-Host '[ERROR] git fetch failed:' -ForegroundColor Red;" ^
-            "  Write-Host $fetch -ForegroundColor Red;" ^
+            "  $err = (& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>&1) | Out-String;" ^
+            "  Write-Host $err -ForegroundColor Red;" ^
             "  exit 1" ^
             "};" ^
-            "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Applying changes (fast-forward only)...' -PercentComplete 70;" ^
-            "$pull = & '%GIT%' -C '%INSTALL_DIR%' pull --ff-only origin main 2>&1;" ^
+            "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Applying changes...' -PercentComplete 70;" ^
+            "& '%GIT%' -C '%INSTALL_DIR%' pull --ff-only origin main 2>$null;" ^
             "if ($LASTEXITCODE -ne 0) {" ^
             "  Write-Progress -Activity 'DeviceFarm Live Update' -Completed;" ^
             "  Write-Host '';" ^
             "  Write-Host '[ERROR] git pull failed:' -ForegroundColor Red;" ^
-            "  Write-Host $pull -ForegroundColor Red;" ^
+            "  $err = (& '%GIT%' -C '%INSTALL_DIR%' pull --ff-only origin main 2>&1) | Out-String;" ^
+            "  Write-Host $err -ForegroundColor Red;" ^
             "  exit 1" ^
             "};" ^
             "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Reading commit info...' -PercentComplete 95;" ^
-            "$hash  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>&1) -join '';" ^
-            "$short = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>&1) -join '';" ^
-            "$msg   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>&1) -join '';" ^
+            "$hash  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>$null) -join '';" ^
+            "$short = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>$null) -join '';" ^
+            "$msg   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>$null) -join '';" ^
             "Write-Progress -Activity 'DeviceFarm Live Update' -Completed;" ^
             "Write-Host '';" ^
             "Write-Host ('  [OK] Synced to commit ' + $short + ' : ' + $msg) -ForegroundColor Green;" ^
             "Write-Host '';"
         if !errorlevel! neq 0 (
-            echo [ERROR] Live sync failed — streams remain active but code may be outdated.
+            echo [ERROR] Live sync failed - streams remain active but code may be outdated.
         ) else (
             echo [OK] GitHub code updated silently. Active device streams remain 100%% connected.
         )
