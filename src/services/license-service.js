@@ -423,6 +423,14 @@ async function validateDevicePin(serial, rawInputPin, bindingCode) {
     if (validPins.has(pin) || validKeys.has(pin)) {
       return true;
     }
+
+    // 5. Also check if PIN matches any active machine_binding code in cluster
+    try {
+      const mbRes = await client.get(`/machine_bindings?binding_code=eq.${encodeURIComponent(pin)}&select=id`);
+      if (mbRes.data && Array.isArray(mbRes.data) && mbRes.data.length > 0) {
+        return true;
+      }
+    } catch (_) {}
   } catch (err) {
     logger.warn(`[LicenseService] PIN validation cloud check notice for ${serial}: ${err.message}`);
   }

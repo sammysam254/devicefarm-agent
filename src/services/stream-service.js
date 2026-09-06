@@ -95,7 +95,12 @@ function handleControl(type, data, serial, engine) {
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
     const pressure = parseFloat(get(data, 'pressure')) || (action === 1 ? 0 : 1.0);
-    engine.sendTouchEvent(action, x, y, W, H, pressure);
+    const ok = engine.sendTouchEvent(action, x, y, W, H, pressure);
+    if (!ok && (action === 0 || action === 1)) {
+      const realX = Math.round((x / W) * (engine.screenWidth || W));
+      const realY = Math.round((y / H) * (engine.screenHeight || H));
+      if (action === 0) try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
+    }
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
     engine.sendTouchEvent(0, x, y, W, H, 1.0);

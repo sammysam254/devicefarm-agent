@@ -812,8 +812,12 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(0, 24);              // action_button = 0
-    buf.writeInt32BE(0, 28);              // buttons = 0 (touch events in Android must have buttonState=0)
+    const isDown = (action === 0);
+    const isUp = (action === 1);
+    const actionButton = isDown ? 1 : 0;
+    const buttons = isUp ? 0 : 1;
+    buf.writeInt32BE(actionButton, 24);   // action_button: 1 on DOWN, 0 otherwise
+    buf.writeInt32BE(buttons, 28);        // buttons: 1 on DOWN/MOVE, 0 on UP
     try {
       this.controlSocket.write(buf);
       return true;
