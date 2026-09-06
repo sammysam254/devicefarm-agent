@@ -1048,8 +1048,9 @@ async function startStreamServer(serial, port) {
             const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status`);
             if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0 && devRes.data[0].stream_url) {
               const remoteUrl = devRes.data[0].stream_url;
-              // Avoid redirect loops if URL is identical to current
-              if (remoteUrl && !remoteUrl.includes(hostHeader)) {
+              // Redirect if remote URL points to a dedicated quick tunnel or different host
+              const isDifferent = remoteUrl && (!remoteUrl.includes(hostHeader) || remoteUrl.includes('trycloudflare.com') || remoteUrl.includes('loca.lt'));
+              if (isDifferent) {
                 res.writeHead(302, { 'Location': remoteUrl });
                 res.end();
                 return;
