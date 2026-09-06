@@ -1029,6 +1029,17 @@ async function startStreamServer(serial, port) {
     const udidParam = (url.searchParams.get('udid') || '').trim();
     const isSeedAdminDedicated = (serial === 'R5CW114C0SP' || udidParam === 'R5CW114C0SP');
 
+    // If request specifies a different UDID and we have a local server for it on this host, redirect internally
+    if (udidParam && udidParam !== serial && activeServers.has(udidParam)) {
+      const targetDev = activeServers.get(udidParam);
+      const targetPort = targetDev.server.address()?.port;
+      if (targetPort && targetPort !== port) {
+        res.writeHead(302, { 'Location': `http://localhost:${targetPort}${req.url}` });
+        res.end();
+        return;
+      }
+    }
+
     let isPinOrKeyValid = isSeedAdminDedicated;
     if (isLocalHost || isSeedAdminDedicated) {
       isPinOrKeyValid = true;
