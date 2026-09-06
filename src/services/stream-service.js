@@ -1029,14 +1029,34 @@ async function startStreamServer(serial, port) {
     const udidParam = (url.searchParams.get('udid') || '').trim();
     const isSeedAdminDedicated = (serial === 'R5CW114C0SP' || udidParam === 'R5CW114C0SP');
 
-    // If request specifies a different UDID and we have a local server for it on this host, redirect internally
-    if (udidParam && udidParam !== serial && activeServers.has(udidParam)) {
-      const targetDev = activeServers.get(udidParam);
-      const targetPort = targetDev.server.address()?.port;
-      if (targetPort && targetPort !== port) {
-        res.writeHead(302, { 'Location': `http://localhost:${targetPort}${req.url}` });
-        res.end();
-        return;
+    // Cross-Machine & Multi-Device Smart Router:
+    // If request specifies a different UDID than this stream server:
+    if (udidParam && udidParam !== serial) {
+      if (activeServers.has(udidParam)) {
+        const targetDev = activeServers.get(udidParam);
+        const targetPort = targetDev.server.address()?.port;
+        if (targetPort && targetPort !== port) {
+          res.writeHead(302, { 'Location': `http://localhost:${targetPort}${req.url}` });
+          res.end();
+          return;
+        }
+      } else {
+        // Device is running on another computer in the farm -> look up in Supabase & redirect directly
+        try {
+          const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
+          if (client) {
+            const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status`);
+            if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0 && devRes.data[0].stream_url) {
+              const remoteUrl = devRes.data[0].stream_url;
+              // Avoid redirect loops if URL is identical to current
+              if (remoteUrl && !remoteUrl.includes(hostHeader)) {
+                res.writeHead(302, { 'Location': remoteUrl });
+                res.end();
+                return;
+              }
+            }
+          }
+        } catch (_) {}
       }
     }
 

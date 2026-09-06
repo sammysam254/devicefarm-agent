@@ -442,6 +442,7 @@ async function validateDevicePin(serial, rawInputPin, bindingCode) {
 }
 
 module.exports = {
+  getSupabaseClient,
   checkLicenseStatus,
   syncDeviceToCloud,
   markDeviceOffline,
