@@ -25,6 +25,19 @@ function loadConfig() {
   return {};
 }
 
+
+let bindingService = null;
+function getMachineCode() {
+  if (!bindingService) {
+    try { bindingService = require('./binding-service'); } catch (_) {}
+  }
+  if (bindingService && typeof bindingService.getOrGenerateBindingCode === 'function') {
+    return bindingService.getOrGenerateBindingCode();
+  }
+  const cfg = loadConfig();
+  return cfg.machineBindingCode || '';
+}
+
 const config = loadConfig();
 
 /**
@@ -133,11 +146,28 @@ function createCloudflaredTunnel(port) {
 
     logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
-    // Multi-device & multi-computer isolation:
-    // When multiple computers run the agent, each device MUST have its own dedicated tunnel URL
-    // so traffic for one phone never routes to another computer's hardware.
-    const token = config.dedicatedCloudflareToken || null;
-    const args = ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
+    const cfg = loadConfig();
+    const token = cfg.cloudflareToken || cfg.cloudflaredToken || cfg.token;
+    const rawDomain = cfg.customDomain || cfg.domain || 'agent.dennoh.site';
+    const domain = rawDomain.replace(/^https?:\/\//, '');
+
+    // Intelligent Multi-Machine Routing:
+    // Primary computer (94879348) uses the central agent.dennoh.site named tunnel.
+    // Any new / secondary computers automatically provision dedicated Quick Tunnels (trycloudflare.com / localtunnel)
+    const currentCode = getMachineCode();
+    const primaryCode = cfg.primaryBindingCode || cfg.primaryMachineBindingCode || '94879348';
+    const isPrimaryNode = Boolean(token && (currentCode === primaryCode || cfg.isPrimaryNode === true));
+
+    const useTokenTunnel = isPrimaryNode && Boolean(token);
+    const args = useTokenTunnel
+      ? ['tunnel', 'run', '--token', token]
+      : ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
+
+    if (useTokenTunnel) {
+      logger.info(`[TunnelService] Primary node active (${currentCode}) — routing to ${domain}`);
+    } else {
+      logger.info(`[TunnelService] New/Secondary computer active (${currentCode}) — spinning up dedicated Quick Tunnel`);
+    }
 
     try {
       const tunnelProcess = spawn(binPath, args, {
