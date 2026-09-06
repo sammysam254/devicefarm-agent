@@ -133,13 +133,11 @@ function createCloudflaredTunnel(port) {
 
     logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
-    const token = config.cloudflareToken || config.cloudflaredToken || config.token;
-    const rawDomain = config.customDomain || config.domain || 'agent.dennoh.site';
-    const domain = rawDomain.replace(/^https?:\/\//, '');
-
-    const args = token 
-      ? ['tunnel', 'run', '--token', token]
-      : ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
+    // Multi-device & multi-computer isolation:
+    // When multiple computers run the agent, each device MUST have its own dedicated tunnel URL
+    // so traffic for one phone never routes to another computer's hardware.
+    const token = config.dedicatedCloudflareToken || null;
+    const args = ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
 
     try {
       const tunnelProcess = spawn(binPath, args, {
