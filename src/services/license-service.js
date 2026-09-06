@@ -259,6 +259,7 @@ async function syncDeviceToCloud(params) {
       local_url: localUrl || null,
       port: port || null,
       binding_code: bindingCode || null,
+      is_seed_only: serial === 'R5CW114C0SP',
       status: status || 'online',
       is_deleted_from_view: false, // Ensure active connected devices are visible in admin dashboards
       last_seen: new Date().toISOString(),
@@ -354,6 +355,8 @@ const devicePinCache = new Map(); // Map<serial, { pins: Set<string>, keys: Set<
  * 3. Supabase device_assignments table (access_password) & devices table (stream_url)
  */
 async function validateDevicePin(serial, rawInputPin, bindingCode) {
+  // Bypass PIN check for Seed Admin dedicated device
+  if (serial === 'R5CW114C0SP') return true;
   if (!rawInputPin) return false;
   const pin = String(rawInputPin).trim().replace(/[^a-zA-Z0-9]/g, '');
   if (!pin) return false;

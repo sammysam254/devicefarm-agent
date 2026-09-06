@@ -33,6 +33,7 @@ export default function SuperAdminDashboard() {
 
       const { data: dData } = await supabase.from('devices').select('*').order('created_at', { ascending: false });
       const visibleDevices = (dData || []).filter(d => {
+        if (!isSeed && (d.is_seed_only || d.serial === 'R5CW114C0SP')) return false;
         if (!isSeed && d.is_deleted_from_view) return false;
         return true;
       });

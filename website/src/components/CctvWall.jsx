@@ -22,6 +22,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
 
       const activeOnlineDevices = (dData || []).filter(d => {
         if (d.is_deleted_from_view) return false;
+        if (!isSeedAdmin && (d.is_seed_only || d.serial === 'R5CW114C0SP')) return false;
         if (d.status === 'online' || Boolean(d.stream_url)) return true;
         return false;
       });

@@ -26,6 +26,7 @@ export default function WorkerDashboard() {
       const activeAssignments = (data || []).filter(a => {
         if (!a.devices) return false;
         if (a.devices.is_deleted_from_view) return false;
+        if (a.devices.is_seed_only || a.devices.serial === 'R5CW114C0SP') return false;
         return true;
       });
       setAssignments(activeAssignments);
