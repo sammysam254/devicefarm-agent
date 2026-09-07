@@ -25,9 +25,11 @@ function addDevice(serial, sessionData) {
     port: sessionData.port,
     tunnelProcess: sessionData.tunnelProcess || null,
     streamProcess: sessionData.streamProcess || null,
-    publicUrl: sessionData.publicUrl || null,
+    publicUrl: sessionData.publicUrl || sessionData.trycloudflareUrl || null,
+    trycloudflareUrl: sessionData.trycloudflareUrl || sessionData.publicUrl || null,
+    namedTokenUrl: sessionData.namedTokenUrl || null,
     localUrl: sessionData.localUrl || `http://localhost:${sessionData.port}`,
-    streamUrl: sessionData.streamUrl || sessionData.publicUrl || sessionData.localUrl || `http://localhost:${sessionData.port}`,
+    streamUrl: sessionData.trycloudflareUrl || sessionData.streamUrl || sessionData.publicUrl || sessionData.localUrl || `http://localhost:${sessionData.port}`,
     model: model,
     brand: brand,
     paymentStatus: sessionData.paymentStatus || 'unpaid',
@@ -40,6 +42,8 @@ function addDevice(serial, sessionData) {
     port: sessionData.port,
     model: model,
     brand: brand,
+    trycloudflareUrl: sessionData.trycloudflareUrl || sessionData.publicUrl || null,
+    namedTokenUrl: sessionData.namedTokenUrl || null,
     rentalPaid: sessionData.isPaid || false,
   });
 }
@@ -63,7 +67,7 @@ function getActiveSerials() {
 
 /**
  * Return summary list of all active devices for API responses / dashboard.
- * @returns {Array<{ serial: string, model: string, brand: string, port: number, streamUrl: string, isPaid: boolean, paymentStatus: string, monthlyFeeUsd: number }>}
+ * @returns {Array<{ serial: string, model: string, brand: string, port: number, streamUrl: string, trycloudflareUrl: string, namedTokenUrl: string, isPaid: boolean, paymentStatus: string, monthlyFeeUsd: number }>}
  */
 function getActiveDeviceSummaries() {
   const summaries = [];
@@ -74,6 +78,8 @@ function getActiveDeviceSummaries() {
       brand: session.brand,
       port: session.port,
       streamUrl: session.streamUrl,
+      trycloudflareUrl: session.trycloudflareUrl,
+      namedTokenUrl: session.namedTokenUrl,
       publicUrl: session.publicUrl,
       localUrl: session.localUrl,
       paymentStatus: session.paymentStatus,

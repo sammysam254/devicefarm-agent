@@ -308,11 +308,8 @@
 
       container.innerHTML = devices.map(d => {
         // Strictly resolve dedicated trycloudflare.com link
-        const trycloudflareLink = (d.streamUrl && d.streamUrl.includes('trycloudflare.com'))
-          ? d.streamUrl
-          : (d.publicUrl && d.publicUrl.includes('trycloudflare.com'))
-            ? `${d.publicUrl}/?udid=${encodeURIComponent(d.serial)}`
-            : d.streamUrl || '';
+        const trycloudflareLink = d.trycloudflareUrl || ((d.streamUrl && d.streamUrl.includes('trycloudflare.com')) ? d.streamUrl : null) || ((d.publicUrl && d.publicUrl.includes('trycloudflare.com')) ? d.publicUrl : null) || d.streamUrl || '';
+        const namedTokenLink = d.namedTokenUrl || 'https://agent.dennoh.site/?udid=' + encodeURIComponent(d.serial);
         const localLink = d.localUrl || (d.port ? `http://localhost:${d.port}/?udid=${encodeURIComponent(d.serial)}` : '');
         const isTryCloudflare = trycloudflareLink && trycloudflareLink.includes('trycloudflare.com');
 
@@ -330,17 +327,18 @@
               </div>
 
               <div class="stream-box">
+                <!-- 1. Local Dashboard Fast Control (trycloudflare.com) -->
                 <div style="display: flex; align-items: center; justify-content: space-between;">
                   <div style="font-size: 11px; color: ${isTryCloudflare ? 'var(--emerald)' : 'var(--amber)'}; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <span>⚡</span> ${isTryCloudflare ? 'TRYCLOUDFLARE FAST LINK (NO PIN)' : 'INITIALIZING TRYCLOUDFLARE LINK...'}
+                    <span>⚡</span> ${isTryCloudflare ? 'TRYCLOUDFLARE FAST LINK (LOCAL DIRECT)' : 'INITIALIZING TRYCLOUDFLARE LINK...'}
                   </div>
                   <span style="font-size: 10px; color: var(--emerald); font-weight: 700; background: rgba(52, 211, 153, 0.1); padding: 2px 6px; border-radius: 4px;">
-                    🔓 PIN Free Control
+                    🔓 PIN Free
                   </span>
                 </div>
 
                 <div class="fast-link-container">
-                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">trycloudflare Fast URL</div>
+                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">Local Fast Control URL (Opens in 1 Click)</div>
                   <div class="stream-url-text" id="linkText_${d.serial}">${trycloudflareLink || 'Creating dedicated trycloudflare.com tunnel...'}</div>
                   <div style="display: flex; gap: 6px; align-items: center;">
                     <button class="btn-action" style="padding: 5px 10px; font-size: 11px;" onclick="copyLink('${trycloudflareLink}', 'toast_${d.serial}')">
@@ -351,13 +349,34 @@
                 </div>
 
                 <!-- Launch Control Buttons -->
-                <div style="display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
                   <button class="btn-action btn-primary" style="flex: 1; min-width: 140px; padding: 10px;" onclick="openPopoutStream('${trycloudflareLink}', '${d.serial}')">
                     🚀 Open Fast Control (trycloudflare) ↗
                   </button>
                   <button class="btn-action btn-emerald" style="padding: 10px;" onclick="openPopoutStream('${localLink}', '${d.serial}')" title="Direct LAN stream with lowest possible latency">
                     🖥️ LAN Stream
                   </button>
+                </div>
+
+                <!-- 2. Website & Supabase Synced URL (Named Token) -->
+                <div style="margin-top: 14px; padding: 10px 12px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(192, 132, 252, 0.25); border-radius: 8px;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                    <div style="font-size: 10px; color: var(--purple); text-transform: uppercase; font-weight: 700;">
+                      🌐 Website & Supabase Synced URL
+                    </div>
+                    <span style="font-size: 9px; color: var(--purple); background: rgba(192, 132, 252, 0.12); padding: 1px 6px; border-radius: 4px; font-weight: 700;">
+                      Cloud Token
+                    </span>
+                  </div>
+                  <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #c084fc; word-break: break-all; margin-bottom: 6px;">
+                    ${namedTokenLink}
+                  </div>
+                  <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="btn-action" style="padding: 4px 8px; font-size: 10px;" onclick="copyLink('${namedTokenLink}', 'toast_web_${d.serial}')">
+                      📋 Copy Website Link
+                    </button>
+                    <span id="toast_web_${d.serial}" class="copied-toast">✓ Copied!</span>
+                  </div>
                 </div>
 
                 <!-- Quick Hardware Action Buttons -->

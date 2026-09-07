@@ -5,7 +5,7 @@ const Adb = adb.Adb || adb.default || adb;
 const logger = require('../utils/logger');
 const { getFreePort } = require('../utils/port-finder');
 const { startStreamServer, buildStreamUrl } = require('./stream-service');
-const { createTunnel } = require('./tunnel-service');
+const { createTunnel, ensureNamedTokenTunnelRunning } = require('./tunnel-service');
 const apiClient = require('./api-client');
 const processManager = require('../main/process-manager');
 const bindingService = require('./binding-service');
@@ -117,33 +117,47 @@ async function handleDeviceAdd(device) {
     const { streamProcess, localUrl } = await startStreamServer(serial, port);
     logger.info(`Stream server started for ${serial}: ${localUrl}`);
 
-    // 5. Create Cloudflare tunnel
-    let publicUrl    = null;
+    // 5. Ensure Cloudflare named token tunnel daemon is running for the website & Supabase
+    try {
+      ensureNamedTokenTunnelRunning();
+    } catch (_) {}
+
+    // 6. Create dedicated Quick Tunnel (trycloudflare.com) for the local dashboard fast control
+    let publicUrl     = null;
     let tunnelProcess = null;
 
     try {
       const tunnelResult = await createTunnel(port);
       publicUrl     = tunnelResult.publicUrl;
       tunnelProcess = tunnelResult.tunnelProcess;
-      logger.info(`Tunnel created for ${serial}: ${publicUrl}`);
+      logger.info(`trycloudflare tunnel created for ${serial}: ${publicUrl}`);
     } catch (err) {
-      logger.warn(`Failed to create tunnel for ${serial} — local-only: ${err.message}`);
+      logger.warn(`Failed to create trycloudflare tunnel for ${serial} — local-only: ${err.message}`);
     }
 
-    // 6. Build stream URL
-    const streamUrl = publicUrl
+    // trycloudflare stream URL (for local dashboard 1-click fast control)
+    const trycloudflareUrl = publicUrl
       ? buildStreamUrl(publicUrl, port, serial)
-      : `http://localhost:${port}/?udid=${encodeURIComponent(serial)}`;
+      : null;
 
-    logger.info(`Stream URL for ${serial}: ${streamUrl}`);
+    const streamUrl = trycloudflareUrl || `http://localhost:${port}/?udid=${encodeURIComponent(serial)}`;
+
+    // Cloudflare Named Token Tunnel URL (for Supabase & website customers)
+    const cfg = loadConfig();
+    const rawDomain = (cfg.customDomain || cfg.domain || 'agent.dennoh.site').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const namedTokenUrl = `https://${rawDomain}/?udid=${encodeURIComponent(serial)}`;
+
+    logger.info(`Stream URLs for ${serial} -> [Local Fast Control: ${streamUrl}] | [Website/Supabase: ${namedTokenUrl}]`);
 
     // 7. Register with process manager
     processManager.addDevice(serial, {
       streamProcess,
       tunnelProcess,
       port,
-      publicUrl,
-      streamUrl,
+      publicUrl: trycloudflareUrl,
+      streamUrl: streamUrl,
+      trycloudflareUrl: trycloudflareUrl,
+      namedTokenUrl: namedTokenUrl,
       localUrl,
       model: deviceModel,
       brand: deviceBrand,
@@ -154,8 +168,8 @@ async function handleDeviceAdd(device) {
       paymentStatus: licenseStatus.mode,
     });
 
-    // 8. Sync device + stream URL to Supabase cloud (enables real-time URL updates for website users)
-    await bindingService.syncDeviceUrl(serial, streamUrl, {
+    // 8. Sync Named Token URL to Supabase cloud for the website / online dashboard
+    await bindingService.syncDeviceUrl(serial, namedTokenUrl, {
       model: deviceModel,
       brand: deviceBrand,
       localUrl,

@@ -91,8 +91,10 @@ function startDashboardServer(port = 7400) {
 
         const devices = rawDevices.map(d => ({
           ...d,
-          streamUrl: d.streamUrl || (d.publicUrl ? `${d.publicUrl}/?udid=${encodeURIComponent(d.serial)}` : `http://localhost:${d.port}/?udid=${encodeURIComponent(d.serial)}`),
-          publicUrl: d.publicUrl || null,
+          streamUrl: d.trycloudflareUrl || d.streamUrl || (d.publicUrl ? `${d.publicUrl}/?udid=${encodeURIComponent(d.serial)}` : `http://localhost:${d.port}/?udid=${encodeURIComponent(d.serial)}`),
+          trycloudflareUrl: d.trycloudflareUrl || (d.streamUrl && d.streamUrl.includes('trycloudflare.com') ? d.streamUrl : null),
+          namedTokenUrl: d.namedTokenUrl || null,
+          publicUrl: d.trycloudflareUrl || d.publicUrl || null,
           localUrl: d.localUrl || `http://localhost:${d.port}`,
         }));
 

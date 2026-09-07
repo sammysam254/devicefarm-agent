@@ -305,6 +305,44 @@ function killTunnel(tunnelProcess) {
   }
 }
 
+let namedTokenTunnelProcess = null;
+
+/**
+ * Start or ensure the persistent named token tunnel daemon is running in the background.
+ * This connects agent.dennoh.site (or configured customDomain) to Cloudflare for the website & Supabase.
+ */
+function ensureNamedTokenTunnelRunning() {
+  const cfg = loadConfig();
+  const token = cfg.cloudflareToken || cfg.cloudflaredToken || cfg.token;
+  if (!token) return null;
+  if (namedTokenTunnelProcess && namedTokenTunnelProcess.exitCode === null) {
+    return namedTokenTunnelProcess;
+  }
+
+  const binPath = resolveCloudflaredBin();
+  if (!binPath || !fs.existsSync(binPath)) return null;
+
+  const rawDomain = cfg.customDomain || cfg.domain || 'agent.dennoh.site';
+  logger.info(`[TunnelService] Starting Cloudflare named token tunnel daemon for ${rawDomain}...`);
+
+  try {
+    namedTokenTunnelProcess = spawn(binPath, ['tunnel', 'run', '--token', token], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    namedTokenTunnelProcess.on('exit', (code) => {
+      logger.warn(`[TunnelService] Named token tunnel daemon exited (code=${code})`);
+      namedTokenTunnelProcess = null;
+    });
+
+    return namedTokenTunnelProcess;
+  } catch (err) {
+    logger.warn(`[TunnelService] Failed to start named token tunnel daemon: ${err.message}`);
+    return null;
+  }
+}
+
 async function isCloudflaredAvailable() {
   const binPath = await ensureCloudflaredAvailable();
   return binPath ? fs.existsSync(binPath) : false;
@@ -314,4 +352,5 @@ module.exports = {
   createTunnel: createTunnelWithRetry,
   killTunnel,
   isCloudflaredAvailable,
+  ensureNamedTokenTunnelRunning,
 };
