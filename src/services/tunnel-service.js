@@ -144,30 +144,9 @@ function createCloudflaredTunnel(port) {
       return reject(new Error('cloudflared binary unavailable'));
     }
 
-    logger.info(`[+] Establishing Cloudflare network tunnel for localhost:${port} via ${path.basename(binPath)}`);
+    logger.info(`[+] Establishing Cloudflare trycloudflare.com Quick Tunnel for localhost:${port} via ${path.basename(binPath)}`);
 
-    const cfg = loadConfig();
-    const token = cfg.cloudflareToken || cfg.cloudflaredToken || cfg.token;
-    const rawDomain = cfg.customDomain || cfg.domain || 'agent.dennoh.site';
-    const domain = rawDomain.replace(/^https?:\/\//, '');
-
-    // Intelligent Multi-Machine Routing:
-    // Primary computer (94879348) uses the central agent.dennoh.site named tunnel.
-    // Any new / secondary computers automatically provision dedicated Quick Tunnels (trycloudflare.com / localtunnel)
-    const currentCode = getMachineCode();
-    const primaryCode = cfg.primaryBindingCode || cfg.primaryMachineBindingCode || '94879348';
-    const isPrimaryNode = Boolean(token && (currentCode === primaryCode || cfg.isPrimaryNode === true));
-
-    const useTokenTunnel = isPrimaryNode && Boolean(token);
-    const args = useTokenTunnel
-      ? ['tunnel', 'run', '--token', token]
-      : ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
-
-    if (useTokenTunnel) {
-      logger.info(`[TunnelService] Primary node active (${currentCode}) — routing to ${domain}`);
-    } else {
-      logger.info(`[TunnelService] New/Secondary computer active (${currentCode}) — spinning up dedicated Quick Tunnel`);
-    }
+    const args = ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
 
     try {
       const tunnelProcess = spawn(binPath, args, {
@@ -178,42 +157,25 @@ function createCloudflaredTunnel(port) {
       let resolved = false;
       let combinedOutput = '';
 
-      // Token tunnels don't print trycloudflare URLs on stdout; resolve in 3.5s if process remains running & healthy
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          if (token && tunnelProcess.exitCode === null) {
-            const publicUrl = `https://${domain}`;
-            logger.info(`[OK] Cloudflare Zero Trust token tunnel active: ${publicUrl}`);
-            return resolve({ publicUrl, tunnelProcess });
-          }
           logger.warn(`Cloudflared tunnel timed out after ${TUNNEL_TIMEOUT_MS}ms for port ${port}`);
           killTunnel(tunnelProcess);
-          reject(new Error(`Tunnel URL not received within ${TUNNEL_TIMEOUT_MS}ms`));
+          reject(new Error(`trycloudflare.com tunnel URL not received within ${TUNNEL_TIMEOUT_MS}ms`));
         }
-      }, token ? 3500 : TUNNEL_TIMEOUT_MS);
+      }, TUNNEL_TIMEOUT_MS);
 
       function handleData(data) {
         const text = data.toString();
         combinedOutput += text;
-
-        if (token && !resolved) {
-          if (text.includes('Registered tunnel connection') || text.includes('Connection') || text.includes('Infra')) {
-            resolved = true;
-            clearTimeout(timeout);
-            const publicUrl = `https://${domain}`;
-            logger.info(`[OK] Cloudflare Zero Trust tunnel registered: ${publicUrl}`);
-            resolve({ publicUrl, tunnelProcess });
-            return;
-          }
-        }
 
         const match = text.match(TUNNEL_URL_REGEX);
         if (match && !resolved) {
           resolved = true;
           clearTimeout(timeout);
           const publicUrl = match[0];
-          logger.info(`[OK] Cloudflare tunnel established: ${publicUrl}`);
+          logger.info(`[OK] Dedicated trycloudflare.com tunnel established: ${publicUrl}`);
           resolve({ publicUrl, tunnelProcess });
         }
       }

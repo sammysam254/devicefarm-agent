@@ -307,9 +307,14 @@
       }
 
       container.innerHTML = devices.map(d => {
-        const fastLink = d.streamUrl || d.publicUrl || (d.port ? `http://localhost:${d.port}/?udid=${d.serial}` : '');
-        const localLink = d.localUrl || (d.port ? `http://localhost:${d.port}/?udid=${d.serial}` : '');
-        const isCloudflare = fastLink && (fastLink.includes('trycloudflare.com') || fastLink.includes('loca.lt') || fastLink.includes('dennoh.site'));
+        // Strictly resolve dedicated trycloudflare.com link
+        const trycloudflareLink = (d.streamUrl && d.streamUrl.includes('trycloudflare.com'))
+          ? d.streamUrl
+          : (d.publicUrl && d.publicUrl.includes('trycloudflare.com'))
+            ? `${d.publicUrl}/?udid=${encodeURIComponent(d.serial)}`
+            : d.streamUrl || '';
+        const localLink = d.localUrl || (d.port ? `http://localhost:${d.port}/?udid=${encodeURIComponent(d.serial)}` : '');
+        const isTryCloudflare = trycloudflareLink && trycloudflareLink.includes('trycloudflare.com');
 
         return `
           <div class="device-card">
@@ -326,8 +331,8 @@
 
               <div class="stream-box">
                 <div style="display: flex; align-items: center; justify-content: space-between;">
-                  <div style="font-size: 11px; color: var(--emerald); font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <span>⚡</span> ${isCloudflare ? 'CLOUDFLARE FAST LINK (NO PIN)' : 'STREAM LINK READY'}
+                  <div style="font-size: 11px; color: ${isTryCloudflare ? 'var(--emerald)' : 'var(--amber)'}; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <span>⚡</span> ${isTryCloudflare ? 'TRYCLOUDFLARE FAST LINK (NO PIN)' : 'INITIALIZING TRYCLOUDFLARE LINK...'}
                   </div>
                   <span style="font-size: 10px; color: var(--emerald); font-weight: 700; background: rgba(52, 211, 153, 0.1); padding: 2px 6px; border-radius: 4px;">
                     🔓 PIN Free Control
@@ -335,11 +340,11 @@
                 </div>
 
                 <div class="fast-link-container">
-                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">Fast Control URL</div>
-                  <div class="stream-url-text" id="linkText_${d.serial}">${fastLink}</div>
+                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">trycloudflare Fast URL</div>
+                  <div class="stream-url-text" id="linkText_${d.serial}">${trycloudflareLink || 'Creating dedicated trycloudflare.com tunnel...'}</div>
                   <div style="display: flex; gap: 6px; align-items: center;">
-                    <button class="btn-action" style="padding: 5px 10px; font-size: 11px;" onclick="copyLink('${fastLink}', 'toast_${d.serial}')">
-                      📋 Copy Link
+                    <button class="btn-action" style="padding: 5px 10px; font-size: 11px;" onclick="copyLink('${trycloudflareLink}', 'toast_${d.serial}')">
+                      📋 Copy trycloudflare Link
                     </button>
                     <span id="toast_${d.serial}" class="copied-toast">✓ Copied!</span>
                   </div>
@@ -347,8 +352,8 @@
 
                 <!-- Launch Control Buttons -->
                 <div style="display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;">
-                  <button class="btn-action btn-primary" style="flex: 1; min-width: 140px; padding: 10px;" onclick="openPopoutStream('${fastLink}', '${d.serial}')">
-                    🚀 Open Fast Control ↗
+                  <button class="btn-action btn-primary" style="flex: 1; min-width: 140px; padding: 10px;" onclick="openPopoutStream('${trycloudflareLink}', '${d.serial}')">
+                    🚀 Open Fast Control (trycloudflare) ↗
                   </button>
                   <button class="btn-action btn-emerald" style="padding: 10px;" onclick="openPopoutStream('${localLink}', '${d.serial}')" title="Direct LAN stream with lowest possible latency">
                     🖥️ LAN Stream
