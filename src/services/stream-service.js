@@ -1061,114 +1061,7 @@ async function startStreamServer(serial, port) {
       }
     }
 
-    let isPinOrKeyValid = isSeedAdminDedicated;
-    if (isLocalHost || isSeedAdminDedicated) {
-      isPinOrKeyValid = true;
-    } else if (cleanPinParam || keyParam) {
-      isPinOrKeyValid = await licenseService.validateDevicePin(serial, cleanPinParam || keyParam, bindingCode);
-    }
-
-    const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
-    const isValidSession = isLocalHost || isPinOrKeyValid || isTokenValid;
-
-    if (!isValidSession) {
-      const hasAttemptedPin = Boolean(cleanPinParam);
-      res.writeHead(401, { 'Content-Type': 'text/html' });
-      res.end(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Stream Authorization Required — ${serial}</title>
-          <script>
-            (function() {
-              const serial = '${serial}';
-              const key = 'device_pin_auth_' + serial;
-              const hasPinInUrl = ${hasAttemptedPin ? 'true' : 'false'};
-              if (!hasPinInUrl) {
-                try {
-                  const saved = JSON.parse(localStorage.getItem(key));
-                  // 12 Hours cache check (12 * 60 * 60 * 1000 = 43200000 ms)
-                  if (saved && saved.pin && saved.ts && (Date.now() - saved.ts < 43200000)) {
-                    const u = new URL(window.location.href);
-                    u.searchParams.set('pin', String(saved.pin).trim());
-                    window.location.href = u.toString();
-                  }
-                } catch (_) {}
-              }
-            })();
-
-            function handlePinSubmit(e) {
-              e.preventDefault();
-              const input = document.getElementById('pinInput');
-              const btn = document.getElementById('unlockBtn');
-              const rawVal = input ? input.value : '';
-              const pin = rawVal.trim().replace(/[^a-zA-Z0-9]/g, '');
-
-              if (!pin) {
-                input.focus();
-                input.style.borderColor = '#ef4444';
-                return;
-              }
-
-              btn.disabled = true;
-              btn.textContent = '🔄 Unlocking Stream...';
-              btn.style.opacity = '0.8';
-
-              try {
-                localStorage.setItem('device_pin_auth_${serial}', JSON.stringify({ pin: pin, ts: Date.now() }));
-              } catch (_) {}
-
-              const u = new URL(window.location.href);
-              u.searchParams.set('pin', pin);
-              window.location.href = u.toString();
-            }
-          </script>
-        </head>
-        <body style="background:#090d16; color:#f8fafc; font-family:system-ui,-apple-system,sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; padding:16px; box-sizing:border-box;">
-          <div style="max-width:440px; width:100%; padding:32px 24px; background:#0f172a; border:1px solid rgba(56,189,248,0.3); border-radius:18px; box-shadow: 0 20px 30px -5px rgba(0,0,0,0.6); text-align:center;">
-            <div style="font-size:44px; margin-bottom:14px;">🔐</div>
-            <h2 style="color:#38bdf8; margin:0 0 8px 0; font-size:22px; font-weight:800;">Device Authorization</h2>
-            <p style="color:#94a3b8; font-size:14px; line-height:1.5; margin:0 0 16px 0;">
-              Enter your assigned 6-digit <strong>Stream PIN</strong> to watch and control device <code style="color:#38bdf8; font-family:monospace; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:4px;">${serial}</code>.
-            </p>
-
-            ${hasAttemptedPin ? `
-              <div style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); border-radius:8px; padding:10px 12px; margin-bottom:16px; font-size:13px; color:#fca5a5; text-align:center;">
-                ❌ Incorrect PIN. Please check your assigned PIN and try again.
-              </div>
-            ` : ''}
-
-            <form style="margin-top:12px;" onsubmit="handlePinSubmit(event)">
-              <input 
-                id="pinInput" 
-                type="text" 
-                inputmode="numeric"
-                autocomplete="one-time-code"
-                autofocus
-                placeholder="Enter 6-Digit PIN" 
-                maxlength="16" 
-                style="width:100%; padding:14px; border-radius:10px; border:1px solid ${hasAttemptedPin ? 'rgba(239,68,68,0.6)' : 'rgba(255,255,255,0.2)'}; background:rgba(15,23,42,0.9); color:#fff; margin-bottom:14px; font-size:18px; text-align:center; letter-spacing:4px; font-weight:700; box-sizing:border-box; outline:none; transition:border-color 0.2s;"
-                onfocus="this.style.borderColor='#38bdf8'"
-                onblur="this.style.borderColor='${hasAttemptedPin ? 'rgba(239,68,68,0.6)' : 'rgba(255,255,255,0.2)'}'"
-              />
-              <button 
-                id="unlockBtn"
-                type="submit" 
-                style="width:100%; padding:14px; border-radius:10px; border:none; background:linear-gradient(135deg,#38bdf8,#0284c7); color:#0f172a; font-weight:800; font-size:15px; cursor:pointer; box-shadow:0 4px 12px rgba(56,189,248,0.3); transition:transform 0.1s, opacity 0.2s;"
-                onmousedown="this.style.transform='scale(0.98)'"
-                onmouseup="this.style.transform='scale(1)'"
-              >
-                Unlock & Watch Stream
-              </button>
-            </form>
-          </div>
-        </body>
-        </html>
-      `);
-      return;
-    }
+    // Direct access allowed without PIN requirement for seamless local & Cloudflare fast link control
 
     if (p === '/upload' && req.method === 'POST') {
       const chunks = [];
@@ -1228,15 +1121,8 @@ async function startStreamServer(serial, port) {
     const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
     const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
-    const dashboardServer = require('../dashboard/server');
-    let isPinValid = false;
-    if (isLocalHost) {
-      isPinValid = true;
-    } else if (pinParam) {
-      isPinValid = await licenseService.validateDevicePin(serial, pinParam, bindingCode);
-    }
-    const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
-    const isValidWs = isLocalHost || isPinValid || isTokenValid;
+    // Direct WebSocket connection allowed without PIN requirement for seamless control
+    const isValidWs = true;
 
     if (!isValidWs) {
       ws.close(4001, 'Unauthorized Stream Access (PIN / Session Token Required)');
@@ -1298,8 +1184,7 @@ async function startStreamServer(serial, port) {
 function buildStreamUrl(tunnelDomain, port, serial) {
   const cleanDomain = tunnelDomain.replace(/\/+$/, '');
   const domain = cleanDomain.startsWith('http') ? cleanDomain : `https://${cleanDomain}`;
-  const bindingCode = bindingService.getOrGenerateBindingCode();
-  return `${domain}/?udid=${encodeURIComponent(serial)}&pin=${encodeURIComponent(bindingCode)}`;
+  return `${domain}/?udid=${encodeURIComponent(serial)}`;
 }
 
 function killStreamServer(streamProcess) {

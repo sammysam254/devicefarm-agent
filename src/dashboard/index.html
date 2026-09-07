@@ -8,18 +8,17 @@
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#07090e">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-dark: #07090e;
       --bg-card: rgba(15, 23, 42, 0.75);
-      --bg-card-hover: rgba(30, 41, 59, 0.8);
+      --bg-card-hover: rgba(30, 41, 59, 0.85);
       --border-color: rgba(255, 255, 255, 0.08);
-      --border-accent: rgba(56, 189, 248, 0.25);
+      --border-accent: rgba(56, 189, 248, 0.35);
       --primary: #38bdf8;
       --primary-glow: rgba(56, 189, 248, 0.35);
       --purple: #c084fc;
-      --pink: #f472b6;
       --emerald: #34d399;
       --amber: #fbbf24;
       --rose: #fb7185;
@@ -109,7 +108,7 @@
     .section-title { font-size: 20px; font-weight: 800; }
 
     .devices-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
       gap: 24px; margin-bottom: 40px;
     }
 
@@ -117,37 +116,76 @@
       background: var(--bg-card); border: 1px solid var(--border-color);
       border-radius: var(--radius-lg); padding: 24px;
       transition: all 0.3s ease;
+      display: flex; flex-direction: column; justify-content: space-between;
     }
-    .device-card:hover { border-color: var(--border-accent); }
+    .device-card:hover { border-color: var(--border-accent); box-shadow: 0 10px 30px -10px rgba(56, 189, 248, 0.15); }
 
     .device-card-head {
       display: flex; align-items: center; justify-content: space-between;
       margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color);
     }
-    .device-name { font-size: 16px; font-weight: 700; }
-    .device-sub { font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); }
+    .device-name { font-size: 17px; font-weight: 700; color: #fff; }
+    .device-sub { font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--primary); margin-top: 2px; }
 
     .stream-box {
-      background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-color);
-      border-radius: var(--radius-sm); padding: 12px; margin-top: 14px;
+      background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border-color);
+      border-radius: var(--radius-md); padding: 14px; margin-top: 14px;
     }
+
+    .fast-link-container {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 8px;
+    }
+
     .stream-url-text {
-      font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary);
-      word-break: break-all; margin: 6px 0 10px;
+      font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--primary);
+      word-break: break-all; margin: 4px 0 8px; line-height: 1.4;
     }
 
     .btn-action {
-      display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px;
       border-radius: 8px; font-size: 12px; font-weight: 700; text-decoration: none;
       border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.05);
-      color: var(--text-main); cursor: pointer;
+      color: var(--text-main); cursor: pointer; transition: all 0.2s ease;
     }
-    .btn-primary { background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.3); color: var(--primary); }
+    .btn-action:hover { background: rgba(255, 255, 255, 0.1); }
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(14, 165, 233, 0.25));
+      border-color: rgba(56, 189, 248, 0.5); color: #fff;
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.4), rgba(14, 165, 233, 0.4));
+      border-color: var(--primary);
+    }
+    .btn-emerald {
+      background: rgba(52, 211, 153, 0.15);
+      border-color: rgba(52, 211, 153, 0.35);
+      color: var(--emerald);
+    }
+    .btn-emerald:hover { background: rgba(52, 211, 153, 0.25); }
+
+    .quick-keys-bar {
+      display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;
+    }
+    .key-btn {
+      padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 6px;
+      background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted); cursor: pointer; transition: 0.15s ease;
+    }
+    .key-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 
     .empty-state {
       background: var(--bg-card); border: 1px dashed var(--border-color);
       border-radius: var(--radius-lg); padding: 60px 24px; text-align: center;
       max-width: 600px; margin: 0 auto;
+    }
+
+    .copied-toast {
+      color: var(--emerald); font-size: 11px; font-weight: 700; margin-left: 6px;
+      opacity: 0; transition: opacity 0.3s;
     }
   </style>
 </head>
@@ -159,7 +197,7 @@
         <div class="brand-icon">📱</div>
         <div>
           <h1 class="brand-text">DeviceFarm Agent</h1>
-          <div style="font-size: 12px; color: var(--text-dim);">Local Machine Control Center</div>
+          <div style="font-size: 12px; color: var(--text-dim);">Local Machine Control Center — Fast Link Active (No PIN Required)</div>
         </div>
       </div>
       <div class="agent-status-pill">
@@ -183,8 +221,8 @@
         <div class="stat-value stat-val-purple" id="statLicenseStatus">Checking...</div>
       </div>
       <div class="stat-card">
-        <div class="stat-header">License Mode</div>
-        <div class="stat-value" style="font-size: 20px; margin-top: 10px; color: var(--primary);" id="statLicenseMode">Active</div>
+        <div class="stat-header">Control Mode</div>
+        <div class="stat-value" style="font-size: 20px; margin-top: 10px; color: var(--emerald);" id="statLicenseMode">Direct Fast Link</div>
       </div>
     </section>
 
@@ -198,7 +236,7 @@
           Loading...
         </div>
         <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
-          Enter this code on your online website dashboard to claim this machine and manage device streams online.
+          Connect your Samsung S23 or any Android device via USB. Control directly via Cloudflare Fast Links or LAN with zero PIN restrictions.
         </div>
       </div>
       <button class="btn-action btn-primary" style="padding: 12px 20px; font-size: 14px;" onclick="copyBindingCode()">
@@ -209,7 +247,7 @@
     <!-- Devices List Section -->
     <section aria-label="Connected Devices List">
       <div class="section-header">
-        <h2 class="section-title">Connected Devices</h2>
+        <h2 class="section-title">Connected Devices & Fast Links</h2>
         <button class="btn-action" onclick="fetchDevices()">🔄 Refresh</button>
       </div>
 
@@ -217,7 +255,7 @@
         <div class="empty-state">
           <div style="font-size: 40px; margin-bottom: 12px;">📱</div>
           <div style="font-size: 16px; font-weight: 700;">Scanning for Android Devices...</div>
-          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Connect Android phones via USB with USB Debugging enabled.</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Plug in Samsung Galaxy S23 or any Android phone via USB with USB Debugging enabled.</div>
         </div>
       </div>
     </section>
@@ -232,9 +270,7 @@
         const data = await res.json();
 
         if (data.status === 'ok') {
-          const isRemoteHost = data.isRemote || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1');
-
-          document.getElementById('statDevices').innerText = isRemoteHost ? 0 : (data.count || 0);
+          document.getElementById('statDevices').innerText = data.count || (data.devices ? data.devices.length : 0);
           document.getElementById('statBindingCode').innerText = data.bindingCode || '--------';
           document.getElementById('localBindingCodeBig').innerText = data.bindingCode || '--------';
           currentBindingCode = data.bindingCode;
@@ -244,80 +280,119 @@
           statusElem.innerText = isLicensed ? 'ACTIVE' : 'REVOKED';
           statusElem.style.color = isLicensed ? 'var(--emerald)' : 'var(--rose)';
 
-          document.getElementById('statLicenseMode').innerText = (data.licenseMode || 'LICENSED').toUpperCase();
+          document.getElementById('statLicenseMode').innerText = 'FAST LINK (NO PIN)';
 
-          renderDevices(data.devices || [], isRemoteHost);
+          renderDevices(data.devices || []);
         }
       } catch (err) {
         console.error('Error fetching devices:', err);
       }
     }
 
-    function renderDevices(devices, isRemoteHost) {
+    function renderDevices(devices) {
       const container = document.getElementById('devicesContainer');
-
-      if (isRemoteHost || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
-        container.innerHTML = `
-          <div class="empty-state" style="border-color: rgba(56, 189, 248, 0.3);">
-            <div style="font-size: 40px; margin-bottom: 12px;">🛡️</div>
-            <div style="font-size: 16px; font-weight: 700; color: var(--primary);">Cloud Stream Protection Active</div>
-            <div style="font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.6;">
-              Device streams are active and routed to your online account. For security, individual device streams are managed exclusively through your online website dashboard.
-            </div>
-          </div>
-        `;
-        return;
-      }
 
       if (!devices || devices.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
             <div style="font-size: 40px; margin-bottom: 12px;">📱</div>
-            <div style="font-size: 16px; font-weight: 700;">No Devices Connected</div>
-            <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Plug in Android phones via USB with USB Debugging turned on.</div>
+            <div style="font-size: 16px; font-weight: 700;">No Devices Detected</div>
+            <div style="font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.6;">
+              Connect your Samsung S23 via USB with <strong>USB Debugging</strong> enabled.<br>
+              <em>(Note: Check Settings &gt; Security and Privacy &gt; Auto Blocker and ensure it is turned OFF on Samsung One UI).</em>
+            </div>
           </div>
         `;
         return;
       }
 
-      container.innerHTML = devices.map(d => `
-        <div class="device-card">
-          <div class="device-card-head">
+      container.innerHTML = devices.map(d => {
+        const fastLink = d.streamUrl || d.publicUrl || (d.port ? `http://localhost:${d.port}/?udid=${d.serial}` : '');
+        const localLink = d.localUrl || (d.port ? `http://localhost:${d.port}/?udid=${d.serial}` : '');
+        const isCloudflare = fastLink && (fastLink.includes('trycloudflare.com') || fastLink.includes('loca.lt') || fastLink.includes('dennoh.site'));
+
+        return `
+          <div class="device-card">
             <div>
-              <div class="device-name">${d.brand} ${d.model}</div>
-              <div class="device-sub">${d.serial}</div>
+              <div class="device-card-head">
+                <div>
+                  <div class="device-name">📱 ${d.brand ? d.brand.toUpperCase() : 'ANDROID'} ${d.model || ''}</div>
+                  <div class="device-sub">UDID: ${d.serial}</div>
+                </div>
+                <span style="padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 800; background: rgba(52, 211, 153, 0.15); color: var(--emerald);">
+                  PORT ${d.port}
+                </span>
+              </div>
+
+              <div class="stream-box">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <div style="font-size: 11px; color: var(--emerald); font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <span>⚡</span> ${isCloudflare ? 'CLOUDFLARE FAST LINK (NO PIN)' : 'STREAM LINK READY'}
+                  </div>
+                  <span style="font-size: 10px; color: var(--emerald); font-weight: 700; background: rgba(52, 211, 153, 0.1); padding: 2px 6px; border-radius: 4px;">
+                    🔓 PIN Free Control
+                  </span>
+                </div>
+
+                <div class="fast-link-container">
+                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">Fast Control URL</div>
+                  <div class="stream-url-text" id="linkText_${d.serial}">${fastLink}</div>
+                  <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="btn-action" style="padding: 5px 10px; font-size: 11px;" onclick="copyLink('${fastLink}', 'toast_${d.serial}')">
+                      📋 Copy Link
+                    </button>
+                    <span id="toast_${d.serial}" class="copied-toast">✓ Copied!</span>
+                  </div>
+                </div>
+
+                <!-- Launch Control Buttons -->
+                <div style="display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;">
+                  <button class="btn-action btn-primary" style="flex: 1; min-width: 140px; padding: 10px;" onclick="openPopoutStream('${fastLink}', '${d.serial}')">
+                    🚀 Open Fast Control ↗
+                  </button>
+                  <button class="btn-action btn-emerald" style="padding: 10px;" onclick="openPopoutStream('${localLink}', '${d.serial}')" title="Direct LAN stream with lowest possible latency">
+                    🖥️ LAN Stream
+                  </button>
+                </div>
+
+                <!-- Quick Hardware Action Buttons -->
+                <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
+                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">
+                    Quick Actions
+                  </div>
+                  <div class="quick-keys-bar">
+                    <button class="key-btn" onclick="sendKey('${d.port}', 3)">🏠 Home</button>
+                    <button class="key-btn" onclick="sendKey('${d.port}', 4)">◀ Back</button>
+                    <button class="key-btn" onclick="sendKey('${d.port}', 187)">🔲 App Switch</button>
+                    <button class="key-btn" onclick="sendKey('${d.port}', 26)">⚡ Power/Wake</button>
+                    <button class="key-btn" onclick="sendKey('${d.port}', 24)">🔊 Vol +</button>
+                    <button class="key-btn" onclick="sendKey('${d.port}', 25)">🔉 Vol -</button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <span style="padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 800; background: rgba(52, 211, 153, 0.15); color: var(--emerald);">
-              PORT ${d.port}
-            </span>
           </div>
-          <div class="stream-box">
-            <div style="font-size: 11px; color: var(--emerald); font-weight: 700; display: flex; align-items: center; gap: 6px;">
-              <span>🔒</span> CLOUD SYNCED & PROTECTED
-            </div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
-              Device streams are synced to your online account. Access is strictly routed through your dashboard with your assigned PIN code.
-            </div>
-            <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
-              <span style="font-size: 11px; font-family: 'JetBrains Mono', monospace; padding: 4px 10px; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 6px; color: var(--emerald);">
-                ✓ Direct Links Hidden & PIN Protected
-              </span>
-              ${d.streamUrl ? `
-                <button onclick="openPopoutStream('${d.streamUrl}', '${d.serial}')" style="padding: 6px 14px; background: #38bdf8; color: #0f172a; border: none; border-radius: 6px; font-weight: 700; font-size: 12px; cursor: pointer;">
-                  ▶ Open Pop-Out Stream ↗
-                </button>
-              ` : ''}
-            </div>
-          </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     function openPopoutStream(streamUrl, serial) {
-      const w = 510, h = 900;
+      if (!streamUrl) return;
+      const w = 510, h = 920;
       const left = Math.max(0, Math.round((window.screen.width - w) / 2));
       const top = Math.max(0, Math.round((window.screen.height - h) / 2));
       window.open(streamUrl, `Stream_${serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+    }
+
+    function copyLink(url, toastId) {
+      if (!url) return;
+      navigator.clipboard.writeText(url).then(() => {
+        const toast = document.getElementById(toastId);
+        if (toast) {
+          toast.style.opacity = '1';
+          setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+        }
+      });
     }
 
     function copyBindingCode() {
@@ -325,6 +400,11 @@
         navigator.clipboard.writeText(currentBindingCode);
         alert('8-Digit Machine Binding Code (' + currentBindingCode + ') copied!');
       }
+    }
+
+    function sendKey(port, keycode) {
+      if (!port) return;
+      fetch(`http://localhost:${port}/control?type=key&code=${keycode}`, { mode: 'no-cors' }).catch(() => {});
     }
 
     fetchDevices();

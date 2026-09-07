@@ -74,6 +74,8 @@ function getActiveDeviceSummaries() {
       brand: session.brand,
       port: session.port,
       streamUrl: session.streamUrl,
+      publicUrl: session.publicUrl,
+      localUrl: session.localUrl,
       paymentStatus: session.paymentStatus,
       isPaid: session.isPaid,
       monthlyFeeUsd: session.monthlyFeeUsd,
