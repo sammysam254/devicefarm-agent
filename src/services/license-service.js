@@ -307,6 +307,7 @@ async function syncDeviceToCloud(params) {
  * Mark device as offline in Supabase across devices & device_rentals tables.
  */
 async function markDeviceOffline(serial) {
+  lastDeviceSyncState.delete(serial);
   const client = getSupabaseClient();
   if (!client) return;
   try {

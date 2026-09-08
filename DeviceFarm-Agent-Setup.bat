@@ -354,59 +354,16 @@ echo [*] Generating Machine Binding Code...
 "%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
 "%NODE%" "src\services\verify-payment.js"
 
-:: ── Check if Agent is already running with active device streams ──────────
-netstat -ano 2>nul | findstr ":7400 " | findstr "LISTENING" >nul
-if %errorlevel% equ 0 (
-    echo.
-    echo  ================================================================
-    echo  [OK] DeviceFarm Agent is ALREADY running with active devices!
-    echo       Syncing GitHub changes silently without dropping connections...
-    echo  ================================================================
-    echo.
-    if exist "%INSTALL_DIR%\.git" (
-        echo [*] Syncing latest GitHub changes...
-        "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-            "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Fetching remote changes...' -PercentComplete 20;" ^
-            "& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>$null;" ^
-            "if ($LASTEXITCODE -ne 0) {" ^
-            "  Write-Progress -Activity 'DeviceFarm Live Update' -Completed;" ^
-            "  Write-Host '';" ^
-            "  Write-Host '[ERROR] git fetch failed:' -ForegroundColor Red;" ^
-            "  $err = (& '%GIT%' -C '%INSTALL_DIR%' fetch origin main 2>&1) | Out-String;" ^
-            "  Write-Host $err -ForegroundColor Red;" ^
-            "  exit 1" ^
-            "};" ^
-            "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Applying changes...' -PercentComplete 70;" ^
-            "& '%GIT%' -C '%INSTALL_DIR%' pull --ff-only origin main 2>$null;" ^
-            "if ($LASTEXITCODE -ne 0) {" ^
-            "  Write-Progress -Activity 'DeviceFarm Live Update' -Completed;" ^
-            "  Write-Host '';" ^
-            "  Write-Host '[ERROR] git pull failed:' -ForegroundColor Red;" ^
-            "  $err = (& '%GIT%' -C '%INSTALL_DIR%' pull --ff-only origin main 2>&1) | Out-String;" ^
-            "  Write-Host $err -ForegroundColor Red;" ^
-            "  exit 1" ^
-            "};" ^
-            "Write-Progress -Activity 'DeviceFarm Live Update' -Status 'Reading commit info...' -PercentComplete 95;" ^
-            "$hash  = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%H'  2>$null) -join '';" ^
-            "$short = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%h'  2>$null) -join '';" ^
-            "$msg   = (& '%GIT%' -C '%INSTALL_DIR%' log -1 '--format=%%s'  2>$null) -join '';" ^
-            "Write-Progress -Activity 'DeviceFarm Live Update' -Completed;" ^
-            "Write-Host '';" ^
-            "Write-Host ('  [OK] Synced to commit ' + $short + ' : ' + $msg) -ForegroundColor Green;" ^
-            "Write-Host '';"
-        if !errorlevel! neq 0 (
-            echo [ERROR] Live sync failed - streams remain active but code may be outdated.
-        ) else (
-            echo [OK] GitHub code updated silently. Active device streams remain 100%% connected.
-        )
+:: ── Pull latest GitHub updates cleanly ──────────────────────────────────────
+if exist "%INSTALL_DIR%\.git" (
+    echo [*] Checking for latest GitHub updates...
+    "%GIT%" -C "%INSTALL_DIR%" fetch origin main >nul 2>&1
+    "%GIT%" -C "%INSTALL_DIR%" pull --ff-only origin main >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [OK] Code updated to latest version from GitHub.
+    ) else (
+        echo [INFO] Continuing with local repository version.
     )
-    echo.
-    echo  Dashboard: http://localhost:7400
-    echo  You can close this window.
-    echo.
-    start "" "http://localhost:7400"
-    pause >nul
-    exit /b 0
 )
 
 echo.

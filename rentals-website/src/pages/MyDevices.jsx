@@ -101,9 +101,8 @@ export default function MyDevices() {
 
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
-    if (d.status === 'offline') return false;
-    if (d.status === 'online' && d.stream_url) return true;
-    return Boolean(d.stream_url);
+    if (d.status === 'online' || Boolean(d.stream_url)) return true;
+    return false;
   };
 
   return (

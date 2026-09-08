@@ -16,9 +16,7 @@ export default function DeviceAllocationSection({ currentUser }) {
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
     if (d.status === 'online' || Boolean(d.stream_url)) return true;
-    if (!d.updated_at && !d.last_seen) return true;
-    const lastTime = new Date(d.updated_at || d.last_seen).getTime();
-    return (new Date().getTime() - lastTime) < 86400000;
+    return false;
   };
 
   const loadAllocationData = async (isInitial = false) => {
@@ -31,7 +29,7 @@ export default function DeviceAllocationSection({ currentUser }) {
         .order('created_at', { ascending: false });
 
       if (dErr) console.error('Error fetching devices:', dErr);
-      const visibleDevices = (dData || []).filter(d => !d.is_deleted_from_view && !d.is_seed_only && d.serial !== 'R5CW114C0SP');
+      const visibleDevices = (dData || []).filter(d => !d.is_deleted_from_view);
       setDevices(visibleDevices);
 
       // 2. Fetch all active profiles (workers, admins, super_admins, seed_admin)

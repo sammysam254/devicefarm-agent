@@ -53,8 +53,12 @@ function listAdbDevices(adbBin) {
       const serials = [];
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
-        if (parts.length >= 2 && parts[1] === 'device') {
-          serials.push(parts[0]);
+        if (parts.length >= 2) {
+          if (parts[1] === 'device') {
+            serials.push(parts[0]);
+          } else if (parts[1] === 'offline') {
+            exec(`"${adbBin}" reconnect offline`, () => {});
+          }
         }
       }
       resolve(serials);
@@ -75,7 +79,7 @@ const _inProgress = new Set();
  * @param {Function} onDeviceRemove – same handler as adb-tracker's handleDeviceRemove
  * @param {number} intervalMs      – polling interval, default 12000ms
  */
-function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 30000) {
+function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 15000) {
   _addDeviceCallback = onDeviceAdd;
   _removeDeviceCallback = onDeviceRemove;
 
@@ -98,20 +102,19 @@ async function runRecoveryCheck() {
   const activeSerials = new Set(processManager.getActiveSerials());
 
   // ── 1. Re-enroll devices seen by ADB but not actively streaming ─────────────
-  for (const serial of adbSerials) {
-    if (activeSerials.has(serial)) continue;      // Already streaming ✓
-    if (_inProgress.has(serial)) continue;         // Already being provisioned ✓
-
-    logger.info(`[EnrollmentGuard] Re-enrolling rebooted/reconnected device: ${serial}`);
-    _inProgress.add(serial);
-
-    try {
-      await _addDeviceCallback({ id: serial, type: 'device' });
-    } catch (err) {
-      logger.warn(`[EnrollmentGuard] Re-enrollment failed for ${serial}: ${err.message}`);
-    } finally {
-      _inProgress.delete(serial);
-    }
+  const toEnroll = adbSerials.filter(serial => !activeSerials.has(serial) && !_inProgress.has(serial));
+  if (toEnroll.length > 0) {
+    await Promise.allSettled(toEnroll.map(async (serial) => {
+      logger.info(`[EnrollmentGuard] Re-enrolling rebooted/reconnected device: ${serial}`);
+      _inProgress.add(serial);
+      try {
+        await _addDeviceCallback({ id: serial, type: 'device' });
+      } catch (err) {
+        logger.warn(`[EnrollmentGuard] Re-enrollment failed for ${serial}: ${err.message}`);
+      } finally {
+        _inProgress.delete(serial);
+      }
+    }));
   }
 
   // ── 2. Clean up stale processManager entries for vanished devices ───────────

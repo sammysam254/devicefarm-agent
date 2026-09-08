@@ -122,41 +122,20 @@ async function handleDeviceAdd(device) {
       ensureNamedTokenTunnelRunning();
     } catch (_) {}
 
-    // 6. Create dedicated Quick Tunnel (trycloudflare.com) for the local dashboard fast control
-    let publicUrl     = null;
-    let tunnelProcess = null;
-
-    try {
-      const tunnelResult = await createTunnel(port);
-      publicUrl     = tunnelResult.publicUrl;
-      tunnelProcess = tunnelResult.tunnelProcess;
-      logger.info(`trycloudflare tunnel created for ${serial}: ${publicUrl}`);
-    } catch (err) {
-      logger.warn(`Failed to create trycloudflare tunnel for ${serial} — local-only: ${err.message}`);
-    }
-
-    // trycloudflare stream URL (for local dashboard 1-click fast control)
-    const trycloudflareUrl = publicUrl
-      ? buildStreamUrl(publicUrl, port, serial)
-      : null;
-
-    const streamUrl = trycloudflareUrl || `http://localhost:${port}/?udid=${encodeURIComponent(serial)}`;
-
     // Cloudflare Named Token Tunnel URL (for Supabase & website customers)
     const cfg = loadConfig();
     const rawDomain = (cfg.customDomain || cfg.domain || 'agent.dennoh.site').replace(/^https?:\/\//, '').replace(/\/+$/, '');
     const namedTokenUrl = `https://${rawDomain}/?udid=${encodeURIComponent(serial)}`;
+    const streamUrl = `http://localhost:${port}/?udid=${encodeURIComponent(serial)}`;
 
-    logger.info(`Stream URLs for ${serial} -> [Local Fast Control: ${streamUrl}] | [Website/Supabase: ${namedTokenUrl}]`);
-
-    // 7. Register with process manager
+    // 6. Register immediately with process manager so the device is online and accessible
     processManager.addDevice(serial, {
       streamProcess,
-      tunnelProcess,
+      tunnelProcess: null,
       port,
-      publicUrl: trycloudflareUrl,
-      streamUrl: streamUrl,
-      trycloudflareUrl: trycloudflareUrl,
+      publicUrl: null,
+      streamUrl: namedTokenUrl,
+      trycloudflareUrl: null,
       namedTokenUrl: namedTokenUrl,
       localUrl,
       model: deviceModel,
@@ -168,7 +147,7 @@ async function handleDeviceAdd(device) {
       paymentStatus: licenseStatus.mode,
     });
 
-    // 8. Sync Named Token URL to Supabase cloud for the website / online dashboard
+    // 7. Sync Named Token URL to Supabase cloud immediately
     await bindingService.syncDeviceUrl(serial, namedTokenUrl, {
       model: deviceModel,
       brand: deviceBrand,
@@ -176,18 +155,38 @@ async function handleDeviceAdd(device) {
       port,
     });
 
-    // 9. Register with central API (silent fail)
+    // 8. Register with central API (silent fail)
     try {
       await apiClient.registerDevice({
         serialNumber: serial,
         deviceModel,
         deviceBrand,
-        streamUrl,
+        streamUrl: namedTokenUrl,
         status: 'ONLINE',
       });
     } catch (_) {}
 
     logger.info(`✅ Device ${serial} (${deviceBrand} ${deviceModel}) provisioned — stream ready`);
+
+    // 9. Asynchronously create dedicated Quick Tunnel in background (non-blocking)
+    (async () => {
+      try {
+        const tunnelResult = await createTunnel(port);
+        const quickUrl = tunnelResult.publicUrl ? buildStreamUrl(tunnelResult.publicUrl, port, serial) : null;
+        if (quickUrl) {
+          const dev = processManager.getDevice(serial);
+          if (dev) {
+            dev.tunnelProcess = tunnelResult.tunnelProcess;
+            dev.publicUrl = quickUrl;
+            dev.trycloudflareUrl = quickUrl;
+          }
+          logger.info(`trycloudflare tunnel ready for ${serial}: ${quickUrl}`);
+        }
+      } catch (err) {
+        logger.info(`Quick tunnel skipped for ${serial} (named tunnel active): ${err.message}`);
+      }
+    })().catch(() => {});
+
   } catch (err) {
     logger.error(`Failed to provision device ${serial}: ${err.message}`, { stack: err.stack });
     processManager.killDeviceProcesses(serial);
@@ -232,16 +231,27 @@ async function startTracking() {
   try {
     const devices = await client.listDevices();
     logger.info(`Initial ADB scan: ${devices.length} device(s)`);
+
+    const activeList = [];
     for (const d of devices) {
       if (d.type === 'device') {
-        await handleDeviceAdd(d);
+        activeList.push(d);
       } else if (d.type === 'unauthorized') {
         logger.warn(`Device ${d.id} is UNAUTHORIZED — check the phone screen and tap "Allow USB Debugging", then reconnect the cable.`);
       } else if (d.type === 'offline') {
-        logger.warn(`Device ${d.id} is OFFLINE — try unplugging and replugging the USB cable.`);
+        logger.warn(`Device ${d.id} is OFFLINE — attempting ADB reconnect`);
+        try {
+          const { exec } = require('child_process');
+          exec(`"${adbPath}" reconnect offline`, () => {});
+        } catch (_) {}
       } else {
         logger.info(`Device ${d.id} skipped (type: ${d.type})`);
       }
+    }
+
+    // Provision all connected devices concurrently in parallel
+    if (activeList.length > 0) {
+      await Promise.allSettled(activeList.map(d => handleDeviceAdd(d)));
     }
   } catch (err) {
     logger.error(`Initial ADB scan failed: ${err.message}`);
@@ -309,8 +319,8 @@ function startCloudHeartbeat() {
   // Immediate sync on start
   performSync();
 
-  // Periodic heartbeat every 5 minutes (event-driven syncs handle plug/unplug)
-  cloudHeartbeatTimer = setInterval(performSync, 300000);
+  // Periodic heartbeat every 60 seconds (event-driven syncs handle plug/unplug)
+  cloudHeartbeatTimer = setInterval(performSync, 60000);
 }
 
 function stopCloudHeartbeat() {
