@@ -350,8 +350,8 @@ echo  ================================================================
 echo   STEP 1: PAYMENT SYSTEM VERIFICATION  ($30 / month)
 echo  ================================================================
 echo.
-echo [*] Generating Machine Binding Code...
-"%NODE%" -e "const fs=require('fs'),p=require('path'),c=p.join(process.cwd(),'config.json'),cfg=fs.existsSync(c)?JSON.parse(fs.readFileSync(c)):{};if(!cfg.machineBindingCode||!/^\d{8}$/.test(cfg.machineBindingCode)){cfg.machineBindingCode=Math.floor(10000000+Math.random()*90000000).toString();fs.writeFileSync(c,JSON.stringify(cfg,null,2));}"
+echo [*] Resolving persistent Machine Binding Code...
+"%NODE%" -e "const bs=require('./src/services/binding-service');bs.getOrGenerateBindingCode();"
 "%NODE%" "src\services\verify-payment.js"
 
 :: ── Pull latest GitHub updates cleanly ──────────────────────────────────────
