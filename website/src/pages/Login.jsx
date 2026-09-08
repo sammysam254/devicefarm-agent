@@ -1,27 +1,21 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { Smartphone, Lock, Mail, ArrowRight, ShieldCheck, CheckCircle2, ArrowLeft, Hash, Link2 } from 'lucide-react';
+import { Smartphone, Lock, Mail, ArrowRight, CheckCircle2 } from 'lucide-react';
 import SEO from '../components/SEO';
 import QuadCornerLoader from '../components/QuadCornerLoader';
 import { playWelcomeSound } from '../lib/soundEffects';
 
 export default function Login() {
-  const { login, signup, verifyOtp } = useAuth();
+  const { login, signup } = useAuth();
   const navigate = useNavigate();
 
   const [isSignUp, setIsSignUp] = useState(false);
-  const [verifyMode, setVerifyMode] = useState('code'); // 'code' | 'link'
-  const [step, setStep] = useState(1); // 1: Form, 2: OTP Verification / Link Instructions
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState(null);
   const [welcomeMsg, setWelcomeMsg] = useState(null);
-  const [linkSentMsg, setLinkSentMsg] = useState(null);
   const [loading, setLoading] = useState(false);
-
-  const otpRefs = [useRef(), useRef(), useRef(), useRef(), useRef(), useRef()];
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -32,66 +26,25 @@ export default function Login() {
       if (isSignUp) {
         const { data, error: err } = await signup(email, password);
         if (err) throw err;
-        if (data?.session) {
-          playWelcomeSound();
-          setWelcomeMsg(`Welcome to FlexPulse, ${email}!`);
-          setTimeout(() => navigate('/worker'), 1800);
-        } else if (verifyMode === 'link') {
-          setLinkSentMsg(`Account registered! We've sent a verification link to ${email}. Please check your email inbox and click the link to activate your account.`);
-          setStep(2);
-        } else {
-          setStep(2);
+
+        // If session was not immediately returned by signUp, attempt instant signIn
+        if (!data?.session) {
+          const { error: logErr } = await login(email, password);
+          if (logErr && !data?.user) throw logErr;
         }
+
+        playWelcomeSound();
+        setWelcomeMsg(`Welcome to FlexPulse, ${email}!`);
+        setTimeout(() => navigate('/worker'), 1600);
       } else {
         const { error: logErr } = await login(email, password);
         if (logErr) throw logErr;
         playWelcomeSound();
         setWelcomeMsg(`Welcome back to FlexPulse!`);
-        setTimeout(() => navigate('/worker'), 1800);
+        setTimeout(() => navigate('/worker'), 1600);
       }
     } catch (err) {
       setError(err.message || 'Authentication failed');
-      setLoading(false);
-    }
-  };
-
-  const handleOtpChange = (index, value) => {
-    if (!/^\d*$/.test(value)) return;
-    const newDigits = [...otpDigits];
-    newDigits[index] = value.slice(-1);
-    setOtpDigits(newDigits);
-
-    if (value && index < 5) {
-      otpRefs[index + 1].current?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
-      otpRefs[index - 1].current?.focus();
-    }
-  };
-
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    const token = otpDigits.join('');
-    if (token.length < 6) {
-      setError('Please enter all 6 digits of your verification code.');
-      return;
-    }
-
-    setError(null);
-    setLoading(true);
-
-    try {
-      const { error: err } = await verifyOtp(email, token, 'signup');
-      if (err) throw err;
-      playWelcomeSound();
-      setWelcomeMsg(`Welcome to FlexPulse, ${email}!`);
-      setTimeout(() => navigate('/worker'), 1800);
-    } catch (err) {
-      setError(err.message || 'Invalid or expired verification code.');
-    } finally {
       setLoading(false);
     }
   };
@@ -106,8 +59,8 @@ export default function Login() {
       background: 'radial-gradient(circle at top, rgba(56,189,248,0.1), transparent)'
     }}>
       <SEO
-        title="Access Portal — FlexPulse Cloud Device Farm"
-        description="Sign in to FlexPulse Cloud Platform to access dedicated device streaming, WebRTC controls, and agent monitoring."
+        title={isSignUp ? "Create Account — FlexPulse Cloud Device Farm" : "Access Portal — FlexPulse Cloud Device Farm"}
+        description="Sign in or create an account on FlexPulse Cloud Platform to access dedicated device streaming, WebRTC controls, and agent monitoring."
         canonical="https://dennoh.site/login"
       />
       <div className="card" style={{ maxWidth: '440px', width: '100%', padding: '36px 28px' }}>
@@ -126,31 +79,15 @@ export default function Login() {
           }}>
             <Smartphone size={28} />
           </div>
-          <h2 style={{ fontSize: '24px', fontWeight: 800 }}>FlexPulse Access</h2>
+          <h2 style={{ fontSize: '24px', fontWeight: 800 }}>
+            {isSignUp ? 'Create Account' : 'FlexPulse Access'}
+          </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
-            {welcomeMsg ? 'Authentication Verified' : (step === 2 && verifyMode === 'code' ? `Enter code sent to ${email}` : (isSignUp ? 'Choose verification method & create account' : 'Log in to access your device dashboard'))}
+            {welcomeMsg 
+              ? 'Authentication Verified' 
+              : (isSignUp ? 'Create an account to access your device dashboard' : 'Log in to access your device dashboard')}
           </p>
         </div>
-
-        {/* Interactive Verification Method Selector for Signup */}
-        {isSignUp && step === 1 && !welcomeMsg && (
-          <div className="tab-group" style={{ marginBottom: '20px' }}>
-            <button
-              type="button"
-              className={`tab-item ${verifyMode === 'code' ? 'active' : ''}`}
-              onClick={() => setVerifyMode('code')}
-            >
-              <Hash size={15} /> 6-Digit Code
-            </button>
-            <button
-              type="button"
-              className={`tab-item ${verifyMode === 'link' ? 'active' : ''}`}
-              onClick={() => setVerifyMode('link')}
-            >
-              <Link2 size={15} /> Email Link
-            </button>
-          </div>
-        )}
 
         {error && (
           <div style={{
@@ -183,7 +120,7 @@ export default function Login() {
             </div>
             <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Opening Cloud Dashboard...</p>
           </div>
-        ) : step === 1 ? (
+        ) : (
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
               <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
@@ -219,6 +156,7 @@ export default function Login() {
                 <input 
                   type="password" 
                   required 
+                  minLength={6}
                   className="input-field" 
                   style={{ paddingLeft: '40px' }}
                   placeholder="••••••••" 
@@ -232,57 +170,8 @@ export default function Login() {
               {loading ? (
                 <QuadCornerLoader text={isSignUp ? 'Creating Account...' : 'Connecting Corners & Authenticating...'} size="small" inline />
               ) : (
-                <>{isSignUp ? (verifyMode === 'code' ? 'Register & Get 6-Digit Code' : 'Register & Send Email Link') : 'Sign In'} <ArrowRight size={16} /></>
+                <>{isSignUp ? 'Create Account' : 'Sign In'} <ArrowRight size={16} /></>
               )}
-            </button>
-          </form>
-        ) : verifyMode === 'link' && linkSentMsg ? (
-          <div style={{ textAlign: 'center' }}>
-            <div style={{
-              padding: '20px',
-              borderRadius: '16px',
-              background: 'rgba(34, 197, 94, 0.15)',
-              border: '1px solid rgba(34, 197, 94, 0.3)',
-              color: '#4ade80',
-              fontSize: '14px',
-              lineHeight: 1.6,
-              marginBottom: '20px'
-            }}>
-              <CheckCircle2 size={36} style={{ display: 'block', margin: '0 auto 10px auto' }} />
-              <div>{linkSentMsg}</div>
-            </div>
-            <button type="button" onClick={() => { setStep(1); setIsSignUp(false); }} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-              Return to Log In <ArrowRight size={16} />
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
-              {otpDigits.map((digit, idx) => (
-                <input
-                  key={idx}
-                  ref={otpRefs[idx]}
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  className="otp-input"
-                  value={digit}
-                  onChange={e => handleOtpChange(idx, e.target.value)}
-                  onKeyDown={e => handleOtpKeyDown(idx, e)}
-                />
-              ))}
-            </div>
-
-            <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-              {loading ? (
-                <QuadCornerLoader text="Connecting Corners & Verifying Code..." size="small" inline />
-              ) : (
-                <>Verify OTP & Sign In <ShieldCheck size={16} /></>
-              )}
-            </button>
-
-            <button type="button" onClick={() => setStep(1)} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-              <ArrowLeft size={14} /> Back to Sign Up Options
             </button>
           </form>
         )}
@@ -290,7 +179,7 @@ export default function Login() {
         <div style={{ textAlign: 'center', marginTop: '20px' }}>
           <button 
             type="button" 
-            onClick={() => { setIsSignUp(!isSignUp); setStep(1); setError(null); setLinkSentMsg(null); }}
+            onClick={() => { setIsSignUp(!isSignUp); setError(null); }}
             style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}
           >
             {isSignUp ? 'Already have an account? Log in' : "Don't have an account? Sign up"}
