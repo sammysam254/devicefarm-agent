@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, ExternalLink } from 'lucide-react';
+import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, ExternalLink, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [devices, setDevices] = useState([]);
@@ -10,6 +10,32 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   // Track a reload counter per device-id so we can force-remount stale iframes
   const [reloadKeys, setReloadKeys] = useState({});
   const prevDevicesRef = useRef([]);
+
+  const toggleStreamBlock = async (deviceId, serial, currentBlocked) => {
+    const nextBlocked = !currentBlocked;
+    let reason = '';
+    if (nextBlocked) {
+      reason = window.prompt(`Enter reason for blocking stream ${serial} (optional):`, 'Suspended by Admin') || 'Suspended by Admin';
+    } else {
+      if (!window.confirm(`Unblock stream for ${serial}? Users will immediately regain live stream access.`)) return;
+    }
+
+    try {
+      await supabase.from('devices').update({
+        is_stream_blocked: nextBlocked,
+        stream_blocked_reason: nextBlocked ? reason : null,
+        stream_blocked_by: currentUser?.id || null,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+
+      setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, is_stream_blocked: nextBlocked, stream_blocked_reason: nextBlocked ? reason : null } : d));
+      if (focusDevice && focusDevice.id === deviceId) {
+        setFocusDevice(prev => ({ ...prev, is_stream_blocked: nextBlocked, stream_blocked_reason: nextBlocked ? reason : null }));
+      }
+    } catch (err) {
+      alert('Error updating stream block status: ' + err.message);
+    }
+  };
 
   const fetchDevicesAndLockState = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -215,28 +241,43 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             }
             const isFocused = focusDevice && focusDevice.id === d.id;
             const isStealthOn = d.stealth_root_enabled !== false;
+            const isBlocked = Boolean(d.is_stream_blocked || d.status === 'blocked');
 
             return (
               <div 
                 key={d.id}
                 className="card" 
-                style={{ padding: 0, overflow: 'hidden', position: 'relative', cursor: 'pointer', transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', borderColor: 'rgba(56, 189, 248, 0.3)' }}
+                style={{ padding: 0, overflow: 'hidden', position: 'relative', cursor: 'pointer', transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', borderColor: isBlocked ? 'rgba(239, 68, 68, 0.5)' : 'rgba(56, 189, 248, 0.3)' }}
                 onClick={() => setFocusDevice(d)}
               >
                 {/* Tile Header Bar */}
                 <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.95)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                   <div style={{ fontWeight: 700, fontSize: '12px', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Video size={13} color="var(--primary)" />
+                    <Video size={13} color={isBlocked ? 'var(--danger)' : 'var(--primary)'} />
                     {d.brand || ''} {d.model || 'Android'} ({d.serial})
                   </div>
-                  <div style={{ fontSize: '10px', fontWeight: 800, color: '#f87171', background: 'rgba(239,68,68,0.2)', padding: '2px 6px', borderRadius: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: '5px', height: '5px', background: '#f87171', borderRadius: '50%' }}></span> LIVE
-                  </div>
+                  {isBlocked ? (
+                    <div style={{ fontSize: '10px', fontWeight: 800, color: '#f87171', background: 'rgba(239,68,68,0.25)', padding: '2px 8px', borderRadius: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '5px', height: '5px', background: '#ef4444', borderRadius: '50%' }}></span> ⛔ BLOCKED
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '10px', fontWeight: 800, color: '#34d399', background: 'rgba(52,211,153,0.15)', padding: '2px 6px', borderRadius: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '5px', height: '5px', background: '#34d399', borderRadius: '50%' }}></span> LIVE
+                    </div>
+                  )}
                 </div>
 
                 {/* Viewport Frame */}
                 <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
-                  {streamUrl && !isFocused ? (
+                  {isBlocked ? (
+                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#090d16', padding: '16px', textAlign: 'center' }}>
+                      <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(239,68,68,0.15)', border: '2px solid rgba(239,68,68,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>
+                        ⛔
+                      </div>
+                      <div style={{ color: '#f87171', fontWeight: 800, fontSize: '12px' }}>STREAM BLOCKED</div>
+                      <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.4 }}>{d.stream_blocked_reason || 'Stream suspended by Administrator'}</div>
+                    </div>
+                  ) : streamUrl && !isFocused ? (
                     <iframe
                       key={`stream-${d.id}-${reloadKeys[d.id] || 0}`}
                       src={streamUrl}
@@ -272,13 +313,14 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 </div>
 
                 {/* Card Footer Quick Action Bar */}
-                <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }} onClick={e => e.stopPropagation()}>
                   <button 
-                    onClick={() => toggleStealthRoot(d.id, isStealthOn)}
-                    className="btn btn-secondary"
-                    style={{ fontSize: '11px', padding: '4px 8px', color: isStealthOn ? 'var(--primary)' : 'var(--text-muted)' }}
+                    onClick={() => toggleStreamBlock(d.id, d.serial, isBlocked)}
+                    className={`btn ${isBlocked ? 'btn-primary' : 'btn-danger'}`}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                    title={isBlocked ? 'Unblock device stream' : 'Block stream immediately'}
                   >
-                    {isStealthOn ? '🛡️ Stealth Root: ON' : '⚪ Stealth Root: OFF'}
+                    {isBlocked ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />} {isBlocked ? 'Unblock' : 'Block'}
                   </button>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     {isSeedAdmin && (
@@ -315,12 +357,19 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             style={{ maxWidth: '560px', height: '92vh', maxHeight: '860px', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >
             {/* Header */}
-            <div style={{ padding: '14px 20px', background: 'rgba(15, 23, 42, 0.95)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: '14px 20px', background: 'rgba(15, 23, 42, 0.95)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <strong style={{ color: '#fff', fontSize: '15px' }}>📱 {focusDevice.brand || ''} {focusDevice.model || 'Android'}</strong>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Serial: {focusDevice.serial}</div>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button 
+                  onClick={() => toggleStreamBlock(focusDevice.id, focusDevice.serial, Boolean(focusDevice.is_stream_blocked || focusDevice.status === 'blocked'))}
+                  className={`btn ${focusDevice.is_stream_blocked || focusDevice.status === 'blocked' ? 'btn-primary' : 'btn-danger'}`}
+                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                >
+                  {focusDevice.is_stream_blocked || focusDevice.status === 'blocked' ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />} {focusDevice.is_stream_blocked || focusDevice.status === 'blocked' ? 'Unblock Stream' : 'Block Stream'}
+                </button>
                 <button 
                   onClick={() => {
                     let u = focusDevice.stream_url;
@@ -338,7 +387,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                   <ExternalLink size={14} /> Pop Out Window
                 </button>
                 <button onClick={() => setFocusDevice(null)} className="btn btn-danger" style={{ padding: '6px 14px', fontSize: '12px' }}>
-                  <ArrowLeft size={14} /> Back to Admin Monitor
+                  <ArrowLeft size={14} /> Back
                 </button>
               </div>
             </div>

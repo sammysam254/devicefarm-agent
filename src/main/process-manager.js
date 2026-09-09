@@ -35,6 +35,8 @@ function addDevice(serial, sessionData) {
     paymentStatus: sessionData.paymentStatus || 'unpaid',
     isPaid: sessionData.isPaid || false,
     monthlyFeeUsd: sessionData.monthlyFeeUsd || 30,
+    isStreamBlocked: sessionData.isStreamBlocked || false,
+    streamBlockedReason: sessionData.streamBlockedReason || null,
     startedAt: new Date().toISOString(),
   });
 
@@ -45,6 +47,7 @@ function addDevice(serial, sessionData) {
     trycloudflareUrl: sessionData.trycloudflareUrl || sessionData.publicUrl || null,
     namedTokenUrl: sessionData.namedTokenUrl || null,
     rentalPaid: sessionData.isPaid || false,
+    isStreamBlocked: sessionData.isStreamBlocked || false,
   });
 }
 
@@ -58,6 +61,35 @@ function getDevice(serial) {
 }
 
 /**
+ * Set the stream blocked status for a device.
+ * @param {string} serial
+ * @param {boolean} isBlocked
+ * @param {string} [reason]
+ */
+function setStreamBlocked(serial, isBlocked, reason = null) {
+  const session = activeSessions.get(serial);
+  if (session) {
+    session.isStreamBlocked = Boolean(isBlocked);
+    session.streamBlockedReason = isBlocked ? (reason || 'This device stream has been suspended by an Administrator.') : null;
+    logger.info(`Process manager: Device ${serial} stream blocked status set to ${isBlocked}`, { reason });
+  }
+}
+
+/**
+ * Check if a device's stream is blocked.
+ * @param {string} serial
+ * @returns {{ isBlocked: boolean, reason: string|null }}
+ */
+function isStreamBlocked(serial) {
+  const session = activeSessions.get(serial);
+  if (!session) return { isBlocked: false, reason: null };
+  return {
+    isBlocked: Boolean(session.isStreamBlocked),
+    reason: session.streamBlockedReason || null,
+  };
+}
+
+/**
  * List all active device serial numbers.
  * @returns {string[]}
  */
@@ -67,7 +99,7 @@ function getActiveSerials() {
 
 /**
  * Return summary list of all active devices for API responses / dashboard.
- * @returns {Array<{ serial: string, model: string, brand: string, port: number, streamUrl: string, trycloudflareUrl: string, namedTokenUrl: string, isPaid: boolean, paymentStatus: string, monthlyFeeUsd: number }>}
+ * @returns {Array<{ serial: string, model: string, brand: string, port: number, streamUrl: string, trycloudflareUrl: string, namedTokenUrl: string, isPaid: boolean, paymentStatus: string, monthlyFeeUsd: number, isStreamBlocked: boolean, streamBlockedReason: string|null }>}
  */
 function getActiveDeviceSummaries() {
   const summaries = [];
@@ -85,6 +117,8 @@ function getActiveDeviceSummaries() {
       paymentStatus: session.paymentStatus,
       isPaid: session.isPaid,
       monthlyFeeUsd: session.monthlyFeeUsd,
+      isStreamBlocked: Boolean(session.isStreamBlocked),
+      streamBlockedReason: session.streamBlockedReason || null,
     });
   }
   return summaries;
@@ -157,6 +191,8 @@ module.exports = {
   getDevice,
   getActiveSerials,
   getActiveDeviceSummaries,
+  setStreamBlocked,
+  isStreamBlocked,
   killDeviceProcesses,
   killAllProcesses,
   getActiveCount,

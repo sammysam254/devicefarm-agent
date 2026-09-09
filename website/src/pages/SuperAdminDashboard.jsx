@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2, RotateCcw, Activity } from 'lucide-react';
+import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, UserCheck, Trash2, RotateCcw, Activity, ShieldAlert, ShieldCheck } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
 import SystemLogsModal from '../components/SystemLogsModal';
@@ -16,9 +16,38 @@ export default function SuperAdminDashboard() {
   const [admins, setAdmins] = useState([]);
   const [loading, setLoading] = useState(true);
   const [blockingId, setBlockingId] = useState(null);
+  const [blockingDeviceId, setBlockingDeviceId] = useState(null);
   const [blockReasonModal, setBlockReasonModal] = useState(null);
   const [blockReason, setBlockReason] = useState('');
   const [logsModalOpen, setLogsModalOpen] = useState(false);
+
+  const handleToggleBlockStream = async (device) => {
+    const nextBlocked = !device.is_stream_blocked && device.status !== 'blocked';
+    let reason = '';
+    if (nextBlocked) {
+      reason = window.prompt(`Enter reason for blocking stream for ${device.brand || 'Android'} (${device.serial}) [optional]:`, 'Suspended by Super Admin') || 'Suspended by Super Admin';
+    } else {
+      if (!window.confirm(`Unblock stream for ${device.brand || 'Android'} (${device.serial})? Users will immediately regain live stream access.`)) return;
+    }
+
+    setBlockingDeviceId(device.id);
+    try {
+      const { error } = await supabase.from('devices').update({
+        is_stream_blocked: nextBlocked,
+        stream_blocked_reason: nextBlocked ? reason : null,
+        stream_blocked_by: profile?.id || null,
+        updated_at: new Date().toISOString()
+      }).eq('id', device.id);
+
+      if (error) throw error;
+      alert(nextBlocked ? `⛔ Stream for ${device.serial} has been BLOCKED.` : `✅ Stream for ${device.serial} has been UNBLOCKED.`);
+      loadData(false);
+    } catch (err) {
+      alert('Error updating stream block: ' + err.message);
+    } finally {
+      setBlockingDeviceId(null);
+    }
+  };
 
   const loadData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -270,62 +299,86 @@ export default function SuperAdminDashboard() {
                   <th style={{ padding: '12px' }}>SERIAL</th>
                   <th style={{ padding: '12px' }}>BINDING CODE</th>
                   <th style={{ padding: '12px' }}>AUTO-UPDATED STREAM URL</th>
+                  <th style={{ padding: '12px' }}>STREAM STATUS</th>
                   <th style={{ padding: '12px', textAlign: 'right' }}>STREAM ACCESS</th>
                 </tr>
               </thead>
               <tbody>
-                {devices.map(d => (
-                  <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
-                    <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
-                    <td style={{ padding: '14px 12px', fontFamily: 'monospace', color: 'var(--primary)' }}>{d.binding_code || 'Unbound'}</td>
-                    <td style={{ padding: '14px 12px', fontSize: '12px', fontFamily: 'monospace', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {d.stream_url || 'Generating Cloudflare link...'}
-                    </td>
-                    <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
-                        {(profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com') && (
-                          <button
-                            onClick={() => handleDeleteFromView(d.id)}
-                            className="btn btn-danger"
-                            style={{ padding: '6px 12px', fontSize: '12px' }}
-                            title="Remove device from view across all dashboards"
-                          >
-                            <Trash2 size={12} /> Remove from View
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleRotateStreamLink(d)}
-                          className="btn btn-secondary"
-                          style={{ padding: '6px 12px', fontSize: '12px' }}
-                          title="Rotate stream link and issue a new 16-character access key"
-                        >
-                          <RotateCcw size={12} /> Rotate Link
-                        </button>
-                        {d.stream_url ? (
-                          <a 
-                            href={d.stream_url} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="btn btn-primary" 
-                            style={{ padding: '6px 12px', fontSize: '12px' }}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              const w = 510, h = 900;
-                              const left = Math.max(0, Math.round((window.screen.width - w) / 2));
-                              const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-                              window.open(d.stream_url, `Stream_${d.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
-                            }}
-                          >
-                            Open Stream <ExternalLink size={12} />
-                          </a>
+                {devices.map(d => {
+                  const isBlocked = d.is_stream_blocked || d.status === 'blocked';
+                  return (
+                    <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace', color: 'var(--primary)' }}>{d.binding_code || 'Unbound'}</td>
+                      <td style={{ padding: '14px 12px', fontSize: '12px', fontFamily: 'monospace', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {d.stream_url || 'Generating Cloudflare link...'}
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        {isBlocked ? (
+                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                            <ShieldAlert size={12} /> BLOCKED
+                          </span>
                         ) : (
-                          <span className="badge badge-warning">Offline</span>
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                            <ShieldCheck size={12} /> ACTIVE
+                          </span>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleToggleBlockStream(d)}
+                            disabled={blockingDeviceId === d.id}
+                            className={`btn ${isBlocked ? 'btn-primary' : 'btn-danger'}`}
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                            title={isBlocked ? 'Unblock device stream' : 'Block stream link immediately'}
+                          >
+                            {isBlocked ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />} {isBlocked ? 'Unblock Stream' : 'Block Stream'}
+                          </button>
+                          {(profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com') && (
+                            <button
+                              onClick={() => handleDeleteFromView(d.id)}
+                              className="btn btn-danger"
+                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              title="Remove device from view across all dashboards"
+                            >
+                              <Trash2 size={12} /> Remove from View
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleRotateStreamLink(d)}
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                            title="Rotate stream link and issue a new 16-character access key"
+                          >
+                            <RotateCcw size={12} /> Rotate Link
+                          </button>
+                          {d.stream_url ? (
+                            <a 
+                              href={d.stream_url} 
+                              target="_blank" 
+                              rel="noreferrer" 
+                              className="btn btn-primary" 
+                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                const w = 510, h = 900;
+                                const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+                                const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+                                window.open(d.stream_url, `Stream_${d.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+                              }}
+                            >
+                              Open Stream <ExternalLink size={12} />
+                            </a>
+                          ) : (
+                            <span className="badge badge-warning">Offline</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

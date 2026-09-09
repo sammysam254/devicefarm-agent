@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import RentalsLayout from '../layouts/RentalsLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Shield, Smartphone, DollarSign, RefreshCw, CheckCircle, XCircle, RotateCcw, Trash2, Users } from 'lucide-react';
+import { Shield, Smartphone, DollarSign, RefreshCw, CheckCircle, XCircle, RotateCcw, Trash2, Users, Ban, CheckCircle2 } from 'lucide-react';
 import SEO from '../components/SEO';
 
 export default function AdminRentalHub() {
@@ -27,6 +27,32 @@ export default function AdminRentalHub() {
       console.error('Error loading rental hub data:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleBlockStream = async (device) => {
+    const isCurrentlyBlocked = Boolean(device.is_stream_blocked);
+    let reason = '';
+    if (!isCurrentlyBlocked) {
+      reason = window.prompt(`Enter block reason for ${device.brand} ${device.model} (${device.serial}):`, 'Administrative review / maintenance');
+      if (reason === null) return;
+    } else {
+      if (!window.confirm(`Unblock device stream for ${device.brand} ${device.model} (${device.serial})?`)) return;
+    }
+
+    try {
+      const { error } = await supabase.from('devices').update({
+        is_stream_blocked: !isCurrentlyBlocked,
+        stream_blocked_reason: !isCurrentlyBlocked ? (reason || 'Blocked by Admin') : null,
+        stream_blocked_by: !isCurrentlyBlocked ? profile?.id : null,
+        updated_at: new Date().toISOString()
+      }).eq('id', device.id);
+
+      if (error) throw error;
+      alert(`✅ Device stream ${!isCurrentlyBlocked ? 'BLOCKED' : 'UNBLOCKED'} successfully! Active viewers will immediately see the blocked message.`);
+      loadRentalData();
+    } catch (err) {
+      alert('Error updating stream block state: ' + err.message);
     }
   };
 
@@ -304,43 +330,67 @@ export default function AdminRentalHub() {
                   <th style={{ padding: '12px' }}>RENTED BY (USER ID)</th>
                   <th style={{ padding: '12px' }}>MONTHLY FEE</th>
                   <th style={{ padding: '12px' }}>RENTAL STATUS</th>
+                  <th style={{ padding: '12px' }}>STREAM STATUS</th>
                   <th style={{ padding: '12px', textAlign: 'right' }}>SEED ADMIN ACTION</th>
                 </tr>
               </thead>
               <tbody>
-                {activeRentals.map(d => (
-                  <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
-                    <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
-                    <td style={{ padding: '14px 12px', fontFamily: 'monospace', fontSize: '12px', color: 'var(--primary)' }}>
-                      {d.rented_by_user_id || 'Assigned'}
-                    </td>
-                    <td style={{ padding: '14px 12px', fontWeight: 800 }}>${d.monthly_rental_price || 49}/mo</td>
-                    <td style={{ padding: '14px 12px' }}>
-                      <span className="badge badge-warning">ACTIVE RENTAL</span>
-                    </td>
-                    <td style={{ padding: '14px 12px', textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
-                        <button
-                          onClick={() => handleRotateStreamLink(d)}
-                          className="btn btn-secondary"
-                          style={{ padding: '6px 10px', fontSize: '11px' }}
-                          title="Rotate stream link and issue a new 16-character access key"
-                        >
-                          <RotateCcw size={12} /> Rotate Link
-                        </button>
-                        <button
-                          onClick={() => handleCancelRental(d)}
-                          className="btn btn-danger"
-                          style={{ padding: '6px 10px', fontSize: '11px' }}
-                          title="Unallocate device and remove from user dashboard completely"
-                        >
-                          Unallocate
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {activeRentals.map(d => {
+                  const isBlocked = Boolean(d.is_stream_blocked);
+                  return (
+                    <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
+                      <td style={{ padding: '14px 12px', fontFamily: 'monospace', fontSize: '12px', color: 'var(--primary)' }}>
+                        {d.rented_by_user_id || 'Assigned'}
+                      </td>
+                      <td style={{ padding: '14px 12px', fontWeight: 800 }}>${d.monthly_rental_price || 49}/mo</td>
+                      <td style={{ padding: '14px 12px' }}>
+                        <span className="badge badge-warning">ACTIVE RENTAL</span>
+                      </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        {isBlocked ? (
+                          <span className="badge badge-danger" title={d.stream_blocked_reason || 'Stream blocked by Admin'}>
+                            ⛔ BLOCKED
+                          </span>
+                        ) : (
+                          <span className="badge badge-success">
+                            🟢 ACTIVE
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleToggleBlockStream(d)}
+                            className={`btn ${isBlocked ? 'btn-primary' : 'btn-danger'}`}
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title={isBlocked ? 'Unblock device stream' : 'Block device stream immediately'}
+                          >
+                            {isBlocked ? <CheckCircle2 size={12} /> : <Ban size={12} />}
+                            {isBlocked ? 'Unblock' : 'Block Stream'}
+                          </button>
+                          <button
+                            onClick={() => handleRotateStreamLink(d)}
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title="Rotate stream link and issue a new 16-character access key"
+                          >
+                            <RotateCcw size={12} /> Rotate Link
+                          </button>
+                          <button
+                            onClick={() => handleCancelRental(d)}
+                            className="btn btn-danger"
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title="Unallocate device and remove from user dashboard completely"
+                          >
+                            Unallocate
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

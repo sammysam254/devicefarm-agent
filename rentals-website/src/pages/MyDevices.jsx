@@ -145,11 +145,12 @@ export default function MyDevices() {
           {rentedDevices.map(a => {
             const dev = a.devices;
             const online = isDeviceOnline(dev);
+            const isBlocked = dev?.is_stream_blocked === true || dev?.status === 'blocked';
             const price = dev?.monthly_rental_price || 49;
             const isPasswordRevealed = revealedPasswords[a.id];
 
             return (
-              <div key={a.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div key={a.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', border: isBlocked ? '1px solid rgba(239,68,68,0.3)' : undefined }}>
                 <div>
                   {/* Header */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
@@ -161,10 +162,35 @@ export default function MyDevices() {
                         SN: {dev?.serial}
                       </p>
                     </div>
-                    <span className={`badge ${online ? 'badge-success' : 'badge-warning'}`}>
-                      {online ? '🟢 Live Online' : '🟡 Device Offline'}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                      <span className={`badge ${online ? 'badge-success' : 'badge-warning'}`}>
+                        {online ? '🟢 Live Online' : '🟡 Device Offline'}
+                      </span>
+                      {isBlocked && (
+                        <span className="badge badge-danger" style={{ fontSize: '10px' }}>
+                          ⛔ STREAM BLOCKED
+                        </span>
+                      )}
+                    </div>
                   </div>
+
+                  {isBlocked && (
+                    <div style={{
+                      background: 'rgba(239,68,68,0.1)',
+                      border: '1px solid rgba(239,68,68,0.25)',
+                      borderRadius: '8px',
+                      padding: '8px 12px',
+                      marginBottom: '12px',
+                      color: '#fca5a5',
+                      fontSize: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}>
+                      <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                      <span><b>Stream Blocked:</b> {dev?.stream_blocked_reason || 'This device stream is currently paused/blocked by administrator.'}</span>
+                    </div>
+                  )}
 
                   {/* Password / PIN box */}
                   <div style={{

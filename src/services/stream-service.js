@@ -49,6 +49,190 @@ function adbInput(serial, cmd) {
   catch (_) { exec(`"${ADB_BIN}" -s ${serial} shell ${cmd}`); }
 }
 
+// ─── Stream Blocked HTML (Admin Blocked View) ───────────────────────────────
+
+function getDeviceStreamBlockedHtml(serial, reason = 'This device stream has been temporarily suspended or blocked by an Administrator.') {
+  const cleanReason = (reason && String(reason).trim()) || 'This device stream has been temporarily suspended or blocked by an Administrator.';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream Currently Blocked - ${serial}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    body {
+      background: #060911;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .glow-bg {
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0) 70%);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      filter: blur(40px);
+    }
+    .card {
+      position: relative;
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 24px;
+      padding: 44px 36px;
+      max-width: 520px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 30px rgba(239, 68, 68, 0.15);
+      backdrop-filter: blur(16px);
+      animation: fadeIn 0.4s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(16px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .icon-box {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      background: rgba(239, 68, 68, 0.12);
+      border: 2px solid rgba(239, 68, 68, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.25);
+    }
+    .icon {
+      font-size: 44px;
+      line-height: 1;
+      filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.6));
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #f87171;
+      padding: 4px 14px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      background: #ef4444;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+      color: #f8fafc;
+      letter-spacing: -0.3px;
+      margin-bottom: 12px;
+    }
+    .desc {
+      color: #94a3b8;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+    .device-info {
+      background: rgba(2, 6, 23, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #cbd5e1;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .device-serial {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+    .btn-refresh {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #ef4444, #b91c1c);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 14px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(239, 68, 68, 0.35);
+      transition: all 0.2s ease;
+    }
+    .btn-refresh:hover {
+      background: linear-gradient(135deg, #dc2626, #991b1b);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+    }
+    .btn-refresh:active {
+      transform: translateY(1px);
+    }
+    .footer-text {
+      margin-top: 16px;
+      font-size: 12px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="glow-bg"></div>
+  <div class="card">
+    <div class="icon-box">
+      <div class="icon">⛔</div>
+    </div>
+    <div class="badge">
+      <span class="dot"></span> Stream Blocked
+    </div>
+    <h1>Stream is Currently Blocked</h1>
+    <p class="desc">${cleanReason}</p>
+    <div class="device-info">
+      <span>Device UDID</span>
+      <span class="device-serial">${serial}</span>
+    </div>
+    <button class="btn-refresh" onclick="location.reload()">
+      🔄 Check Stream Status
+    </button>
+    <div class="footer-text">
+      Please contact your Administrator or Seed Owner to unblock access.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 // ─── Payment-blocked HTML ────────────────────────────────────────────────────
 
 function getStreamBlockedHtml(serial, checkoutUrl, s = {}) {
@@ -63,6 +247,31 @@ function getStreamBlockedHtml(serial, checkoutUrl, s = {}) {
 <a href="${checkoutUrl}" target="_blank" class="btn">💳 Pay to Unlock Stream</a>
 <button onclick="location.reload()" class="btn" style="background:rgba(255,255,255,.08);color:#94a3b8;margin-top:8px">🔄 Refresh</button>
 </div></body></html>`;
+}
+
+// ─── Active WebSocket Client Tracking ────────────────────────────────────────
+const activeWsClients = new Map(); // Map<serial, Set<WebSocket>>
+
+function disconnectBlockedStream(serial, reason = 'This device stream has been suspended or blocked by an Administrator.') {
+  const clients = activeWsClients.get(serial);
+  if (clients && clients.size > 0) {
+    const payload = JSON.stringify({
+      type: 'stream_blocked',
+      reason: reason,
+      serial: serial,
+      timestamp: new Date().toISOString(),
+    });
+    for (const ws of Array.from(clients)) {
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(payload);
+          ws.close(4003, 'Stream Blocked');
+        }
+      } catch (_) {}
+    }
+    clients.clear();
+    logger.info(`[StreamServer] Disconnected all active WebSocket viewers for blocked device ${serial}`);
+  }
 }
 
 // ─── Screencap fallback (one-shot, for /screen.jpg HTTP endpoint) ────────────
@@ -269,7 +478,56 @@ function buildPlayerHtml(serial, screenW, screenH) {
   </div>
 </div>
 
+<!-- Stream Blocked Fullscreen Overlay -->
+<div id="streamBlockedOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,9,17,0.97);backdrop-filter:blur(16px);z-index:9999;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;">
+  <div style="background:#0f172a;border:1px solid rgba(239,68,68,0.45);border-radius:24px;padding:40px 32px;max-width:480px;width:100%;box-shadow:0 0 50px rgba(239,68,68,0.25);">
+    <div style="width:76px;height:76px;border-radius:50%;background:rgba(239,68,68,0.15);border:2px solid rgba(239,68,68,0.4);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:38px;">
+      ⛔
+    </div>
+    <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#f87171;padding:4px 14px;border-radius:100px;font-size:11px;font-weight:800;letter-spacing:0.5px;margin-bottom:14px;text-transform:uppercase;">
+      <span style="width:6px;height:6px;background:#ef4444;border-radius:50%;"></span> ACCESS RESTRICTED
+    </div>
+    <h2 style="font-size:22px;font-weight:800;color:#f8fafc;margin-bottom:8px;">Stream Currently Blocked</h2>
+    <p id="blockReasonText" style="color:#94a3b8;font-size:14px;line-height:1.6;margin-bottom:20px;">
+      This device stream has been temporarily suspended or blocked by an Administrator.
+    </p>
+    <div style="background:rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 14px;font-size:12px;color:#cbd5e1;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
+      <span>Device UDID:</span>
+      <span style="font-family:monospace;font-weight:700;color:#38bdf8;">${serial}</span>
+    </div>
+    <button onclick="location.reload()" style="width:100%;padding:13px;background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border:none;border-radius:12px;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 4px 12px rgba(239,68,68,0.3);">
+      🔄 Check Stream Status
+    </button>
+  </div>
+</div>
+
 <script>
+  let isStreamBlocked = false;
+  function showBlockedScreen(reason) {
+    isStreamBlocked = true;
+    if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+    if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+    try { resetDecoder(); } catch(_) {}
+    try { if (audioCtx) audioCtx.close(); } catch(_) {}
+    
+    const blockOverlay = document.getElementById('streamBlockedOverlay');
+    const blockReasonEl = document.getElementById('blockReasonText');
+    const badge = document.getElementById('badge');
+    const modeText = document.getElementById('modeText');
+    
+    if (blockReasonEl && reason) blockReasonEl.textContent = reason;
+    if (blockOverlay) blockOverlay.style.display = 'flex';
+    if (badge) {
+      badge.style.background = 'rgba(239,68,68,0.2)';
+      badge.style.borderColor = 'rgba(239,68,68,0.5)';
+      badge.style.color = '#f87171';
+    }
+    if (modeText) modeText.textContent = 'BLOCKED';
+    
+    const canvas = document.getElementById('c');
+    if (canvas) canvas.style.pointerEvents = 'none';
+  }
+
   const canvas = document.getElementById('c');
   const ctx    = canvas.getContext('2d', { alpha: false, desynchronized: true });
   const wrap   = document.getElementById('wrap');
@@ -617,11 +875,16 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
 
     ws.onmessage = function(e) {
-      // JSON control messages (stream_reset, etc.)
+      // JSON control messages (stream_blocked, stream_reset, etc.)
       if (typeof e.data === 'string' || e.data instanceof ArrayBuffer && e.data.byteLength > 0 && new Uint8Array(e.data)[0] === 0x7B) {
         try {
           const txt = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
           const msg = JSON.parse(txt);
+          if (msg.type === 'stream_blocked') {
+            console.log('[Stream] Received stream_blocked signal from server');
+            showBlockedScreen(msg.reason);
+            return;
+          }
           if (msg.type === 'stream_reset') {
             console.log('[Stream] Server stream reset — reinitialising decoder');
             resetDecoder();
@@ -632,6 +895,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
         } catch (_) {}
       }
 
+      if (isStreamBlocked) return;
       if (!(e.data instanceof ArrayBuffer)) return;
       lastFrameReceivedTime = Date.now();
       if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE 60FPS'; }
@@ -699,7 +963,12 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
     ws.onerror = function() {};
 
-    ws.onclose = function() {
+    ws.onclose = function(e) {
+      if (e && (e.code === 4003 || (e.reason && (e.reason.includes('Blocked') || e.reason.includes('blocked'))))) {
+        showBlockedScreen(e.reason || 'This device stream has been suspended or blocked by an Administrator.');
+        return;
+      }
+      if (isStreamBlocked) return;
       wsOk = false;
       wsFailCount++;
       if (wsFailCount >= 15 && !fbRunning) startFallback();
@@ -723,6 +992,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       ws.send(JSON.stringify(ctrlQueue.shift()));
   }
   function send(data) {
+    if (isStreamBlocked) return;
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(data));
     else {
       if (data.type === 'touch' && data.action === 2) return; // drop stale moves
@@ -999,24 +1269,37 @@ async function startStreamServer(serial, port) {
     const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
     const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
-    const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status');
-    if (linkStatus === 'suspended' || linkStatus === 'revoked') {
+    // ── Check if Device Stream is Blocked by Administrator ──────────────────
+    const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status') || url.searchParams.get('stream_status');
+    const isExplicitlyBlocked = linkStatus === 'suspended' || linkStatus === 'revoked' || linkStatus === 'blocked' || url.searchParams.get('is_blocked') === '1' || url.searchParams.get('blocked') === '1';
+
+    let isDeviceBlocked = isExplicitlyBlocked;
+    let blockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
+
+    if (!isDeviceBlocked) {
+      try {
+        const processManager = require('../main/process-manager');
+        const localBlock = processManager.isStreamBlocked(serial);
+        if (localBlock && localBlock.isBlocked) {
+          isDeviceBlocked = true;
+          if (localBlock.reason) blockReason = localBlock.reason;
+        }
+      } catch (_) {}
+    }
+
+    if (!isDeviceBlocked) {
+      try {
+        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
+        if (cloudCheck && cloudCheck.isBlocked) {
+          isDeviceBlocked = true;
+          if (cloudCheck.reason) blockReason = cloudCheck.reason;
+        }
+      } catch (_) {}
+    }
+
+    if (isDeviceBlocked) {
       res.writeHead(403, { 'Content-Type': 'text/html' });
-      res.end(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Stream Link Suspended</title></head>
-        <body style="background:#090d16; color:#f8fafc; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center;">
-          <div style="max-width:440px; padding:32px; background:#0f172a; border:1px solid rgba(239,68,68,0.3); border-radius:16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
-            <div style="font-size:48px; margin-bottom:16px;">⛔</div>
-            <h2 style="color:#ef4444; margin-bottom:8px;">Stream Link Suspended</h2>
-            <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
-              This stream link has been suspended or revoked by an Administrator. Contact your Seed Owner or Super Admin for an active link.
-            </p>
-          </div>
-        </body>
-        </html>
-      `);
+      res.end(getDeviceStreamBlockedHtml(serial, blockReason));
       return;
     }
 
@@ -1045,9 +1328,15 @@ async function startStreamServer(serial, port) {
         try {
           const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
           if (client) {
-            const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status`);
+            const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status,is_stream_blocked,stream_blocked_reason`);
             if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0 && devRes.data[0].stream_url) {
               const remoteUrl = devRes.data[0].stream_url;
+              // If target remote device is blocked, render blocked screen immediately
+              if (devRes.data[0].is_stream_blocked || devRes.data[0].status === 'blocked') {
+                res.writeHead(403, { 'Content-Type': 'text/html' });
+                res.end(getDeviceStreamBlockedHtml(udidParam, devRes.data[0].stream_blocked_reason));
+                return;
+              }
               // Redirect if remote URL points to a dedicated quick tunnel or different host
               const isDifferent = remoteUrl && (!remoteUrl.includes(hostHeader) || remoteUrl.includes('trycloudflare.com') || remoteUrl.includes('loca.lt'));
               if (isDifferent) {
@@ -1112,35 +1401,73 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    const wsUrl = new URL(req.url, 'http://localhost');
-    const pinParam = (wsUrl.searchParams.get('key') || wsUrl.searchParams.get('pin') || wsUrl.searchParams.get('token') || '').trim();
-    const tokenParam = wsUrl.searchParams.get('token');
-    const remoteIp = req.socket.remoteAddress || '';
-    const hostHeader = req.headers.host || '';
-    
-    const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
-    const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
+    // Check if device stream is blocked on connect
+    let isWsBlocked = false;
+    let wsBlockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
+    try {
+      const processManager = require('../main/process-manager');
+      const localBlock = processManager.isStreamBlocked(serial);
+      if (localBlock && localBlock.isBlocked) {
+        isWsBlocked = true;
+        if (localBlock.reason) wsBlockReason = localBlock.reason;
+      }
+    } catch (_) {}
 
-    // Direct WebSocket connection allowed without PIN requirement for seamless control
-    const isValidWs = true;
+    if (!isWsBlocked) {
+      try {
+        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
+        if (cloudCheck && cloudCheck.isBlocked) {
+          isWsBlocked = true;
+          if (cloudCheck.reason) wsBlockReason = cloudCheck.reason;
+        }
+      } catch (_) {}
+    }
 
-    if (!isValidWs) {
-      ws.close(4001, 'Unauthorized Stream Access (PIN / Session Token Required)');
+    if (isWsBlocked) {
+      try {
+        ws.send(JSON.stringify({ type: 'stream_blocked', reason: wsBlockReason, serial }));
+      } catch (_) {}
+      ws.close(4003, 'Stream Blocked');
       return;
     }
+
+    // Register active WS client for instantaneous block broadcast
+    if (!activeWsClients.has(serial)) {
+      activeWsClients.set(serial, new Set());
+    }
+    activeWsClients.get(serial).add(ws);
 
     try { req.socket.setNoDelay(true); } catch (_) {}
     logger.info(`[StreamServer] WS connected for ${serial}`);
     engine.addClient(ws);
 
-    const licCheckTimer = setInterval(async () => {
-      const currentLic = await licenseService.checkLicenseStatus(bindingCode);
-      if (!currentLic.isActive) {
-        engine.removeClient(ws);
-        ws.close(4003, 'License Revoked');
-        clearInterval(licCheckTimer);
-      }
-    }, 60000);
+    // Periodic check for license & stream block status
+    const blockCheckTimer = setInterval(async () => {
+      try {
+        const currentLic = await licenseService.checkLicenseStatus(bindingCode);
+        if (!currentLic.isActive) {
+          engine.removeClient(ws);
+          ws.close(4003, 'License Revoked');
+          clearInterval(blockCheckTimer);
+          return;
+        }
+
+        const processManager = require('../main/process-manager');
+        const localBlock = processManager.isStreamBlocked(serial);
+        if (localBlock && localBlock.isBlocked) {
+          disconnectBlockedStream(serial, localBlock.reason);
+          clearInterval(blockCheckTimer);
+          return;
+        }
+
+        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
+        if (cloudCheck && cloudCheck.isBlocked) {
+          disconnectBlockedStream(serial, cloudCheck.reason);
+          clearInterval(blockCheckTimer);
+          return;
+        }
+      } catch (_) {}
+    }, 5000);
 
     ws.on('message', (msg) => {
       try {
@@ -1148,8 +1475,19 @@ async function startStreamServer(serial, port) {
         handleControl(data.type, data, serial, engine);
       } catch (_) {}
     });
-    ws.on('close', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
-    ws.on('error', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
+
+    const cleanup = () => {
+      engine.removeClient(ws);
+      clearInterval(blockCheckTimer);
+      const set = activeWsClients.get(serial);
+      if (set) {
+        set.delete(ws);
+        if (set.size === 0) activeWsClients.delete(serial);
+      }
+    };
+
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
   });
 
   return new Promise((resolve, reject) => {
@@ -1193,4 +1531,10 @@ function killStreamServer(streamProcess) {
   }
 }
 
-module.exports = { startStreamServer, buildStreamUrl, killStreamServer };
+module.exports = {
+  startStreamServer,
+  buildStreamUrl,
+  killStreamServer,
+  disconnectBlockedStream,
+  getDeviceStreamBlockedHtml,
+};

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff, Zap, Power, Wifi, WifiOff, HelpCircle, Activity } from 'lucide-react';
+import { Shield, Key, CheckCircle, XCircle, Users, RefreshCw, Lock, Unlock, UserX, UserCheck, Smartphone, Trash2, RotateCcw, EyeOff, Zap, Power, Wifi, WifiOff, HelpCircle, Activity, ShieldAlert, ShieldCheck } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
 import SystemLogsModal from '../components/SystemLogsModal';
@@ -15,12 +15,41 @@ export default function SeedAdminDashboard() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [blockingId, setBlockingId] = useState(null);
+  const [blockingDeviceId, setBlockingDeviceId] = useState(null);
   const [blockReason, setBlockReason] = useState('');
   const [blockReasonModal, setBlockReasonModal] = useState(null); // profile to block
   const [wakingBindingCode, setWakingBindingCode] = useState(null);
   const [wolModalOpen, setWolModalOpen] = useState(false);
   const [wolSelectedMachine, setWolSelectedMachine] = useState(null);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
+
+  const handleToggleBlockStream = async (device) => {
+    const nextBlocked = !device.is_stream_blocked && device.status !== 'blocked';
+    let reason = '';
+    if (nextBlocked) {
+      reason = window.prompt(`Enter reason for blocking stream for ${device.brand || 'Android'} (${device.serial}) [optional]:`, 'Suspended by Seed Admin') || 'Suspended by Seed Admin';
+    } else {
+      if (!window.confirm(`Unblock stream for ${device.brand || 'Android'} (${device.serial})? Users will immediately regain live stream access.`)) return;
+    }
+
+    setBlockingDeviceId(device.id);
+    try {
+      const { error } = await supabase.from('devices').update({
+        is_stream_blocked: nextBlocked,
+        stream_blocked_reason: nextBlocked ? reason : null,
+        stream_blocked_by: myProfile?.id || null,
+        updated_at: new Date().toISOString()
+      }).eq('id', device.id);
+
+      if (error) throw error;
+      alert(nextBlocked ? `⛔ Stream for ${device.serial} has been BLOCKED.` : `✅ Stream for ${device.serial} has been UNBLOCKED.`);
+      loadData(false);
+    } catch (err) {
+      alert('Error updating stream block: ' + err.message);
+    } finally {
+      setBlockingDeviceId(null);
+    }
+  };
 
   const loadData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -317,6 +346,7 @@ export default function SeedAdminDashboard() {
                 <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px' }}>
                   <th style={{ padding: '12px' }}>DEVICE / MODEL</th>
                   <th style={{ padding: '12px' }}>SERIAL</th>
+                  <th style={{ padding: '12px' }}>STREAM STATUS</th>
                   <th style={{ padding: '12px' }}>MONTHLY FEE ($ USD)</th>
                   <th style={{ padding: '12px' }}>RENTALS STORE RELEASE</th>
                   <th style={{ padding: '12px' }}>VISIBILITY STATUS</th>
@@ -330,12 +360,24 @@ export default function SeedAdminDashboard() {
                   const isOnline = d.status === 'online' && (!d.last_seen || (now - lastTime < 180000));
                   const isDeleted = Boolean(d.is_deleted_from_view);
                   const isAvailableRental = Boolean(d.is_available_for_rental);
+                  const isBlocked = d.is_stream_blocked || d.status === 'blocked';
                   const price = d.monthly_rental_price || 49;
 
                   return (
                     <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                       <td style={{ padding: '14px 12px', fontWeight: 700 }}>{d.brand} {d.model}</td>
                       <td style={{ padding: '14px 12px', fontFamily: 'monospace' }}>{d.serial}</td>
+                      <td style={{ padding: '14px 12px' }}>
+                        {isBlocked ? (
+                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                            <ShieldAlert size={12} /> BLOCKED
+                          </span>
+                        ) : (
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                            <ShieldCheck size={12} /> ACTIVE
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: '14px 12px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span style={{ fontWeight: 800, color: 'var(--primary)' }}>${price}/mo</span>
@@ -370,6 +412,15 @@ export default function SeedAdminDashboard() {
                       </td>
                       <td style={{ padding: '14px 12px', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleToggleBlockStream(d)}
+                            disabled={blockingDeviceId === d.id}
+                            className={`btn ${isBlocked ? 'btn-primary' : 'btn-danger'}`}
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title={isBlocked ? 'Unblock device stream' : 'Block stream link immediately'}
+                          >
+                            {isBlocked ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />} {isBlocked ? 'Unblock' : 'Block Stream'}
+                          </button>
                           <button
                             onClick={() => handleRotateStreamLink(d)}
                             className="btn btn-secondary"

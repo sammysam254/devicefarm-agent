@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Key, Smartphone, Users, Lock, CheckCircle, RefreshCw, Trash2, ExternalLink } from 'lucide-react';
+import { Key, Smartphone, Users, Lock, CheckCircle, RefreshCw, Trash2, ExternalLink, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
 
 export default function DeviceAllocationSection({ currentUser }) {
@@ -12,11 +12,41 @@ export default function DeviceAllocationSection({ currentUser }) {
   const [loading, setLoading] = useState(true);
   const [assigning, setAssigning] = useState(false);
   const [unassigningId, setUnassigningId] = useState(null);
+  const [blockingDeviceId, setBlockingDeviceId] = useState(null);
 
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
     if (d.status === 'online' || Boolean(d.stream_url)) return true;
     return false;
+  };
+
+  const handleToggleBlockStream = async (deviceId, serial, currentBlocked) => {
+    const nextBlocked = !currentBlocked;
+    let reason = '';
+    if (nextBlocked) {
+      reason = window.prompt(`Enter reason for blocking stream ${serial} (optional):`, 'Suspended by Administrator') || 'Suspended by Administrator';
+    } else {
+      if (!window.confirm(`Unblock stream for device ${serial}? User will immediately regain live stream access.`)) return;
+    }
+
+    setBlockingDeviceId(deviceId);
+    try {
+      const { error } = await supabase.from('devices').update({
+        is_stream_blocked: nextBlocked,
+        stream_blocked_reason: nextBlocked ? reason : null,
+        stream_blocked_by: currentUser?.id || null,
+        updated_at: new Date().toISOString()
+      }).eq('id', deviceId);
+
+      if (error) throw error;
+
+      alert(nextBlocked ? `⛔ Device stream ${serial} has been BLOCKED.` : `✅ Device stream ${serial} has been UNBLOCKED.`);
+      loadAllocationData();
+    } catch (err) {
+      alert('Error updating stream block status: ' + err.message);
+    } finally {
+      setBlockingDeviceId(null);
+    }
   };
 
   const loadAllocationData = async (isInitial = false) => {
@@ -284,6 +314,7 @@ export default function DeviceAllocationSection({ currentUser }) {
                   <th style={{ padding: '12px' }}>ROLE</th>
                   <th style={{ padding: '12px' }}>ACCESS PASSWORD</th>
                   <th style={{ padding: '12px' }}>STREAM LINK</th>
+                  <th style={{ padding: '12px' }}>STREAM STATUS</th>
                   <th style={{ padding: '12px', textAlign: 'right' }}>ACTION</th>
                 </tr>
               </thead>
@@ -293,6 +324,7 @@ export default function DeviceAllocationSection({ currentUser }) {
                   const userEmail = a.profiles?.email || 'Unknown User';
                   const userRole = a.profiles?.role ? a.profiles.role.replace('_', ' ').toUpperCase() : 'USER';
                   const online = isDeviceOnline(a.devices);
+                  const isBlocked = a.devices?.is_stream_blocked || a.devices?.status === 'blocked';
 
                   return (
                     <tr key={a.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -319,7 +351,7 @@ export default function DeviceAllocationSection({ currentUser }) {
                             href={a.devices.stream_url} 
                             target="_blank" 
                             rel="noreferrer" 
-                            style={{ color: 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            style={{ color: isBlocked ? 'var(--danger)' : 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                             onClick={(e) => {
                               e.preventDefault();
                               const w = 510, h = 900;
@@ -334,8 +366,28 @@ export default function DeviceAllocationSection({ currentUser }) {
                           <span style={{ color: 'var(--text-muted)' }}>Offline</span>
                         )}
                       </td>
+                      <td style={{ padding: '14px 12px' }}>
+                        {isBlocked ? (
+                          <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                            <ShieldAlert size={12} /> BLOCKED
+                          </span>
+                        ) : (
+                          <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                            <ShieldCheck size={12} /> ACTIVE
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: '14px 12px', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleToggleBlockStream(a.devices?.id, a.devices?.serial, isBlocked)}
+                            disabled={blockingDeviceId === a.devices?.id}
+                            className={`btn ${isBlocked ? 'btn-primary' : 'btn-danger'}`}
+                            style={{ padding: '6px 10px', fontSize: '11px' }}
+                            title={isBlocked ? 'Unblock device stream' : 'Block device stream immediately'}
+                          >
+                            {isBlocked ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />} {isBlocked ? 'Unblock' : 'Block Stream'}
+                          </button>
                           <button
                             onClick={() => handleReKeyAssignment(a.id, deviceName, userEmail, a.devices?.serial, a.devices?.stream_url)}
                             className="btn btn-secondary"

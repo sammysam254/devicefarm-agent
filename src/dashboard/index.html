@@ -379,12 +379,17 @@
                   </div>
                 </div>
 
-                <!-- Quick Hardware Action Buttons -->
+                <!-- Quick Hardware Action Buttons & Admin Stream Lock -->
                 <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
-                  <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">
-                    Quick Actions
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">
+                      Quick Actions & Admin Controls
+                    </div>
+                    <span style="font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 12px; ${d.isStreamBlocked ? 'background: rgba(239,68,68,0.2); color: var(--rose);' : 'background: rgba(52,211,153,0.15); color: var(--emerald);'}">
+                      ${d.isStreamBlocked ? '⛔ BLOCKED' : '🟢 LIVE'}
+                    </span>
                   </div>
-                  <div class="quick-keys-bar">
+                  <div class="quick-keys-bar" style="margin-bottom: 8px;">
                     <button class="key-btn" onclick="sendKey('${d.port}', 3)">🏠 Home</button>
                     <button class="key-btn" onclick="sendKey('${d.port}', 4)">◀ Back</button>
                     <button class="key-btn" onclick="sendKey('${d.port}', 187)">🔲 App Switch</button>
@@ -392,12 +397,44 @@
                     <button class="key-btn" onclick="sendKey('${d.port}', 24)">🔊 Vol +</button>
                     <button class="key-btn" onclick="sendKey('${d.port}', 25)">🔉 Vol -</button>
                   </div>
+                  <div>
+                    <button 
+                      class="btn-action" 
+                      style="width: 100%; padding: 8px 12px; font-size: 12px; font-weight: 700; ${d.isStreamBlocked ? 'background: rgba(52,211,153,0.2); color: var(--emerald); border-color: rgba(52,211,153,0.4);' : 'background: rgba(239,68,68,0.18); color: var(--rose); border-color: rgba(239,68,68,0.4);'}"
+                      onclick="toggleStreamBlock('${d.serial}', ${!d.isStreamBlocked})"
+                    >
+                      ${d.isStreamBlocked ? '🔓 Unblock Device Stream' : '⛔ Block Device Stream'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         `;
       }).join('');
+    }
+
+    async function toggleStreamBlock(serial, block) {
+      const action = block ? 'block' : 'unblock';
+      let reason = '';
+      if (block) {
+        reason = prompt(`Enter reason for blocking stream ${serial} (optional):`, 'Suspended by Administrator') || 'Suspended by Administrator';
+      } else {
+        if (!confirm(`Unblock stream for ${serial}? Users will immediately regain live access.`)) return;
+      }
+
+      try {
+        const endpoint = block ? '/api/devices/block-stream' : '/api/devices/unblock-stream';
+        const res = await fetch(`${endpoint}?serial=${encodeURIComponent(serial)}&reason=${encodeURIComponent(reason)}`);
+        const data = await res.json();
+        if (data.status === 'ok') {
+          fetchDevices();
+        } else {
+          alert('Error updating stream block: ' + (data.message || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      }
     }
 
     function openPopoutStream(streamUrl, serial) {

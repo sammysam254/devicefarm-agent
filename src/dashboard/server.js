@@ -113,6 +113,34 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
+      if (url === '/api/devices/block-stream' || url === '/api/devices/unblock-stream' || url === '/api/devices/toggle-stream-block') {
+        const serial = fullUrl.searchParams.get('serial');
+        const reason = fullUrl.searchParams.get('reason') || 'This device stream has been suspended by an Administrator.';
+        const isBlock = url === '/api/devices/block-stream' || fullUrl.searchParams.get('block') === 'true' || fullUrl.searchParams.get('blocked') === '1';
+
+        if (!serial) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Missing serial parameter' }));
+          return;
+        }
+
+        try {
+          await licenseService.setDeviceStreamBlockStatus(serial, isBlock, reason);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok',
+            serial,
+            isStreamBlocked: isBlock,
+            reason: isBlock ? reason : null,
+            timestamp: new Date().toISOString()
+          }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: err.message }));
+        }
+        return;
+      }
+
       if (url === '/api/license/status' || url === '/api/rental/status') {
         const bindingCode = bindingService.getOrGenerateBindingCode();
         const lic = await licenseService.checkLicenseStatus(bindingCode);

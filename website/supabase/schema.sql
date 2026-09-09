@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS public.devices (
     rental_status TEXT DEFAULT 'available',
     rented_at TIMESTAMP WITH TIME ZONE,
     last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    is_stream_blocked BOOLEAN DEFAULT FALSE,
+    stream_blocked_reason TEXT DEFAULT NULL,
+    stream_blocked_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -73,6 +76,9 @@ ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS monthly_rental_price NUMERIC
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_by_user_id UUID REFERENCES public.profiles(id);
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rental_status TEXT DEFAULT 'available';
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS is_stream_blocked BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS stream_blocked_reason TEXT DEFAULT NULL;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS stream_blocked_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
 
 -- Ensure device_rentals columns exist for binding code and stream links
 CREATE TABLE IF NOT EXISTS public.device_rentals (

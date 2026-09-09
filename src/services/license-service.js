@@ -421,6 +421,85 @@ async function validateDevicePin(serial, rawInputPin, bindingCode) {
   return false;
 }
 
+// ─── Stream Block Cache & Helpers ──────────────────────────────────────────
+const streamBlockCache = new Map(); // Map<serial, { isBlocked: boolean, reason: string|null, at: number }>
+
+/**
+ * Check if a device stream is blocked in Supabase or local cache.
+ * @param {string} serial
+ * @returns {Promise<{ isBlocked: boolean, reason: string|null }>}
+ */
+async function checkDeviceStreamBlocked(serial) {
+  // 1. Check local cache (valid for 4 seconds)
+  const cached = streamBlockCache.get(serial);
+  if (cached && (Date.now() - cached.at < 4000)) {
+    return { isBlocked: cached.isBlocked, reason: cached.reason };
+  }
+
+  // 2. Query Supabase
+  const client = getSupabaseClient();
+  if (!client) {
+    return { isBlocked: false, reason: null };
+  }
+
+  try {
+    const res = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=id,status,is_stream_blocked,stream_blocked_reason`);
+    if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+      const row = res.data[0];
+      const isBlocked = Boolean(row.is_stream_blocked || row.status === 'blocked' || row.status === 'suspended');
+      const reason = row.stream_blocked_reason || (isBlocked ? 'This device stream has been suspended by an Administrator.' : null);
+      
+      const result = { isBlocked, reason, at: Date.now() };
+      streamBlockCache.set(serial, result);
+      return result;
+    }
+  } catch (err) {
+    logger.warn(`[LicenseService] Device block check error for ${serial}: ${err.message}`);
+  }
+
+  return { isBlocked: false, reason: null };
+}
+
+/**
+ * Update device stream block status in Supabase and notify stream servers.
+ * @param {string} serial
+ * @param {boolean} isBlocked
+ * @param {string} [reason]
+ * @param {string} [blockedBy]
+ */
+async function setDeviceStreamBlockStatus(serial, isBlocked, reason = null, blockedBy = null) {
+  const cleanReason = isBlocked ? (reason || 'This device stream has been suspended by an Administrator.') : null;
+  streamBlockCache.set(serial, { isBlocked: Boolean(isBlocked), reason: cleanReason, at: Date.now() });
+
+  const client = getSupabaseClient();
+  if (client) {
+    try {
+      await client.patch(`/devices?serial=eq.${encodeURIComponent(serial)}`, {
+        is_stream_blocked: Boolean(isBlocked),
+        stream_blocked_reason: cleanReason,
+        stream_blocked_by: blockedBy || null,
+        updated_at: new Date().toISOString(),
+      });
+      logger.info(`[LicenseService] Device ${serial} stream block status set to ${isBlocked} in Supabase`);
+    } catch (err) {
+      logger.error(`[LicenseService] Failed to update stream block status for ${serial}:`, err.message);
+    }
+  }
+
+  // Also update process manager and stream service
+  try {
+    const processManager = require('../main/process-manager');
+    processManager.setStreamBlocked(serial, isBlocked, cleanReason);
+  } catch (_) {}
+
+  try {
+    const streamService = require('./stream-service');
+    if (isBlocked && typeof streamService.disconnectBlockedStream === 'function') {
+      streamService.disconnectBlockedStream(serial, cleanReason);
+    }
+  } catch (_) {}
+}
+
 module.exports = {
   getSupabaseClient,
   checkLicenseStatus,
@@ -434,4 +513,6 @@ module.exports = {
   getRotatedStreamPin,
   setRotatedStreamPin,
   validateDevicePin,
+  checkDeviceStreamBlocked,
+  setDeviceStreamBlockStatus,
 };
