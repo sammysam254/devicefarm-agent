@@ -834,31 +834,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   // ── WebSocket connection ─────────────────────────────────────────────────
   let ws = null, wsOk = false;
-  let wsFailCount = 0;
   let wsRetryTimer = null;
   let lastFrameReceivedTime = 0;
-
-  // Watchdog: if WS is connected but no frames arrive for >15s, reconnect the stream.
-  setInterval(function() {
-    if (!wsOk) return;
-    if (lastFrameReceivedTime === 0) return;
-    if (Date.now() - lastFrameReceivedTime > 15000) {
-      console.warn('[Watchdog] No frames for 15s — reconnecting stream');
-      reconnectStream();
-    }
-  }, 1000);
-
-  // Separate first-frame watchdog — if WS is open but no frame ever arrives in 12s, reconnect
-  let firstFrameTimer = null;
-  function startFirstFrameWatchdog() {
-    if (firstFrameTimer) clearTimeout(firstFrameTimer);
-    firstFrameTimer = setTimeout(function() {
-      if (wsOk && lastFrameReceivedTime === 0 && !fbRunning) {
-        console.warn('[Watchdog] No first frame within 12s — reconnecting stream');
-        reconnectStream();
-      }
-    }, 12000);
-  }
 
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
@@ -878,20 +855,17 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
     ws.onopen = function() {
       wsOk = true;
-      wsFailCount = 0;
-      lastFrameReceivedTime = 0;
+      lastFrameReceivedTime = Date.now();
       modeText.textContent = 'LIVE 60FPS';
-      resetDecoder();
-      initDecoder();
+      if (!decoderReady || !decoder || decoder.state === 'closed') {
+        initDecoder();
+      }
       audioNextPlayTime = 0;
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
-      // Nudge Android encoder to generate a fresh IDR keyframe immediately on connect
+      // Nudge Android encoder to send initial keyframe immediately
       send({ type: 'wake' });
-      // Second nudge at +500ms in case the first fires before the encoder is ready
-      setTimeout(function() { if (wsOk) send({ type: 'wake' }); }, 500);
-      startFirstFrameWatchdog();
     };
 
     ws.onmessage = function(e) {
@@ -1460,34 +1434,6 @@ async function startStreamServer(serial, port) {
     logger.info(`[StreamServer] WS connected for ${serial}`);
     engine.addClient(ws);
 
-    // Periodic check for license & stream block status
-    const blockCheckTimer = setInterval(async () => {
-      try {
-        const currentLic = await licenseService.checkLicenseStatus(bindingCode);
-        if (!currentLic.isActive) {
-          engine.removeClient(ws);
-          ws.close(4003, 'License Revoked');
-          clearInterval(blockCheckTimer);
-          return;
-        }
-
-        const processManager = require('../main/process-manager');
-        const localBlock = processManager.isStreamBlocked(serial);
-        if (localBlock && localBlock.isBlocked) {
-          disconnectBlockedStream(serial, localBlock.reason);
-          clearInterval(blockCheckTimer);
-          return;
-        }
-
-        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
-        if (cloudCheck && cloudCheck.isBlocked) {
-          disconnectBlockedStream(serial, cloudCheck.reason);
-          clearInterval(blockCheckTimer);
-          return;
-        }
-      } catch (_) {}
-    }, 5000);
-
     ws.on('message', (msg) => {
       // 1. Ultra-fast binary packet handler (Sub-millisecond direct dispatch)
       if (Buffer.isBuffer(msg) || (msg instanceof ArrayBuffer) || (msg instanceof Uint8Array)) {
@@ -1532,7 +1478,6 @@ async function startStreamServer(serial, port) {
 
     const cleanup = () => {
       engine.removeClient(ws);
-      clearInterval(blockCheckTimer);
       const set = activeWsClients.get(serial);
       if (set) {
         set.delete(ws);
