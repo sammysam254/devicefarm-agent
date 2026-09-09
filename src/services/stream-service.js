@@ -826,11 +826,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
           ntype = u8[i+4] & 0x1f;
         }
         // WebCodecs key/config types: NAL 5 (IDR keyframe), NAL 7 (SPS), NAL 8 (PPS)
-        if (ntype === 7) {
-          cachedSpsPps = u8.slice(0);
-          return true;
-        }
-        if (ntype === 5 || ntype === 8) return true;
+        if (ntype === 5 || ntype === 7 || ntype === 8) return true;
       }
     }
     return false;
@@ -970,8 +966,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (key) hasKeyframe = true;
       if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
 
-
-
       try {
         const chunk = new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
@@ -1009,7 +1003,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     // Disabled
   }
 
-  // ── Control: Binary & JSON WS Zero-Delay Transport ───────────────────────
+  // ── Control: Direct Zero-Lag Transport ─────────────────────────────────────
   const ctrlQueue = [];
   function flushQueue() {
     while (ctrlQueue.length && ws && ws.readyState === 1)
@@ -1022,47 +1016,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (data.type === 'touch' && data.action === 2) return; // drop stale moves
       ctrlQueue.push(data);
       if (ctrlQueue.length > 8) ctrlQueue.splice(0, ctrlQueue.length - 8);
-    }
-  }
-
-  // Pre-allocated binary packet buffers for zero-overhead, sub-millisecond control
-  const touchBuf = new ArrayBuffer(15);
-  const touchView = new DataView(touchBuf);
-  touchView.setUint8(0, 0x54); // 'T' = Touch
-
-  function sendTouch(action, x, y, w, h, pressure, pointerId) {
-    if (isStreamBlocked) return;
-    if (ws && ws.readyState === 1) {
-      touchView.setUint8(1, action);
-      touchView.setUint16(2, Math.max(0, Math.min(65535, x)));
-      touchView.setUint16(4, Math.max(0, Math.min(65535, y)));
-      touchView.setUint16(6, Math.max(1, Math.min(65535, w)));
-      touchView.setUint16(8, Math.max(1, Math.min(65535, h)));
-      touchView.setUint16(10, Math.max(0, Math.min(65535, Math.round((pressure !== undefined ? pressure : (action === 1 ? 0 : 1.0)) * 65535))));
-      touchView.setUint16(12, (pointerId || 0) & 0xFFFF);
-      ws.send(touchBuf);
-    } else {
-      send({ type: 'touch', action, x, y, width: w, height: h, pressure: (pressure !== undefined ? pressure : (action === 1 ? 0 : 1.0)), pointerId });
-    }
-  }
-
-  const scrollBuf = new ArrayBuffer(15);
-  const scrollView = new DataView(scrollBuf);
-  scrollView.setUint8(0, 0x53); // 'S' = Scroll
-
-  function sendScroll(x, y, w, h, hScroll, vScroll) {
-    if (isStreamBlocked) return;
-    if (ws && ws.readyState === 1) {
-      scrollView.setUint8(1, 0);
-      scrollView.setUint16(2, Math.max(0, Math.min(65535, x)));
-      scrollView.setUint16(4, Math.max(0, Math.min(65535, y)));
-      scrollView.setUint16(6, Math.max(1, Math.min(65535, w)));
-      scrollView.setUint16(8, Math.max(1, Math.min(65535, h)));
-      scrollView.setInt16(10, Math.max(-32768, Math.min(32767, Math.round(hScroll))));
-      scrollView.setInt16(12, Math.max(-32768, Math.min(32767, Math.round(vScroll))));
-      ws.send(scrollBuf);
-    } else {
-      send({ type: 'scroll', x, y, width: w, height: h, hscroll: hScroll, vscroll: vScroll });
     }
   }
 
@@ -1092,7 +1045,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Raw Direct Pointer Control (Instant, Zero Delay, High Precision) ─────
+  // ── Raw Direct Pointer Control (Instant 1:1 Zero Delay) ───────────────────
   let down = false;
   let activePointerId = null;
 
@@ -1103,24 +1056,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    sendTouch(0, c.x, c.y, nativeW, nativeH, e.pressure || 1.0, e.pointerId);
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
   });
 
-  const onPointerMove = (e) => {
+  canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
-    const events = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : [e];
-    for (let i = 0; i < events.length; i++) {
-      const ev = events[i];
-      const c = coords(ev);
-      sendTouch(2, c.x, c.y, nativeW, nativeH, ev.pressure || 1.0, ev.pointerId);
-    }
-  };
-
-  canvas.addEventListener('pointermove', onPointerMove);
-  if ('onpointerrawupdate' in window) {
-    canvas.addEventListener('pointerrawupdate', onPointerMove, { passive: false });
-  }
+    const c = coords(e);
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+  });
 
   function releasePointer(e) {
     if (!down) return;
@@ -1130,21 +1074,22 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    sendTouch(1, c.x, c.y, nativeW, nativeH, 0, e.pointerId);
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
   }
 
   canvas.addEventListener('pointerup', releasePointer);
   canvas.addEventListener('pointercancel', releasePointer);
   window.addEventListener('pointerup', releasePointer);
 
-  // Direct native smooth wheel scroll
+  // Direct wheel scroll
+  let wheelT = null;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    if (wheelT) return;
+    wheelT = setTimeout(() => { wheelT = null; }, 80);
     const c = coords(e);
-    // Smooth natural scroll units
-    const vScroll = e.deltaY < 0 ? 1 : -1;
-    const hScroll = e.deltaX < 0 ? 1 : (e.deltaX > 0 ? -1 : 0);
-    sendScroll(c.x, c.y, nativeW, nativeH, hScroll, vScroll);
+    const d = e.deltaY > 0 ? -350 : 350;
+    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH - 50, c.y + d)), duration: 100 });
   }, { passive:false });
 
   // ── Keyboard handling (Spacebar protection & full Android keys) ────────
