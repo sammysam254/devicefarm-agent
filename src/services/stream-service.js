@@ -295,7 +295,7 @@ function get(data, key) {
   return typeof data.get === 'function' ? data.get(key) : data[key];
 }
 
-function handleControl(type, data, serial, engine) {
+function handleControl(type, data, serial, engine, ws = null) {
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
 
@@ -304,12 +304,19 @@ function handleControl(type, data, serial, engine) {
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
     const pressure = parseFloat(get(data, 'pressure')) || (action === 1 ? 0 : 1.0);
-    const ok = engine.sendTouchEvent(action, x, y, W, H, pressure);
+    const pointerId = get(data, 'pointerId') || 0;
+    const ok = engine.sendTouchEvent(action, x, y, W, H, pressure, pointerId);
     if (!ok && (action === 0 || action === 1)) {
       const realX = Math.round((x / W) * (engine.screenWidth || W));
       const realY = Math.round((y / H) * (engine.screenHeight || H));
       if (action === 0) try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
     }
+  } else if (type === 'scroll') {
+    const x = parseFloat(get(data, 'x'));
+    const y = parseFloat(get(data, 'y'));
+    const hscroll = parseFloat(get(data, 'hscroll')) || 0;
+    const vscroll = parseFloat(get(data, 'vscroll')) || 0;
+    engine.sendScrollEvent(x, y, W, H, hscroll, vscroll);
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
     engine.sendTouchEvent(0, x, y, W, H, 1.0);
@@ -319,11 +326,13 @@ function handleControl(type, data, serial, engine) {
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = parseInt(get(data, 'duration'), 10) || 120;
     engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
-    const steps = 6;
+    const steps = 12;
     const dt = dur / steps;
     for (let i = 1; i <= steps; i++) {
       setTimeout(() => {
-        const p = i / steps;
+        // Cubic ease-out gives natural momentum to Android's gesture and fling physics
+        const t = i / steps;
+        const p = 1 - Math.pow(1 - t, 3);
         const cx = x1 + (x2 - x1) * p;
         const cy = y1 + (y2 - y1) * p;
         const act = (i === steps) ? 1 : 2;
@@ -341,7 +350,10 @@ function handleControl(type, data, serial, engine) {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
   } else if (type === 'expand_notifications' || type === 'notifications') {
     exec(`"${ADB_BIN}" -s ${serial} shell cmd statusbar expand`);
-  } else if (type === 'wake' || type === 'refresh') {
+  } else if (type === 'wake' || type === 'refresh' || type === 'request_keyframe') {
+    if (ws && (engine._keyframeBuffer || engine._configPacket)) {
+      try { ws.send(engine._keyframeBuffer || engine._configPacket, { binary: true }); } catch (_) {}
+    }
     try { adbInput(serial, 'input keyevent 0'); } catch (_) {}
   }
 }
@@ -748,6 +760,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let decoder = null;
   let decoderReady = false;
   let hasKeyframe = false;
+  let cachedSpsPps = null;
 
   function resetDecoder() {
     hasKeyframe = false;
@@ -781,6 +794,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
           resetDecoder();
+          // Immediately recover decoder and request keyframe without black screen
+          setTimeout(function() {
+            if (!decoderReady) {
+              initDecoder();
+              send({ type: 'request_keyframe' });
+            }
+          }, 10);
         }
       });
       decoder.configure({
@@ -806,7 +826,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
           ntype = u8[i+4] & 0x1f;
         }
         // WebCodecs key/config types: NAL 5 (IDR keyframe), NAL 7 (SPS), NAL 8 (PPS)
-        if (ntype === 5 || ntype === 7 || ntype === 8) return true;
+        if (ntype === 7) {
+          cachedSpsPps = u8.slice(0);
+          return true;
+        }
+        if (ntype === 5 || ntype === 8) return true;
       }
     }
     return false;
@@ -985,7 +1009,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     // Disabled
   }
 
-  // ── Control: WS-only, never fetch ───────────────────────────────────────
+  // ── Control: Binary & JSON WS Zero-Delay Transport ───────────────────────
   const ctrlQueue = [];
   function flushQueue() {
     while (ctrlQueue.length && ws && ws.readyState === 1)
@@ -998,6 +1022,47 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (data.type === 'touch' && data.action === 2) return; // drop stale moves
       ctrlQueue.push(data);
       if (ctrlQueue.length > 8) ctrlQueue.splice(0, ctrlQueue.length - 8);
+    }
+  }
+
+  // Pre-allocated binary packet buffers for zero-overhead, sub-millisecond control
+  const touchBuf = new ArrayBuffer(15);
+  const touchView = new DataView(touchBuf);
+  touchView.setUint8(0, 0x54); // 'T' = Touch
+
+  function sendTouch(action, x, y, w, h, pressure, pointerId) {
+    if (isStreamBlocked) return;
+    if (ws && ws.readyState === 1) {
+      touchView.setUint8(1, action);
+      touchView.setUint16(2, Math.max(0, Math.min(65535, x)));
+      touchView.setUint16(4, Math.max(0, Math.min(65535, y)));
+      touchView.setUint16(6, Math.max(1, Math.min(65535, w)));
+      touchView.setUint16(8, Math.max(1, Math.min(65535, h)));
+      touchView.setUint16(10, Math.max(0, Math.min(65535, Math.round((pressure !== undefined ? pressure : (action === 1 ? 0 : 1.0)) * 65535))));
+      touchView.setUint16(12, (pointerId || 0) & 0xFFFF);
+      ws.send(touchBuf);
+    } else {
+      send({ type: 'touch', action, x, y, width: w, height: h, pressure: (pressure !== undefined ? pressure : (action === 1 ? 0 : 1.0)), pointerId });
+    }
+  }
+
+  const scrollBuf = new ArrayBuffer(15);
+  const scrollView = new DataView(scrollBuf);
+  scrollView.setUint8(0, 0x53); // 'S' = Scroll
+
+  function sendScroll(x, y, w, h, hScroll, vScroll) {
+    if (isStreamBlocked) return;
+    if (ws && ws.readyState === 1) {
+      scrollView.setUint8(1, 0);
+      scrollView.setUint16(2, Math.max(0, Math.min(65535, x)));
+      scrollView.setUint16(4, Math.max(0, Math.min(65535, y)));
+      scrollView.setUint16(6, Math.max(1, Math.min(65535, w)));
+      scrollView.setUint16(8, Math.max(1, Math.min(65535, h)));
+      scrollView.setInt16(10, Math.max(-32768, Math.min(32767, Math.round(hScroll))));
+      scrollView.setInt16(12, Math.max(-32768, Math.min(32767, Math.round(vScroll))));
+      ws.send(scrollBuf);
+    } else {
+      send({ type: 'scroll', x, y, width: w, height: h, hscroll: hScroll, vscroll: vScroll });
     }
   }
 
@@ -1027,7 +1092,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Raw Direct Pointer Control (Instant, Zero Delay) ────────────────────
+  // ── Raw Direct Pointer Control (Instant, Zero Delay, High Precision) ─────
   let down = false;
   let activePointerId = null;
 
@@ -1038,15 +1103,24 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    sendTouch(0, c.x, c.y, nativeW, nativeH, e.pressure || 1.0, e.pointerId);
   });
 
-  canvas.addEventListener('pointermove', (e) => {
+  const onPointerMove = (e) => {
     if (!down) return;
     e.preventDefault();
-    const c = coords(e);
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
-  });
+    const events = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : [e];
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      const c = coords(ev);
+      sendTouch(2, c.x, c.y, nativeW, nativeH, ev.pressure || 1.0, ev.pointerId);
+    }
+  };
+
+  canvas.addEventListener('pointermove', onPointerMove);
+  if ('onpointerrawupdate' in window) {
+    canvas.addEventListener('pointerrawupdate', onPointerMove, { passive: false });
+  }
 
   function releasePointer(e) {
     if (!down) return;
@@ -1056,22 +1130,21 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+    sendTouch(1, c.x, c.y, nativeW, nativeH, 0, e.pointerId);
   }
 
   canvas.addEventListener('pointerup', releasePointer);
   canvas.addEventListener('pointercancel', releasePointer);
   window.addEventListener('pointerup', releasePointer);
 
-  // Direct wheel scroll
-  let wheelT = null;
+  // Direct native smooth wheel scroll
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (wheelT) return;
-    wheelT = setTimeout(() => { wheelT = null; }, 100);
     const c = coords(e);
-    const d = e.deltaY > 0 ? -350 : 350;
-    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH - 50, c.y + d)), duration: 100 });
+    // Smooth natural scroll units
+    const vScroll = e.deltaY < 0 ? 1 : -1;
+    const hScroll = e.deltaX < 0 ? 1 : (e.deltaX > 0 ? -1 : 0);
+    sendScroll(c.x, c.y, nativeW, nativeH, hScroll, vScroll);
   }, { passive:false });
 
   // ── Keyboard handling (Spacebar protection & full Android keys) ────────
@@ -1470,9 +1543,44 @@ async function startStreamServer(serial, port) {
     }, 5000);
 
     ws.on('message', (msg) => {
+      // 1. Ultra-fast binary packet handler (Sub-millisecond direct dispatch)
+      if (Buffer.isBuffer(msg) || (msg instanceof ArrayBuffer) || (msg instanceof Uint8Array)) {
+        const buf = Buffer.isBuffer(msg) ? msg : Buffer.from(msg);
+        if (buf.length >= 12 && buf[0] === 0x54) { // 'T' = Touch packet
+          const action = buf.readUInt8(1);
+          const x = buf.readUInt16BE(2);
+          const y = buf.readUInt16BE(4);
+          const w = buf.readUInt16BE(6);
+          const h = buf.readUInt16BE(8);
+          const pressure = buf.length >= 12 ? (buf.readUInt16BE(10) / 65535) : (action === 1 ? 0 : 1.0);
+          const pId = buf.length >= 14 ? buf.readUInt16BE(12) : 0;
+          engine.sendTouchEvent(action, x, y, w, h, pressure, pId);
+          return;
+        }
+        if (buf.length >= 14 && buf[0] === 0x53) { // 'S' = Scroll packet
+          const x = buf.readUInt16BE(2);
+          const y = buf.readUInt16BE(4);
+          const w = buf.readUInt16BE(6);
+          const h = buf.readUInt16BE(8);
+          const hscroll = buf.readInt16BE(10);
+          const vscroll = buf.readInt16BE(12);
+          engine.sendScrollEvent(x, y, w, h, hscroll, vscroll);
+          return;
+        }
+      }
+
+      // 2. JSON control message handler
       try {
         const data = JSON.parse(msg.toString());
-        handleControl(data.type, data, serial, engine);
+        if (data.type === 'wake' || data.type === 'request_keyframe') {
+          // Immediately bootstrap client with cached SPS/PPS + IDR keyframe
+          if (engine._keyframeBuffer || engine._configPacket) {
+            try { ws.send(engine._keyframeBuffer || engine._configPacket, { binary: true }); } catch (_) {}
+          }
+          engine._requestIdrKeyframe();
+          return;
+        }
+        handleControl(data.type, data, serial, engine, ws);
       } catch (_) {}
     });
 

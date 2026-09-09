@@ -311,6 +311,7 @@ class ScrcpyEngine extends EventEmitter {
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
       'audio=' + (this.enableAudio ? 'true' : 'false'),
+      'require_audio=false',       // Critical: audio failure or focus switch must NEVER crash video streaming
       'audio_codec=opus',
       'audio_bit_rate=128000',
       'control=true',
@@ -779,7 +780,7 @@ class ScrcpyEngine extends EventEmitter {
    *   [24-27] action_button i32BE (1=PRIMARY on DOWN)
    *   [28-31] buttons i32BE (1 on DOWN/MOVE, 0 on UP)
    */
-  sendTouchEvent(action, x, y, width, height, pressure = 1.0) {
+  sendTouchEvent(action, x, y, width, height, pressure = 1.0, pointerId = 0) {
     if (!this.controlSocket || this.controlSocket.destroyed) {
       return false;
     }
@@ -806,7 +807,8 @@ class ScrcpyEngine extends EventEmitter {
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
-    buf.writeBigInt64BE(0n, 2);           // pointerId 0n (finger 0)
+    const pId = typeof pointerId === 'bigint' ? pointerId : BigInt(pointerId || 0);
+    buf.writeBigInt64BE(pId, 2);          // pointerId
     buf.writeInt32BE(finalX, 10);
     buf.writeInt32BE(finalY, 14);
     buf.writeUInt16BE(targetW, 18);
@@ -823,6 +825,42 @@ class ScrcpyEngine extends EventEmitter {
       return true;
     } catch (e) { 
       return false; 
+    }
+  }
+
+  /**
+   * INJECT_SCROLL_EVENT (21 bytes scrcpy 2.x)
+   *   [0]     msg type = 3
+   *   [1-4]   x i32BE
+   *   [5-8]   y i32BE
+   *   [9-10]  screen width u16BE
+   *   [11-12] screen height u16BE
+   *   [13-16] hscroll i32BE
+   *   [17-20] vscroll i32BE
+   *   [21-24] buttons i32BE (optional depending on protocol version)
+   */
+  sendScrollEvent(x, y, width, height, hScroll = 0, vScroll = 0) {
+    if (!this.controlSocket || this.controlSocket.destroyed) return false;
+    let targetW = this.scrcpyServerWidth || this.videoWidth || this.screenWidth || 1080;
+    let targetH = this.scrcpyServerHeight || this.videoHeight || this.screenHeight || 2340;
+    const srcW = (width > 10) ? width : targetW;
+    const srcH = (height > 10) ? height : targetH;
+    const finalX = Math.max(0, Math.min(targetW - 1, Math.round((x / srcW) * targetW)));
+    const finalY = Math.max(0, Math.min(targetH - 1, Math.round((y / srcH) * targetH)));
+
+    const buf = Buffer.allocUnsafe(21);
+    buf.writeUInt8(3, 0);                 // INJECT_SCROLL_EVENT
+    buf.writeInt32BE(finalX, 1);
+    buf.writeInt32BE(finalY, 5);
+    buf.writeUInt16BE(targetW, 9);
+    buf.writeUInt16BE(targetH, 11);
+    buf.writeInt32BE(Math.round(hScroll), 13);
+    buf.writeInt32BE(Math.round(vScroll), 17);
+    try {
+      this.controlSocket.write(buf);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
