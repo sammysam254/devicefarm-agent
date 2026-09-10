@@ -268,7 +268,17 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
           {devices.map(d => {
             const rawStreamUrl = d.stream_url;
             let streamUrl = rawStreamUrl;
-            if (!streamUrl || streamUrl.includes('localhost')) {
+            if (streamUrl && (streamUrl.includes('localhost') || streamUrl.includes('127.0.0.1'))) {
+              try {
+                const parsed = new URL(streamUrl);
+                parsed.protocol = 'https:';
+                parsed.host = 'agent.dennoh.site';
+                parsed.port = '';
+                streamUrl = parsed.toString();
+              } catch (_) {
+                streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
+              }
+            } else if (!streamUrl) {
               streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
             } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && streamUrl.startsWith('http:')) {
               streamUrl = streamUrl.replace(/^http:/, 'https:');
@@ -413,8 +423,21 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 <button 
                   onClick={() => {
                     let u = focusDevice.stream_url;
-                    if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                    else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
+                    if (u && (u.includes('localhost') || u.includes('127.0.0.1'))) {
+                      try {
+                        const parsed = new URL(u);
+                        parsed.protocol = 'https:';
+                        parsed.host = 'agent.dennoh.site';
+                        parsed.port = '';
+                        u = parsed.toString();
+                      } catch (_) {
+                        u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                      }
+                    } else if (!u) {
+                      u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                    } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) {
+                      u = u.replace(/^http:/, 'https:');
+                    }
                     if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
@@ -437,8 +460,21 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
               <iframe 
                 src={(() => {
                   let u = focusDevice.stream_url;
-                  if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                  else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
+                  if (u && (u.includes('localhost') || u.includes('127.0.0.1'))) {
+                    try {
+                      const parsed = new URL(u);
+                      parsed.protocol = 'https:';
+                      parsed.host = 'agent.dennoh.site';
+                      parsed.port = '';
+                      u = parsed.toString();
+                    } catch (_) {
+                      u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                    }
+                  } else if (!u) {
+                    u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                  } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) {
+                    u = u.replace(/^http:/, 'https:');
+                  }
                   if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
                   return u;
                 })()} 

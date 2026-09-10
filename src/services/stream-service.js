@@ -842,7 +842,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       decoder.configure({
         codec: 'avc1.42E01E',
         optimizeForLatency: true,
-        hardwareAcceleration: 'prefer-hardware'
+        hardwareAcceleration: 'no-preference'
       });
       decoderReady = true;
       return true;
@@ -852,9 +852,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  function parseNal(u8) {
+  let cachedSpsPps = null;
+  function parseH264(u8) {
     let hasIdr = false, hasSps = false, hasPps = false, hasSlice = false;
-    for (let i = 0; i < Math.min(u8.length - 4, 128); i++) {
+    for (let i = 0; i < Math.min(u8.length - 4, 1024); i++) {
       if (u8[i] === 0 && u8[i+1] === 0) {
         let ntype = -1;
         if (u8[i+2] === 1 && i + 3 < u8.length) {
@@ -908,6 +909,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
       flushQueue();
       // Nudge Android encoder to send initial keyframe immediately
       send({ type: 'wake' });
+      setTimeout(function() {
+        if (!hasKeyframe && ws && ws.readyState === 1) {
+          send({ type: 'request_keyframe' });
+        }
+      }, 1000);
     };
 
     ws.onmessage = function(e) {
@@ -972,25 +978,24 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
       // 3. Raw H264 NAL stream via WebCodecs
       if (!decoderReady || !decoder || decoder.state === 'closed') {
-        if (!initDecoder()) {
-          return;
-        }
+        if (!initDecoder()) return;
       }
 
-      const nal = parseNal(u8);
-      if (nal.hasSps || nal.hasPps) {
+      const info = parseH264(u8);
+      if (info.hasSps || info.hasPps) {
         cachedSpsPps = u8;
       }
 
-      // If packet contains only parameter sets (SPS/PPS) without slice data, wait for IDR slice
-      if (!nal.hasSlice && (nal.hasSps || nal.hasPps)) {
+      // If packet contains only parameter sets (SPS/PPS) without slice data, save config and wait for slice
+      if (!info.hasSlice && (info.hasSps || info.hasPps)) {
         return;
       }
 
-      if (nal.hasIdr) {
+      let isKey = info.hasIdr;
+      if (isKey) {
         hasKeyframe = true;
         // Prepend cached SPS/PPS if this IDR slice doesn't have SPS in it
-        if (cachedSpsPps && !nal.hasSps) {
+        if (cachedSpsPps && !info.hasSps) {
           const combined = new Uint8Array(cachedSpsPps.length + u8.length);
           combined.set(cachedSpsPps, 0);
           combined.set(u8, cachedSpsPps.length);
@@ -1002,7 +1007,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
       try {
         const chunk = new EncodedVideoChunk({
-          type: nal.hasIdr ? 'key' : 'delta',
+          type: isKey ? 'key' : 'delta',
           timestamp: performance.now() * 1000,
           data: u8
         });

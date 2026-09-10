@@ -32,6 +32,20 @@ function hasSpsNal(buf) {
   return false;
 }
 
+function hasIdrNal(buf) {
+  if (!buf || buf.length < 4) return false;
+  for (let i = 0; i < Math.min(buf.length - 4, 1024); i++) {
+    if (buf[i] === 0 && buf[i+1] === 0) {
+      if (buf[i+2] === 1 && i + 3 < buf.length) {
+        if ((buf[i+3] & 0x1f) === 5) return true;
+      } else if (buf[i+2] === 0 && buf[i+3] === 1 && i + 4 < buf.length) {
+        if ((buf[i+4] & 0x1f) === 5) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Extract the encoded frame dimensions directly from an H.264 SPS NAL unit.
  * This is the ground truth — the exact size the scrcpy encoder configured,
@@ -563,7 +577,7 @@ class ScrcpyEngine extends EventEmitter {
 
         const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
         const isSps = hasSpsNal(payload);
-        const isIdr = nalType === 5;
+        const isIdr = nalType === 5 || hasIdrNal(payload);
         const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
 
         if (isSps || (isConfig && !this._configPacket)) {

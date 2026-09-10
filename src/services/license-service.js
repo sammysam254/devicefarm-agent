@@ -338,7 +338,8 @@ async function validateDevicePin(serial, rawInputPin, bindingCode) {
   // Bypass PIN check for Seed Admin dedicated device
   if (serial === 'R5CW114C0SP') return true;
   if (!rawInputPin) return false;
-  const pin = String(rawInputPin).trim().replace(/[^a-zA-Z0-9]/g, '');
+  const cleanRaw = String(rawInputPin).trim();
+  const pin = cleanRaw.replace(/[^a-zA-Z0-9_-]/g, '');
   if (!pin) return false;
 
   // 1. Direct match with hardware binding code or last 4 digits
@@ -350,13 +351,13 @@ async function validateDevicePin(serial, rawInputPin, bindingCode) {
   // 2. Direct match with in-memory rotated key / pin
   const memKey = ROTATED_STREAM_KEYS.get(serial);
   const memPin = ROTATED_STREAM_PINS.get(serial);
-  if (memPin && pin === String(memPin).trim()) return true;
-  if (memKey && pin === String(memKey).trim()) return true;
+  if (memPin && (cleanRaw === String(memPin).trim() || pin === String(memPin).trim())) return true;
+  if (memKey && (cleanRaw === String(memKey).trim() || pin === String(memKey).trim())) return true;
 
   // 3. Check cached pins from Supabase (valid for 30 seconds)
   const cached = devicePinCache.get(serial);
   if (cached && (Date.now() - cached.at < 30000)) {
-    if (cached.pins.has(pin) || cached.keys.has(pin)) return true;
+    if (cached.pins.has(cleanRaw) || cached.pins.has(pin) || cached.keys.has(cleanRaw) || cached.keys.has(pin)) return true;
   }
 
   // 4. Query Supabase for assigned PINs and rotated URL keys
