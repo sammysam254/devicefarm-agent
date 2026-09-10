@@ -489,49 +489,60 @@ class ScrcpyEngine extends EventEmitter {
    * Zero-copy buffer slicing & minimal latency stream pipeline.
    */
   _pipeVideoToClients(socket) {
+    // Pre-allocate a growing buffer to avoid repeated Buffer.concat() GC pressure at 60fps
     let buf = Buffer.alloc(0);
+    let bufUsed = 0; // tracks how many bytes in buf are valid data
     let headerDone = false;
     let lastDataTime = Date.now();
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
 
-    // Task #7: jitter detection — if no video data arrives for >2s while the socket is
-    // open, request a fresh IDR keyframe to unblock the decoder.  This avoids a full
-    // reconnect for transient encoder stalls (rotation, DRM surface, etc.).
-    const jitterCheckInterval = 500; // ms between checks
+    function appendChunk(chunk) {
+      const needed = bufUsed + chunk.length;
+      if (needed > buf.length) {
+        // Grow buffer with headroom to reduce future allocations
+        const newBuf = Buffer.allocUnsafe(Math.max(needed * 2, 65536));
+        if (bufUsed > 0) buf.copy(newBuf, 0, 0, bufUsed);
+        buf = newBuf;
+      }
+      chunk.copy(buf, bufUsed);
+      bufUsed += chunk.length;
+    }
+
+    function consumeBytes(n) {
+      if (n >= bufUsed) { bufUsed = 0; return; }
+      buf.copy(buf, 0, n, bufUsed);
+      bufUsed -= n;
+    }
+
+    // Jitter detection — if no video data arrives for >2s while the socket is
+    // open, request a fresh IDR keyframe to unblock the decoder.
+    const jitterCheckInterval = 500;
     let jitterKeyframeRequested = false;
     const watchdog = setInterval(() => {
       const elapsed = Date.now() - lastDataTime;
       if ((!this.videoSocket || this.videoSocket.destroyed) && this.isRunning) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Video socket gone — waiting for scrcpy restart cycle`);
         return;
       }
-      // 2 s without data → nudge IDR; 8 s → trigger full restart
       if (elapsed > 2000 && elapsed <= 8000 && !jitterKeyframeRequested) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Jitter detected (${elapsed}ms no data) — requesting IDR keyframe`);
         this._requestIdrKeyframe();
         jitterKeyframeRequested = true;
       } else if (elapsed <= 1000) {
-        jitterKeyframeRequested = false; // reset once data flows again
+        jitterKeyframeRequested = false;
       }
     }, jitterCheckInterval);
 
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
-      jitterKeyframeRequested = false; // data is flowing, reset jitter flag
-      buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+      jitterKeyframeRequested = false;
+      appendChunk(chunk);
 
       // 1. Skip the device-info header exactly once & parse real video stream size
       if (!headerDone) {
-        if (buf.length < DEVICE_HEADER_LEN) return;
+        if (bufUsed < DEVICE_HEADER_LEN) return;
 
         try {
-          // scrcpy 2.4 video socket header layout (77 bytes total):
-          //   [0]      dummy byte (0x00)
-          //   [1-4]    codec ID ASCII ("h264")
-          //   [5-68]   device name, 64 bytes null-padded
-          //   [69-72]  uint32 BE — negotiated encoder width
-          //   [73-76]  uint32 BE — negotiated encoder height
           const w = buf.readUInt32BE(69);
           const h = buf.readUInt32BE(73);
           if (w > 0 && h > 0 && w < 10000 && h < 10000) {
@@ -543,16 +554,16 @@ class ScrcpyEngine extends EventEmitter {
           }
         } catch (_) {}
 
-        if (buf.length >= DEVICE_HEADER_LEN + META) {
+        if (bufUsed >= DEVICE_HEADER_LEN + META) {
           const firstPktSize = buf.readUInt32BE(DEVICE_HEADER_LEN + 8);
           if (firstPktSize === 0 || firstPktSize > 2 * 1024 * 1024) {
             logger.warn(`[ScrcpyEngine ${this.serial}] Unexpected first packet size ${firstPktSize} — trying 1-byte header`);
-            buf = buf.subarray(1);
+            consumeBytes(1);
           } else {
-            buf = buf.subarray(DEVICE_HEADER_LEN);
+            consumeBytes(DEVICE_HEADER_LEN);
           }
         } else {
-          buf = buf.subarray(DEVICE_HEADER_LEN);
+          consumeBytes(DEVICE_HEADER_LEN);
         }
 
         logger.info(`[ScrcpyEngine ${this.serial}] Device-info header consumed, stream parsing started`);
@@ -560,13 +571,14 @@ class ScrcpyEngine extends EventEmitter {
       }
 
       // 2. Process video frame packets
-      while (buf.length >= META) {
-        const pktSize = buf.readUInt32BE(8);
-        if (buf.length < META + pktSize) break;
+      let consumed = 0;
+      while (bufUsed - consumed >= META) {
+        const pktSize = buf.readUInt32BE(consumed + 8);
+        if (bufUsed - consumed < META + pktSize) break;
 
-        const ptsHigh  = buf.readUInt32BE(0);
-        const payload  = buf.subarray(META, META + pktSize);
-        buf = buf.subarray(META + pktSize);
+        const ptsHigh = buf.readUInt32BE(consumed);
+        const payload = buf.subarray(consumed + META, consumed + META + pktSize);
+        consumed += META + pktSize;
 
         const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
         const isSps = hasSpsNal(payload);
@@ -575,9 +587,7 @@ class ScrcpyEngine extends EventEmitter {
 
         if (isSps || (isConfig && !this._configPacket)) {
           this._configPacket = Buffer.from(payload);
-          logger.info(`[ScrcpyEngine ${this.serial}] SPS/PPS config cached (${payload.length} bytes)`);
 
-          // Parse width/height from SPS NAL — the most authoritative source.
           try {
             const spsW = parseSpsWidth(payload);
             const spsH = parseSpsHeight(payload);
@@ -603,11 +613,12 @@ class ScrcpyEngine extends EventEmitter {
 
         this._broadcastVideo(payload);
       }
+      if (consumed > 0) consumeBytes(consumed);
 
-      // Safety reset
-      if (buf.length > 1024 * 1024) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow — resetting`);
-        buf = Buffer.alloc(0);
+      // Safety reset — prevent unbounded memory growth
+      if (bufUsed > 2 * 1024 * 1024) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Buffer overflow (${bufUsed} bytes) — resetting`);
+        bufUsed = 0;
       }
     });
 
@@ -615,7 +626,6 @@ class ScrcpyEngine extends EventEmitter {
       clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
-      // scrcpy proc-exit handler will schedule the restart automatically.
     });
 
     socket.on('error', (e) => {
@@ -634,7 +644,6 @@ class ScrcpyEngine extends EventEmitter {
 
       if (!headerDone) {
         // Scrcpy 2.x sends: 1 dummy byte (0x00) + 4-byte codec ID (e.g. "opus")
-        // Total header = 5 bytes minimum
         if (buf.length < 5) return;
 
         let offset = 0;
@@ -642,7 +651,7 @@ class ScrcpyEngine extends EventEmitter {
 
         const codecStr = buf.toString('utf8', offset, offset + 4).toLowerCase().trim().replace(/\0/g, '');
         logger.info(`[ScrcpyEngine ${this.serial}] Audio codec header detected: "${codecStr}"`);
-        this._audioCodec = codecStr; // 'opus' or 'raw'
+        this._audioCodec = codecStr;
         buf = buf.subarray(offset + 4);
         headerDone = true;
       }
@@ -658,6 +667,11 @@ class ScrcpyEngine extends EventEmitter {
         const payload = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);
         this._broadcastAudio(payload);
+      }
+
+      // Prevent unbounded audio buffer growth
+      if (buf.length > 256 * 1024) {
+        buf = Buffer.alloc(0);
       }
     });
     socket.on('close', () => { this.audioSocket = null; });
@@ -676,9 +690,16 @@ class ScrcpyEngine extends EventEmitter {
     audioFrame[1] = codec; // 'O' = opus, 'R' = raw
     payload.copy(audioFrame, 2);
 
+    const BACKPRESSURE_LIMIT = 256 * 1024;
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1) {
-        try { ws.send(audioFrame, { binary: true }); } catch (_) {}
+      if (ws.readyState !== 1) {
+        this.wsClients.delete(ws);
+        continue;
+      }
+      // Skip audio for slow consumers — audio is less critical than keyframes
+      if (ws.bufferedAmount > BACKPRESSURE_LIMIT) continue;
+      try { ws.send(audioFrame, { binary: true }); } catch (_) {
+        this.wsClients.delete(ws);
       }
     }
   }

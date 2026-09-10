@@ -1241,6 +1241,56 @@ async function startStreamServer(serial, port) {
   }
 
   // ── HTTP handler ──────────────────────────────────────────────────────────
+  // Cache license check to avoid hitting Supabase on every HTTP request/WS connect
+  let cachedLicenseResult = null;
+  let cachedLicenseTime = 0;
+  const LICENSE_CACHE_TTL = 60000; // 60 seconds
+
+  async function getCachedLicenseStatus() {
+    const now = Date.now();
+    if (cachedLicenseResult && (now - cachedLicenseTime < LICENSE_CACHE_TTL)) {
+      return cachedLicenseResult;
+    }
+    const bindingCode = bindingService.getOrGenerateBindingCode();
+    cachedLicenseResult = await licenseService.checkLicenseStatus(bindingCode);
+    cachedLicenseTime = now;
+    return cachedLicenseResult;
+  }
+
+  // Cache device block status per-serial (4 second TTL already in license-service,
+  // but avoid even calling into it on every request)
+  let cachedBlockResult = null;
+  let cachedBlockTime = 0;
+  const BLOCK_CACHE_TTL = 5000; // 5 seconds
+
+  async function getCachedBlockStatus() {
+    const now = Date.now();
+    if (cachedBlockResult && (now - cachedBlockTime < BLOCK_CACHE_TTL)) {
+      return cachedBlockResult;
+    }
+    let isDeviceBlocked = false;
+    let blockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
+    try {
+      const processManager = require('../main/process-manager');
+      const localBlock = processManager.isStreamBlocked(serial);
+      if (localBlock && localBlock.isBlocked) {
+        isDeviceBlocked = true;
+        if (localBlock.reason) blockReason = localBlock.reason;
+      }
+    } catch (_) {}
+    if (!isDeviceBlocked) {
+      try {
+        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
+        if (cloudCheck && cloudCheck.isBlocked) {
+          isDeviceBlocked = true;
+          if (cloudCheck.reason) blockReason = cloudCheck.reason;
+        }
+      } catch (_) {}
+    }
+    cachedBlockResult = { isDeviceBlocked, blockReason };
+    cachedBlockTime = now;
+    return cachedBlockResult;
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -1250,8 +1300,8 @@ async function startStreamServer(serial, port) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:;");
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-    const bindingCode = bindingService.getOrGenerateBindingCode();
-    const licenseInfo = await licenseService.checkLicenseStatus(bindingCode);
+    const licenseInfo = await getCachedLicenseStatus();
+    const bindingCode = licenseInfo.bindingCode || bindingService.getOrGenerateBindingCode();
 
     if (!licenseInfo.isActive) {
       res.writeHead(403, { 'Content-Type': 'text/html' });
@@ -1295,24 +1345,9 @@ async function startStreamServer(serial, port) {
     let blockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
 
     if (!isDeviceBlocked) {
-      try {
-        const processManager = require('../main/process-manager');
-        const localBlock = processManager.isStreamBlocked(serial);
-        if (localBlock && localBlock.isBlocked) {
-          isDeviceBlocked = true;
-          if (localBlock.reason) blockReason = localBlock.reason;
-        }
-      } catch (_) {}
-    }
-
-    if (!isDeviceBlocked) {
-      try {
-        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
-        if (cloudCheck && cloudCheck.isBlocked) {
-          isDeviceBlocked = true;
-          if (cloudCheck.reason) blockReason = cloudCheck.reason;
-        }
-      } catch (_) {}
+      const blockStatus = await getCachedBlockStatus();
+      isDeviceBlocked = blockStatus.isDeviceBlocked;
+      blockReason = blockStatus.blockReason;
     }
 
     if (isDeviceBlocked) {
@@ -1321,8 +1356,7 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    const dashboardServer = require('../dashboard/server');
-    
+
     // Check key parameter (16-char), PIN parameter (6-digit), or session token
     const keyParam = (url.searchParams.get('key') || '').trim();
     const cleanPinParam = pinParam ? pinParam.trim() : '';
@@ -1411,8 +1445,7 @@ async function startStreamServer(serial, port) {
   const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
   wss.on('connection', async (ws, req) => {
-    const bindingCode = bindingService.getOrGenerateBindingCode();
-    const lic = await licenseService.checkLicenseStatus(bindingCode);
+    const lic = await getCachedLicenseStatus();
 
     if (!lic.isActive) {
       ws.close(4003, 'License Revoked');
@@ -1422,23 +1455,11 @@ async function startStreamServer(serial, port) {
     // Check if device stream is blocked on connect
     let isWsBlocked = false;
     let wsBlockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
-    try {
-      const processManager = require('../main/process-manager');
-      const localBlock = processManager.isStreamBlocked(serial);
-      if (localBlock && localBlock.isBlocked) {
-        isWsBlocked = true;
-        if (localBlock.reason) wsBlockReason = localBlock.reason;
-      }
-    } catch (_) {}
 
-    if (!isWsBlocked) {
-      try {
-        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
-        if (cloudCheck && cloudCheck.isBlocked) {
-          isWsBlocked = true;
-          if (cloudCheck.reason) wsBlockReason = cloudCheck.reason;
-        }
-      } catch (_) {}
+    const blockStatus = await getCachedBlockStatus();
+    if (blockStatus.isDeviceBlocked) {
+      isWsBlocked = true;
+      wsBlockReason = blockStatus.blockReason;
     }
 
     if (isWsBlocked) {
