@@ -1423,52 +1423,41 @@ async function startStreamServer(serial, port) {
     const cleanPinParam = pinParam ? pinParam.trim() : '';
 
     const udidParam = (url.searchParams.get('udid') || '').trim();
-    const isSeedAdminDedicated = (serial === 'R5CW114C0SP' || udidParam === 'R5CW114C0SP');
+    const effectiveSerial = (udidParam && activeServers.has(udidParam)) ? udidParam : (udidParam || serial);
+    const activeDev = activeServers.get(effectiveSerial);
+    const effectiveEngine = activeDev ? activeDev.engine : engine;
+    const isSeedAdminDedicated = (effectiveSerial === 'R5CW114C0SP');
 
-    // Cross-Machine & Multi-Device Smart Router:
-    // If request specifies a different UDID than this stream server:
-    if (udidParam && udidParam !== serial) {
-      if (activeServers.has(udidParam)) {
-        const targetDev = activeServers.get(udidParam);
-        const targetPort = targetDev.server.address()?.port;
-        if (targetPort && targetPort !== port) {
-          res.writeHead(302, { 'Location': `http://localhost:${targetPort}${req.url}` });
-          res.end();
-          return;
-        }
-      } else {
-        // Device is running on another computer in the farm -> look up in Supabase & redirect directly
-        try {
-          const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
-          if (client) {
-            const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status,is_stream_blocked,stream_blocked_reason`);
-            if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0 && devRes.data[0].stream_url) {
-              const remoteUrl = devRes.data[0].stream_url;
-              // If target remote device is blocked, render blocked screen immediately
-              if (devRes.data[0].is_stream_blocked || devRes.data[0].status === 'blocked') {
-                res.writeHead(403, { 'Content-Type': 'text/html' });
-                res.end(getDeviceStreamBlockedHtml(udidParam, devRes.data[0].stream_blocked_reason));
-                return;
-              }
-              // Redirect if remote URL points to a dedicated quick tunnel or different host
-              const isDifferent = remoteUrl && (!remoteUrl.includes(hostHeader) || remoteUrl.includes('trycloudflare.com') || remoteUrl.includes('loca.lt'));
-              if (isDifferent) {
-                res.writeHead(302, { 'Location': remoteUrl });
-                res.end();
-                return;
-              }
+    // Cross-Machine router: if requested device is not on this machine, look up in Supabase & redirect
+    if (udidParam && !activeServers.has(udidParam)) {
+      try {
+        const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
+        if (client) {
+          const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status,is_stream_blocked,stream_blocked_reason`);
+          if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0 && devRes.data[0].stream_url) {
+            const remoteUrl = devRes.data[0].stream_url;
+            if (devRes.data[0].is_stream_blocked || devRes.data[0].status === 'blocked') {
+              res.writeHead(403, { 'Content-Type': 'text/html' });
+              res.end(getDeviceStreamBlockedHtml(udidParam, devRes.data[0].stream_blocked_reason));
+              return;
+            }
+            const isDifferent = remoteUrl && (!remoteUrl.includes(hostHeader) || remoteUrl.includes('trycloudflare.com') || remoteUrl.includes('loca.lt'));
+            if (isDifferent) {
+              res.writeHead(302, { 'Location': remoteUrl });
+              res.end();
+              return;
             }
           }
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
     }
 
     // Invalidate stale / old stream links if device has a rotated clean key
     if (!isSeedAdminDedicated && isCloudflareOrRemote && (p === '/' || p === '') && keyParam) {
-      const isKeyValid = await licenseService.validateDevicePin(serial, keyParam, bindingCode);
+      const isKeyValid = await licenseService.validateDevicePin(effectiveSerial, keyParam, bindingCode);
       if (!isKeyValid) {
         res.writeHead(403, { 'Content-Type': 'text/html' });
-        res.end(getExpiredLinkHtml(serial));
+        res.end(getExpiredLinkHtml(effectiveSerial));
         return;
       }
     }
@@ -1482,9 +1471,9 @@ async function startStreamServer(serial, port) {
         const tmp = path.join(process.cwd(), `upload_${Date.now()}.tmp`);
         fs.writeFileSync(tmp, Buffer.concat(chunks));
         const dest = `/sdcard/Download/media_${Date.now()}.jpg`;
-        exec(`"${ADB_BIN}" -s ${serial} push "${tmp}" "${dest}"`, () => {
+        exec(`"${ADB_BIN}" -s ${effectiveSerial} push "${tmp}" "${dest}"`, () => {
           try { fs.unlinkSync(tmp); } catch (_) {}
-          exec(`"${ADB_BIN}" -s ${serial} shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${dest}`);
+          exec(`"${ADB_BIN}" -s ${effectiveSerial} shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${dest}`);
           res.writeHead(200, {'Content-Type':'application/json'});
           res.end(JSON.stringify({ status:'ok' }));
         });
@@ -1493,29 +1482,35 @@ async function startStreamServer(serial, port) {
     }
 
     if (p === '/screen.jpg') {
-      const frame = await captureOneFrame(serial);
+      const frame = await captureOneFrame(effectiveSerial);
       if (frame) { res.writeHead(200, {'Content-Type':'image/png','Cache-Control':'no-cache'}); res.end(frame); }
       else        { res.writeHead(500); res.end('Capture error'); }
       return;
     }
 
     if (p === '/control') {
-      handleControl(url.searchParams.get('type'), url.searchParams, serial, engine, null);
+      handleControl(url.searchParams.get('type'), url.searchParams, effectiveSerial, effectiveEngine, null);
       res.writeHead(200, {'Content-Type':'application/json'});
       res.end('{"status":"ok"}'); return;
     }
 
     res.writeHead(200, {'Content-Type':'text/html'});
     // Prefer the negotiated stream resolution; fall back to physical screen size.
-    const playerW = engine.videoWidth  > 0 ? engine.videoWidth  : engine.screenWidth;
-    const playerH = engine.videoHeight > 0 ? engine.videoHeight : engine.screenHeight;
-    res.end(buildPlayerHtml(serial, playerW, playerH));
+    const playerW = effectiveEngine.videoWidth  > 0 ? effectiveEngine.videoWidth  : effectiveEngine.screenWidth;
+    const playerH = effectiveEngine.videoHeight > 0 ? effectiveEngine.videoHeight : effectiveEngine.screenHeight;
+    res.end(buildPlayerHtml(effectiveSerial, playerW, playerH));
   });
 
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
   const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
   wss.on('connection', async (ws, req) => {
+    const wsUrl = new URL(req.url, 'http://localhost');
+    const wsUdid = (wsUrl.searchParams.get('udid') || '').trim();
+    const targetSerial = (wsUdid && activeServers.has(wsUdid)) ? wsUdid : serial;
+    const activeDev = activeServers.get(targetSerial);
+    const targetEngine = activeDev ? activeDev.engine : engine;
+
     const lic = await getCachedLicenseStatus();
 
     if (!lic.isActive) {
@@ -1535,19 +1530,18 @@ async function startStreamServer(serial, port) {
 
     if (isWsBlocked) {
       try {
-        ws.send(JSON.stringify({ type: 'stream_blocked', reason: wsBlockReason, serial }));
+        ws.send(JSON.stringify({ type: 'stream_blocked', reason: wsBlockReason, serial: targetSerial }));
       } catch (_) {}
       ws.close(4003, 'Stream Blocked');
       return;
     }
 
     // Invalidate stale stream links on remote WebSocket connection
-    const wsUrl = new URL(req.url, 'http://localhost');
     const wsKey = (wsUrl.searchParams.get('key') || '').trim();
     const wsHost = req.headers.host || '';
     const isWsRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (wsHost && !wsHost.includes('localhost') && !wsHost.includes('127.0.0.1')));
-    if (serial !== 'R5CW114C0SP' && isWsRemote && wsKey) {
-      const isWsKeyValid = await licenseService.validateDevicePin(serial, wsKey, bindingCode);
+    if (targetSerial !== 'R5CW114C0SP' && isWsRemote && wsKey) {
+      const isWsKeyValid = await licenseService.validateDevicePin(targetSerial, wsKey, bindingCode);
       if (!isWsKeyValid) {
         ws.close(4003, 'Stream Link Expired');
         return;
@@ -1555,14 +1549,14 @@ async function startStreamServer(serial, port) {
     }
 
     // Register active WS client for instantaneous block broadcast
-    if (!activeWsClients.has(serial)) {
-      activeWsClients.set(serial, new Set());
+    if (!activeWsClients.has(targetSerial)) {
+      activeWsClients.set(targetSerial, new Set());
     }
-    activeWsClients.get(serial).add(ws);
+    activeWsClients.get(targetSerial).add(ws);
 
     try { req.socket.setNoDelay(true); } catch (_) {}
-    logger.info(`[StreamServer] WS connected for ${serial}`);
-    engine.addClient(ws);
+    logger.info(`[StreamServer] WS connected for ${targetSerial}`);
+    targetEngine.addClient(ws);
 
     ws.on('message', (msg) => {
       // 1. Ultra-fast binary packet handler (Sub-millisecond direct dispatch)
@@ -1576,7 +1570,7 @@ async function startStreamServer(serial, port) {
           const h = buf.readUInt16BE(8);
           const pressure = buf.length >= 12 ? (buf.readUInt16BE(10) / 65535) : (action === 1 ? 0 : 1.0);
           const pId = buf.length >= 14 ? buf.readUInt16BE(12) : 0;
-          engine.sendTouchEvent(action, x, y, w, h, pressure, pId);
+          targetEngine.sendTouchEvent(action, x, y, w, h, pressure, pId);
           return;
         }
         if (buf.length >= 14 && buf[0] === 0x53) { // 'S' = Scroll packet
@@ -1586,7 +1580,7 @@ async function startStreamServer(serial, port) {
           const h = buf.readUInt16BE(8);
           const hscroll = buf.readInt16BE(10);
           const vscroll = buf.readInt16BE(12);
-          engine.sendScrollEvent(x, y, w, h, hscroll, vscroll);
+          targetEngine.sendScrollEvent(x, y, w, h, hscroll, vscroll);
           return;
         }
       }
@@ -1596,22 +1590,22 @@ async function startStreamServer(serial, port) {
         const data = JSON.parse(msg.toString());
         if (data.type === 'wake' || data.type === 'request_keyframe') {
           // Immediately bootstrap client with cached SPS/PPS + IDR keyframe
-          if (engine._keyframeBuffer || engine._configPacket) {
-            try { ws.send(engine._keyframeBuffer || engine._configPacket, { binary: true }); } catch (_) {}
+          if (targetEngine._keyframeBuffer || targetEngine._configPacket) {
+            try { ws.send(targetEngine._keyframeBuffer || targetEngine._configPacket, { binary: true }); } catch (_) {}
           }
-          engine._requestIdrKeyframe();
+          targetEngine._requestIdrKeyframe();
           return;
         }
-        handleControl(data.type, data, serial, engine, ws);
+        handleControl(data.type, data, targetSerial, targetEngine, ws);
       } catch (_) {}
     });
 
     const cleanup = () => {
-      engine.removeClient(ws);
-      const set = activeWsClients.get(serial);
+      targetEngine.removeClient(ws);
+      const set = activeWsClients.get(targetSerial);
       if (set) {
         set.delete(ws);
-        if (set.size === 0) activeWsClients.delete(serial);
+        if (set.size === 0) activeWsClients.delete(targetSerial);
       }
     };
 

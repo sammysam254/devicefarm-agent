@@ -237,6 +237,22 @@ class ScrcpyEngine extends EventEmitter {
     return this.isRunning && this.controlSocket && !this.controlSocket.destroyed;
   }
 
+  _captureSnapshot() {
+    return new Promise((resolve) => {
+      const p = spawn(ADB_BIN, ['-s', this.serial, 'exec-out', 'screencap -p'], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      const chunks = [];
+      p.stdout.on('data', c => chunks.push(c));
+      p.on('close', code => {
+        if (code !== 0 || !chunks.length) return resolve(null);
+        resolve(Buffer.concat(chunks));
+      });
+      p.on('error', () => resolve(null));
+    });
+  }
+
   /**
    * Register a WS client. We immediately flush the cached SPS/PPS + IDR keyframe
    * so the WebCodecs decoder is initialised before any new delta frame arrives.
@@ -256,6 +272,15 @@ class ScrcpyEngine extends EventEmitter {
     try {
       this._adb(['shell', 'input', 'keyevent', '0']).catch(() => {});
     } catch (_) {}
+
+    // Instant screen paint: send snapshot if no keyframe buffer is cached yet
+    if (!this._keyframeBuffer) {
+      this._captureSnapshot().then(buf => {
+        if (buf && ws.readyState === 1) {
+          try { ws.send(buf, { binary: true }); } catch (_) {}
+        }
+      }).catch(() => {});
+    }
   }
 
   removeClient(ws) {
