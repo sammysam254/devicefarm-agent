@@ -474,12 +474,44 @@ async function setDeviceStreamBlockStatus(serial, isBlocked, reason = null, bloc
   const client = getSupabaseClient();
   if (client) {
     try {
-      await client.patch(`/devices?serial=eq.${encodeURIComponent(serial)}`, {
+      const patchData = {
         is_stream_blocked: Boolean(isBlocked),
         stream_blocked_reason: cleanReason,
         stream_blocked_by: blockedBy || null,
         updated_at: new Date().toISOString(),
-      });
+      };
+
+      if (!isBlocked) {
+        patchData.status = 'online';
+        // Auto-generate fresh clean stream URL with unique key
+        const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
+        const w1 = words[Math.floor(Math.random() * words.length)];
+        const w2 = words[Math.floor(Math.random() * words.length)];
+        const randHex = Math.floor(10000000 + Math.random() * 90000000).toString(16);
+        const newKey = `${w1}${w2}_${randHex}`;
+        ROTATED_STREAM_KEYS.set(serial, newKey);
+
+        let baseUrl = 'https://agent.dennoh.site/';
+        try {
+          const curRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=stream_url`);
+          if (curRes.data && curRes.data[0] && curRes.data[0].stream_url) {
+            baseUrl = curRes.data[0].stream_url.split('?')[0];
+          }
+        } catch (_) {}
+        const cleanBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+        const newStreamUrl = `${cleanBase}?udid=${encodeURIComponent(serial)}&key=${encodeURIComponent(newKey)}`;
+        patchData.stream_url = newStreamUrl;
+
+        try {
+          await client.patch(`/device_rentals?serial_number=eq.${encodeURIComponent(serial)}`, {
+            stream_url: newStreamUrl,
+            status: 'active',
+            updated_at: new Date().toISOString()
+          });
+        } catch (_) {}
+      }
+
+      await client.patch(`/devices?serial=eq.${encodeURIComponent(serial)}`, patchData);
       logger.info(`[LicenseService] Device ${serial} stream block status set to ${isBlocked} in Supabase`);
     } catch (err) {
       logger.error(`[LicenseService] Failed to update stream block status for ${serial}:`, err.message);

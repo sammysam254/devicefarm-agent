@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Key, Smartphone, Users, Lock, CheckCircle, RefreshCw, Trash2, ExternalLink, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
+import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin, generateCleanDeviceUrl } from '../lib/keyGenerator';
 
 export default function DeviceAllocationSection({ currentUser }) {
   const [devices, setDevices] = useState([]);
@@ -13,6 +13,7 @@ export default function DeviceAllocationSection({ currentUser }) {
   const [assigning, setAssigning] = useState(false);
   const [unassigningId, setUnassigningId] = useState(null);
   const [blockingDeviceId, setBlockingDeviceId] = useState(null);
+  const [reKeyingId, setReKeyingId] = useState(null);
 
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
@@ -26,21 +27,44 @@ export default function DeviceAllocationSection({ currentUser }) {
     if (nextBlocked) {
       reason = window.prompt(`Enter reason for blocking stream ${serial} (optional):`, 'Suspended by Administrator') || 'Suspended by Administrator';
     } else {
-      if (!window.confirm(`Unblock stream for device ${serial}? User will immediately regain live stream access.`)) return;
+      if (!window.confirm(`Unblock stream for device ${serial}?\n\nA brand new, clean access link will be automatically generated and old links will be invalidated.`)) return;
     }
 
     setBlockingDeviceId(deviceId);
     try {
-      const { error } = await supabase.from('devices').update({
+      const targetDev = devices.find(d => d.id === deviceId);
+      let newStreamUrl = targetDev?.stream_url;
+      if (!nextBlocked) {
+        const generated = generateCleanDeviceUrl(targetDev?.stream_url, serial);
+        newStreamUrl = generated.streamUrl;
+      }
+
+      const updatePayload = {
         is_stream_blocked: nextBlocked,
         stream_blocked_reason: nextBlocked ? reason : null,
         stream_blocked_by: currentUser?.id || null,
         updated_at: new Date().toISOString()
-      }).eq('id', deviceId);
+      };
+      if (!nextBlocked) {
+        updatePayload.stream_url = newStreamUrl;
+        updatePayload.status = 'online';
+      }
+
+      const { error } = await supabase.from('devices').update(updatePayload).eq('id', deviceId);
 
       if (error) throw error;
 
-      alert(nextBlocked ? `⛔ Device stream ${serial} has been BLOCKED.` : `✅ Device stream ${serial} has been UNBLOCKED.`);
+      if (!nextBlocked && newStreamUrl) {
+        try {
+          await supabase.from('device_rentals').update({
+            stream_url: newStreamUrl,
+            status: 'active',
+            updated_at: new Date().toISOString()
+          }).eq('serial_number', serial);
+        } catch (_) {}
+      }
+
+      alert(nextBlocked ? `⛔ Device stream ${serial} has been BLOCKED.` : `✅ Device stream ${serial} has been UNBLOCKED.\n\nA fresh clean link has been generated.`);
       loadAllocationData();
     } catch (err) {
       alert('Error updating stream block status: ' + err.message);

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, ExternalLink, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { generateCleanDeviceUrl } from '../lib/keyGenerator';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [devices, setDevices] = useState([]);
@@ -17,20 +18,43 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     if (nextBlocked) {
       reason = window.prompt(`Enter reason for blocking stream ${serial} (optional):`, 'Suspended by Admin') || 'Suspended by Admin';
     } else {
-      if (!window.confirm(`Unblock stream for ${serial}? Users will immediately regain live stream access.`)) return;
+      if (!window.confirm(`Unblock stream for ${serial}?\n\nA brand new, clean access link will be automatically generated and old links will be invalidated.`)) return;
     }
 
     try {
-      await supabase.from('devices').update({
+      const targetDev = devices.find(d => d.id === deviceId);
+      let newStreamUrl = targetDev?.stream_url;
+      if (!nextBlocked) {
+        const generated = generateCleanDeviceUrl(targetDev?.stream_url, serial);
+        newStreamUrl = generated.streamUrl;
+      }
+
+      const updatePayload = {
         is_stream_blocked: nextBlocked,
         stream_blocked_reason: nextBlocked ? reason : null,
         stream_blocked_by: currentUser?.id || null,
         updated_at: new Date().toISOString()
-      }).eq('id', deviceId);
+      };
+      if (!nextBlocked) {
+        updatePayload.stream_url = newStreamUrl;
+        updatePayload.status = 'online';
+      }
 
-      setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, is_stream_blocked: nextBlocked, stream_blocked_reason: nextBlocked ? reason : null } : d));
+      await supabase.from('devices').update(updatePayload).eq('id', deviceId);
+
+      if (!nextBlocked && newStreamUrl) {
+        try {
+          await supabase.from('device_rentals').update({
+            stream_url: newStreamUrl,
+            status: 'active',
+            updated_at: new Date().toISOString()
+          }).eq('serial_number', serial);
+        } catch (_) {}
+      }
+
+      setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, ...updatePayload } : d));
       if (focusDevice && focusDevice.id === deviceId) {
-        setFocusDevice(prev => ({ ...prev, is_stream_blocked: nextBlocked, stream_blocked_reason: nextBlocked ? reason : null }));
+        setFocusDevice(prev => ({ ...prev, ...updatePayload }));
       }
     } catch (err) {
       alert('Error updating stream block status: ' + err.message);

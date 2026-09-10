@@ -6,7 +6,7 @@ import { Server, Key, Smartphone, Users, RefreshCw, Link2, ExternalLink, UserX, 
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
 import SystemLogsModal from '../components/SystemLogsModal';
-import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin } from '../lib/keyGenerator';
+import { generate16CharKey, generate6DigitPin, rotateUrlWithKeyAndPin, generateCleanDeviceUrl } from '../lib/keyGenerator';
 
 export default function SuperAdminDashboard() {
   const { profile } = useAuth();
@@ -27,20 +27,43 @@ export default function SuperAdminDashboard() {
     if (nextBlocked) {
       reason = window.prompt(`Enter reason for blocking stream for ${device.brand || 'Android'} (${device.serial}) [optional]:`, 'Suspended by Super Admin') || 'Suspended by Super Admin';
     } else {
-      if (!window.confirm(`Unblock stream for ${device.brand || 'Android'} (${device.serial})? Users will immediately regain live stream access.`)) return;
+      if (!window.confirm(`Unblock stream for ${device.brand || 'Android'} (${device.serial})?\n\nA brand new, clean access link will be automatically generated and old links will be invalidated.`)) return;
     }
 
     setBlockingDeviceId(device.id);
     try {
-      const { error } = await supabase.from('devices').update({
+      let newStreamUrl = device.stream_url;
+      if (!nextBlocked) {
+        const generated = generateCleanDeviceUrl(device.stream_url, device.serial);
+        newStreamUrl = generated.streamUrl;
+      }
+
+      const updatePayload = {
         is_stream_blocked: nextBlocked,
         stream_blocked_reason: nextBlocked ? reason : null,
         stream_blocked_by: profile?.id || null,
         updated_at: new Date().toISOString()
-      }).eq('id', device.id);
+      };
+      if (!nextBlocked) {
+        updatePayload.stream_url = newStreamUrl;
+        updatePayload.status = 'online';
+      }
+
+      const { error } = await supabase.from('devices').update(updatePayload).eq('id', device.id);
 
       if (error) throw error;
-      alert(nextBlocked ? `⛔ Stream for ${device.serial} has been BLOCKED.` : `✅ Stream for ${device.serial} has been UNBLOCKED.`);
+
+      if (!nextBlocked && newStreamUrl) {
+        try {
+          await supabase.from('device_rentals').update({
+            stream_url: newStreamUrl,
+            status: 'active',
+            updated_at: new Date().toISOString()
+          }).eq('serial_number', device.serial);
+        } catch (_) {}
+      }
+
+      alert(nextBlocked ? `⛔ Stream for ${device.serial} has been BLOCKED.` : `✅ Stream for ${device.serial} has been UNBLOCKED.\n\nA fresh clean link has been generated.`);
       loadData(false);
     } catch (err) {
       alert('Error updating stream block: ' + err.message);

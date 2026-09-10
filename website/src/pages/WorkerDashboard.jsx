@@ -2,17 +2,13 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Smartphone, Lock, Unlock, ExternalLink, RefreshCw, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Smartphone, Play, ExternalLink, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react';
 import SEO from '../components/SEO';
 
 export default function WorkerDashboard() {
   const { profile } = useAuth();
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [unlockModal, setUnlockModal] = useState(null);
-  const [inputPassword, setInputPassword] = useState('');
-  const [error, setError] = useState(null);
-  const [revealedPasswords, setRevealedPasswords] = useState({});
 
   const loadData = async (isInitial = false) => {
     if (!profile) return;
@@ -67,38 +63,13 @@ export default function WorkerDashboard() {
     };
   }, [profile]);
 
-  const handleUnlock = (e) => {
-    e.preventDefault();
-    setError(null);
-
-    if (inputPassword.trim() === unlockModal.access_password.trim()) {
-      let streamUrl = unlockModal.devices?.stream_url;
-      if (streamUrl) {
-        try {
-          const u = new URL(streamUrl);
-          u.searchParams.set('pin', unlockModal.access_password.trim());
-          streamUrl = u.toString();
-        } catch (_) {
-          streamUrl = streamUrl.replace(/([?&])pin=[^&]*/g, '$1');
-          streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(unlockModal.access_password.trim());
-        }
-        const w = 510, h = 900;
-        const left = Math.max(0, Math.round((window.screen.width - w) / 2));
-        const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-        window.open(streamUrl, `Stream_${unlockModal.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
-      }
-      setUnlockModal(null);
-      setInputPassword('');
-    } else {
-      setError('Invalid password. Check with your admin.');
-    }
-  };
-
-  const togglePasswordReveal = (assignmentId) => {
-    setRevealedPasswords(prev => ({
-      ...prev,
-      [assignmentId]: !prev[assignmentId],
-    }));
+  const handleOpenDevice = (assignment) => {
+    const streamUrl = assignment.devices?.stream_url;
+    if (!streamUrl) return;
+    const w = 510, h = 900;
+    const left = Math.max(0, Math.round((window.screen.width - w) / 2));
+    const top = Math.max(0, Math.round((window.screen.height - h) / 2));
+    window.open(streamUrl, `Stream_${assignment.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
   };
 
   const isDeviceOnline = (d) => {
@@ -122,186 +93,135 @@ export default function WorkerDashboard() {
               <h1 id="worker-devices-heading" style={{ fontSize: '22px', fontWeight: 800 }}>My Assigned Devices</h1>
             </div>
             <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
-            Devices assigned to you. Use your password to unlock and open the stream.
-          </p>
-        </div>
-        <button onClick={() => loadData(true)} className="btn btn-secondary" aria-label="Refresh">
-          <RefreshCw size={16} /> Refresh
-        </button>
-      </header>
-
-      {loading ? (
-        <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>Loading assigned devices...</div>
-      ) : assignments.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
-          <Lock size={44} style={{ marginBottom: '14px', opacity: 0.4 }} />
-          <h3 style={{ fontSize: '18px', fontWeight: 700 }}>No Devices Assigned</h3>
-          <p style={{ fontSize: '13px', marginTop: '8px' }}>Your Admin has not assigned any device streams to your account yet.</p>
-        </div>
-      ) : (
-        <div className="grid-cards">
-          {assignments.map(a => {
-            const online = isDeviceOnline(a.devices);
-            const isBlocked = a.devices?.is_stream_blocked === true || a.devices?.status === 'blocked';
-            const revealed = revealedPasswords[a.id];
-            return (
-              <div key={a.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', border: isBlocked ? '1px solid rgba(239,68,68,0.3)' : undefined }}>
-                {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-                  <div>
-                    <h3 style={{ fontSize: '18px', fontWeight: 800 }}>
-                      {a.devices?.brand} {a.devices?.model}
-                    </h3>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '12px', fontFamily: 'monospace', marginTop: '3px' }}>
-                      {a.devices?.serial}
-                    </p>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                    <span className={`badge ${online ? 'badge-success' : 'badge-warning'}`} style={{ flexShrink: 0 }}>
-                      {online ? '🟢 Online' : '🟡 Offline'}
-                    </span>
-                    {isBlocked && (
-                      <span className="badge badge-danger" style={{ flexShrink: 0, fontSize: '10px' }}>
-                        ⛔ STREAM BLOCKED
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {isBlocked && (
-                  <div style={{
-                    background: 'rgba(239,68,68,0.1)',
-                    border: '1px solid rgba(239,68,68,0.25)',
-                    borderRadius: '8px',
-                    padding: '8px 12px',
-                    marginBottom: '12px',
-                    color: '#fca5a5',
-                    fontSize: '12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}>
-                    <AlertCircle size={14} style={{ flexShrink: 0 }} />
-                    <span><b>Stream Blocked:</b> {a.devices?.stream_blocked_reason || 'This device stream is currently paused/blocked by administrator.'}</span>
-                  </div>
-                )}
-
-                {/* Password / PIN Row */}
-                <div style={{
-                  background: 'rgba(56,189,248,0.06)',
-                  border: '1px solid rgba(56,189,248,0.15)',
-                  borderRadius: '10px',
-                  padding: '10px 14px',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  marginBottom: '14px',
-                  flexWrap: 'wrap',
-                  gap: '8px',
-                }}>
-                  <div>
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '3px' }}>
-                      YOUR ACCESS PIN (6-DIGIT)
-                    </div>
-                    <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '18px', letterSpacing: '3px', color: 'var(--primary)' }}>
-                      {revealed ? (a.access_password || '------') : '••••••'}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <button
-                      onClick={() => togglePasswordReveal(a.id)}
-                      className="btn btn-secondary"
-                      style={{ padding: '6px 10px', fontSize: '12px' }}
-                      title={revealed ? 'Hide PIN' : 'Show PIN'}
-                    >
-                      {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                      {revealed ? 'Hide' : 'Show'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (a.access_password) {
-                          navigator.clipboard.writeText(a.access_password);
-                          alert('✅ 6-Digit PIN (' + a.access_password + ') copied to clipboard!');
-                        }
-                      }}
-                      className="btn btn-primary"
-                      style={{ padding: '6px 10px', fontSize: '12px' }}
-                      title="Copy 6-Digit PIN to clipboard"
-                    >
-                      📋 Copy PIN
-                    </button>
-                  </div>
-                </div>
-
-                {/* Stream URL info */}
-                {a.devices?.stream_url ? (
-                  <div style={{
-                    fontSize: '11px', fontFamily: 'monospace',
-                    color: 'var(--text-muted)', wordBreak: 'break-all',
-                    marginBottom: '14px', lineHeight: 1.5,
-                  }}>
-                    {a.devices.stream_url.substring(0, 60)}...
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', color: 'var(--text-dim)', fontSize: '12px' }}>
-                    <AlertCircle size={14} /> Device offline — stream link not yet available
-                  </div>
-                )}
-
-                {/* Open Button */}
-                <button
-                  disabled={!online}
-                  onClick={() => { setUnlockModal(a); setInputPassword(''); setError(null); }}
-                  className="btn btn-primary"
-                  style={{ width: '100%', justifyContent: 'center', opacity: online ? 1 : 0.5 }}
-                >
-                  <Unlock size={16} />
-                  {online ? 'Unlock & Open Device Stream' : 'Device Offline'}
-                  {online && <ExternalLink size={14} />}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Password Unlock Modal */}
-      {unlockModal && (
-        <div className="modal-overlay" onClick={() => setUnlockModal(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Lock size={20} color="var(--primary)" /> Unlock Device Stream
-            </h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '16px' }}>
-              Enter the password to open <b>{unlockModal.devices?.brand} {unlockModal.devices?.model}</b>.
+              Devices assigned to you. Click to open and control your live device stream instantly without PIN.
             </p>
-
-            {error && (
-              <div style={{ color: 'var(--danger)', fontSize: '13px', marginBottom: '12px', padding: '8px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px' }}>
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleUnlock} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <input
-                type="password"
-                required
-                autoFocus
-                className="input-field"
-                placeholder="Enter Access Password"
-                value={inputPassword}
-                onChange={e => setInputPassword(e.target.value)}
-              />
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-                <button type="button" onClick={() => setUnlockModal(null)} className="btn btn-secondary">
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  Unlock Stream <ExternalLink size={14} />
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+          <button onClick={() => loadData(true)} className="btn btn-secondary" aria-label="Refresh">
+            <RefreshCw size={16} /> Refresh
+          </button>
+        </header>
+
+        {loading ? (
+          <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+            <RefreshCw size={24} className="spin" style={{ marginBottom: '12px' }} />
+            <p>Loading assigned devices...</p>
+          </div>
+        ) : assignments.length === 0 ? (
+          <div className="card" style={{ padding: '60px 24px', textAlign: 'center' }}>
+            <Smartphone size={40} color="var(--text-dim)" style={{ marginBottom: '16px' }} />
+            <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>No Devices Assigned</h3>
+            <p style={{ color: 'var(--text-muted)', maxWidth: '400px', margin: '0 auto 20px', fontSize: '14px' }}>
+              You do not have any devices assigned to your account yet. Contact your administrator to get access.
+            </p>
+            <button onClick={() => loadData(true)} className="btn btn-secondary">
+              Check Again
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
+            {assignments.map(a => {
+              const online = isDeviceOnline(a.devices);
+              const isBlocked = a.devices?.is_stream_blocked === true || a.devices?.status === 'blocked';
+
+              return (
+                <div
+                  key={a.id}
+                  className="card"
+                  style={{
+                    padding: '20px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    border: isBlocked
+                      ? '1px solid rgba(239, 68, 68, 0.4)'
+                      : online
+                        ? '1px solid rgba(34, 197, 94, 0.3)'
+                        : '1px solid var(--border)',
+                    background: isBlocked ? 'rgba(239, 68, 68, 0.03)' : undefined,
+                  }}
+                >
+                  <div>
+                    {/* Header: Brand & Status */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                      <div>
+                        <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--primary)', letterSpacing: '0.5px' }}>
+                          {a.devices?.brand || 'Android'}
+                        </span>
+                        <h3 style={{ fontSize: '18px', fontWeight: 800, marginTop: '2px' }}>
+                          {a.devices?.model || 'Device'}
+                        </h3>
+                      </div>
+                      <span className={`badge ${isBlocked ? 'badge-danger' : online ? 'badge-success' : 'badge-secondary'}`}>
+                        <span className="badge-dot"></span>
+                        {isBlocked ? 'Blocked by Admin' : online ? 'Ready to Stream' : 'Offline'}
+                      </span>
+                    </div>
+
+                    {/* Serial / ID */}
+                    <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '16px', fontFamily: 'monospace' }}>
+                      UDID: {a.devices?.serial || 'Unknown'}
+                    </div>
+
+                    {/* Access Mode Indicator */}
+                    <div style={{
+                      background: isBlocked ? 'rgba(239,68,68,0.06)' : 'rgba(56,189,248,0.06)',
+                      border: isBlocked ? '1px solid rgba(239,68,68,0.2)' : '1px solid rgba(56,189,248,0.15)',
+                      borderRadius: '10px',
+                      padding: '10px 14px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      marginBottom: '14px',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <CheckCircle size={16} color={isBlocked ? 'var(--danger)' : 'var(--primary)'} />
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: isBlocked ? '#f87171' : 'var(--text-light)' }}>
+                          {isBlocked ? 'Stream Suspended' : 'Direct Assigned Access'}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '11px', color: isBlocked ? '#f87171' : 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        {isBlocked ? 'ACCESS PAUSED' : 'NO PIN NEEDED'}
+                      </span>
+                    </div>
+
+                    {/* Stream URL info */}
+                    {a.devices?.stream_url ? (
+                      <div style={{
+                        fontSize: '11px', fontFamily: 'monospace',
+                        color: 'var(--text-muted)', wordBreak: 'break-all',
+                        marginBottom: '14px', lineHeight: 1.5,
+                      }}>
+                        {a.devices.stream_url.substring(0, 55)}...
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', color: 'var(--text-dim)', fontSize: '12px' }}>
+                        <AlertCircle size={14} /> Device offline — stream link not yet available
+                      </div>
+                    )}
+
+                    {/* Open Button */}
+                    <button
+                      disabled={!online || isBlocked}
+                      onClick={() => handleOpenDevice(a)}
+                      className="btn btn-primary"
+                      style={{
+                        width: '100%',
+                        justifyContent: 'center',
+                        opacity: (!online || isBlocked) ? 0.5 : 1,
+                        background: isBlocked ? '#dc2626' : undefined,
+                        cursor: (!online || isBlocked) ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      <Play size={16} />
+                      {isBlocked ? 'Stream Blocked by Admin' : online ? 'Open Device Stream' : 'Device Offline'}
+                      {online && !isBlocked && <ExternalLink size={14} />}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </main>
     </DashboardLayout>
   );

@@ -515,27 +515,8 @@ class ScrcpyEngine extends EventEmitter {
       bufUsed -= n;
     }
 
-    // Jitter detection — if no video data arrives for >2s while the socket is
-    // open, request a fresh IDR keyframe to unblock the decoder.
-    const jitterCheckInterval = 500;
-    let jitterKeyframeRequested = false;
-    const watchdog = setInterval(() => {
-      const elapsed = Date.now() - lastDataTime;
-      if ((!this.videoSocket || this.videoSocket.destroyed) && this.isRunning) {
-        return;
-      }
-      if (elapsed > 2000 && elapsed <= 8000 && !jitterKeyframeRequested) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Jitter detected (${elapsed}ms no data) — requesting IDR keyframe`);
-        this._requestIdrKeyframe();
-        jitterKeyframeRequested = true;
-      } else if (elapsed <= 1000) {
-        jitterKeyframeRequested = false;
-      }
-    }, jitterCheckInterval);
-
     socket.on('data', (chunk) => {
       lastDataTime = Date.now();
-      jitterKeyframeRequested = false;
       appendChunk(chunk);
 
       // 1. Skip the device-info header exactly once & parse real video stream size
@@ -623,13 +604,11 @@ class ScrcpyEngine extends EventEmitter {
     });
 
     socket.on('close', () => {
-      clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
     });
 
     socket.on('error', (e) => {
-      clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket error: ${e.message}`);
       this.videoSocket = null;
     });

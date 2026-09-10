@@ -233,6 +233,35 @@ function getDeviceStreamBlockedHtml(serial, reason = 'This device stream has bee
 </html>`;
 }
 
+function getExpiredLinkHtml(serial) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream Link Expired - ${serial}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background:#060911; color:#f8fafc; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; text-align:center; }
+    .card { background:#0f172a; border:1px solid rgba(239,68,68,0.4); border-radius:24px; padding:40px 32px; max-width:480px; width:100%; box-shadow:0 25px 50px rgba(0,0,0,0.7); }
+    .icon { font-size:44px; margin-bottom:16px; }
+    h2 { font-size:22px; font-weight:800; margin-bottom:12px; color:#f87171; }
+    p { color:#94a3b8; font-size:14px; line-height:1.6; margin-bottom:18px; }
+    .udid { font-family:monospace; background:rgba(255,255,255,0.06); padding:8px 14px; border-radius:10px; color:#38bdf8; font-size:13px; font-weight:700; margin-bottom:20px; display:inline-block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🔒</div>
+    <h2>Stream Link Expired</h2>
+    <p>This stream link is no longer valid. An Administrator has generated a clean new access link for this device upon unblocking.</p>
+    <div class="udid">Device UDID: ${serial}</div>
+    <p style="font-size:13px; color:#cbd5e1;">Please open your account dashboard and click <b>Open Device Stream</b> to access the current live link.</p>
+  </div>
+</body>
+</html>`;
+}
+
 // ─── Payment-blocked HTML ────────────────────────────────────────────────────
 
 function getStreamBlockedHtml(serial, checkoutUrl, s = {}) {
@@ -790,11 +819,18 @@ function buildPlayerHtml(serial, screenW, screenH) {
           ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
           frame.close();
           countFrame();
+          if (modeText && modeText.textContent !== 'LIVE') {
+            modeText.textContent = 'LIVE';
+            if (badge) {
+              badge.style.background = 'rgba(56,189,248,.15)';
+              badge.style.borderColor = 'rgba(56,189,248,.3)';
+              badge.style.color = '#38bdf8';
+            }
+          }
         },
         error: function(err) {
           console.error('[Stream] VideoDecoder error:', err);
           resetDecoder();
-          // Immediately recover decoder and request keyframe without black screen
           setTimeout(function() {
             if (!decoderReady) {
               initDecoder();
@@ -816,8 +852,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  function isH264Keyframe(u8) {
-    for (let i = 0; i < Math.min(u8.length - 4, 256); i++) {
+  function parseNal(u8) {
+    let hasIdr = false, hasSps = false, hasPps = false, hasSlice = false;
+    for (let i = 0; i < Math.min(u8.length - 4, 128); i++) {
       if (u8[i] === 0 && u8[i+1] === 0) {
         let ntype = -1;
         if (u8[i+2] === 1 && i + 3 < u8.length) {
@@ -825,11 +862,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
         } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
           ntype = u8[i+4] & 0x1f;
         }
-        // WebCodecs key/config types: NAL 5 (IDR keyframe), NAL 7 (SPS), NAL 8 (PPS)
-        if (ntype === 5 || ntype === 7 || ntype === 8) return true;
+        if (ntype === 5) { hasIdr = true; hasSlice = true; }
+        else if (ntype === 7) hasSps = true;
+        else if (ntype === 8) hasPps = true;
+        else if (ntype === 1) hasSlice = true;
       }
     }
-    return false;
+    return { hasIdr, hasSps, hasPps, hasSlice };
   }
 
   // ── WebSocket connection ─────────────────────────────────────────────────
@@ -859,7 +898,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       wsOk = true;
       wsFailCount = 0; // Reset fail counter on successful connection
       lastFrameReceivedTime = Date.now();
-      modeText.textContent = 'LIVE 60FPS';
+      modeText.textContent = 'LIVE';
       if (!decoderReady || !decoder || decoder.state === 'closed') {
         initDecoder();
       }
@@ -895,7 +934,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       if (isStreamBlocked) return;
       if (!(e.data instanceof ArrayBuffer)) return;
       lastFrameReceivedTime = Date.now();
-      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE 60FPS'; }
+      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE'; }
 
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
@@ -913,7 +952,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
         return;
       }
 
-      const u8 = (rawU8[0] === 0x56) ? rawU8.subarray(1) : rawU8;
+      let u8 = (rawU8[0] === 0x56) ? rawU8.subarray(1) : rawU8;
 
       // 1. PNG Image Auto-detection (0x89 0x50 0x4E 0x47)
       if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47) {
@@ -934,25 +973,42 @@ function buildPlayerHtml(serial, screenW, screenH) {
       // 3. Raw H264 NAL stream via WebCodecs
       if (!decoderReady || !decoder || decoder.state === 'closed') {
         if (!initDecoder()) {
-          startFallback();
           return;
         }
       }
 
-      const key = isH264Keyframe(u8);
-      if (key) hasKeyframe = true;
-      if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
+      const nal = parseNal(u8);
+      if (nal.hasSps || nal.hasPps) {
+        cachedSpsPps = u8;
+      }
+
+      // If packet contains only parameter sets (SPS/PPS) without slice data, wait for IDR slice
+      if (!nal.hasSlice && (nal.hasSps || nal.hasPps)) {
+        return;
+      }
+
+      if (nal.hasIdr) {
+        hasKeyframe = true;
+        // Prepend cached SPS/PPS if this IDR slice doesn't have SPS in it
+        if (cachedSpsPps && !nal.hasSps) {
+          const combined = new Uint8Array(cachedSpsPps.length + u8.length);
+          combined.set(cachedSpsPps, 0);
+          combined.set(u8, cachedSpsPps.length);
+          u8 = combined;
+        }
+      }
+
+      if (!hasKeyframe) return; // Wait for initial IDR keyframe
 
       try {
         const chunk = new EncodedVideoChunk({
-          type: key ? 'key' : 'delta',
+          type: nal.hasIdr ? 'key' : 'delta',
           timestamp: performance.now() * 1000,
           data: u8
         });
         decoder.decode(chunk);
       } catch (err) {
         console.warn('[Stream] H264 chunk decode error:', err);
-        hasKeyframe = false;
       }
     };
 
@@ -965,10 +1021,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       }
       if (isStreamBlocked) return;
       wsOk = false;
+      modeText.textContent = 'CONNECTING';
       wsFailCount++;
-      if (wsFailCount >= 15 && !fbRunning) startFallback();
-      // Exponential back-off: immediate on first failure, then 200ms, 400ms... capped at 2s
-      const delay = wsFailCount <= 1 ? 0 : Math.min(200 * Math.pow(2, wsFailCount - 2), 2000);
+      const delay = Math.min(200 * Math.pow(2, Math.min(wsFailCount, 4)), 2000);
       wsRetryTimer = setTimeout(connectWS, delay);
     };
   }
@@ -1170,7 +1225,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function reconnectStream() {
-    modeText.textContent = 'RECONNECTING';
+    modeText.textContent = 'CONNECTING';
     resetDecoder();
     connectWS();
   }
@@ -1194,28 +1249,30 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   window.addEventListener('click', e => { if (e.target.classList.contains('modal')) e.target.style.display='none'; });
 
+  // ── Clean Instant Teardown on Browser Close ─────────────────────────────
+  window.addEventListener('beforeunload', function() {
+    if (ws) {
+      try {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        ws.close();
+      } catch (_) {}
+      ws = null;
+    }
+    try { resetDecoder(); } catch (_) {}
+    try { if (audioCtx) audioCtx.close(); } catch (_) {}
+  });
+
   try { initAudio(); } catch (_) {}
   connectWS();
 
-  // ── Liveness Watchdog — auto-recover dead streams ────────────────────────
-  // If no video frame arrives for 8s while WS is open, force reconnect.
-  // If 20s with no frames at all (including during reconnect), hard reconnect.
+  // ── Gentle Liveness Check (Never drops healthy connections) ─────────────
   setInterval(function() {
     if (isStreamBlocked) return;
-    if (!lastFrameReceivedTime) return; // haven't received any frame yet
-    var elapsed = Date.now() - lastFrameReceivedTime;
-    if (elapsed > 8000 && wsOk && ws && ws.readyState === 1) {
-      console.warn('[Watchdog] No frames for ' + elapsed + 'ms — requesting keyframe');
-      send({ type: 'request_keyframe' });
-      if (elapsed > 15000) {
-        console.warn('[Watchdog] No frames for ' + elapsed + 'ms — forcing full reconnect');
-        modeText.textContent = 'RECOVERING';
-        reconnectStream();
-      }
-    } else if (elapsed > 20000 && !wsOk) {
-      console.warn('[Watchdog] Stream dead for ' + elapsed + 'ms with WS down — reconnecting');
-      modeText.textContent = 'RECOVERING';
-      reconnectStream();
+    if (!wsOk && (!ws || ws.readyState > 1)) {
+      connectWS();
     }
   }, 3000);
 </script>
@@ -1402,6 +1459,16 @@ async function startStreamServer(serial, port) {
       }
     }
 
+    // Invalidate stale / old stream links if device has a rotated clean key
+    if (!isSeedAdminDedicated && isCloudflareOrRemote && (p === '/' || p === '') && keyParam) {
+      const isKeyValid = await licenseService.validateDevicePin(serial, keyParam, bindingCode);
+      if (!isKeyValid) {
+        res.writeHead(403, { 'Content-Type': 'text/html' });
+        res.end(getExpiredLinkHtml(serial));
+        return;
+      }
+    }
+
     // Direct access allowed without PIN requirement for seamless local & Cloudflare fast link control
 
     if (p === '/upload' && req.method === 'POST') {
@@ -1468,6 +1535,19 @@ async function startStreamServer(serial, port) {
       } catch (_) {}
       ws.close(4003, 'Stream Blocked');
       return;
+    }
+
+    // Invalidate stale stream links on remote WebSocket connection
+    const wsUrl = new URL(req.url, 'http://localhost');
+    const wsKey = (wsUrl.searchParams.get('key') || '').trim();
+    const wsHost = req.headers.host || '';
+    const isWsRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (wsHost && !wsHost.includes('localhost') && !wsHost.includes('127.0.0.1')));
+    if (serial !== 'R5CW114C0SP' && isWsRemote && wsKey) {
+      const isWsKeyValid = await licenseService.validateDevicePin(serial, wsKey, bindingCode);
+      if (!isWsKeyValid) {
+        ws.close(4003, 'Stream Link Expired');
+        return;
+      }
     }
 
     // Register active WS client for instantaneous block broadcast

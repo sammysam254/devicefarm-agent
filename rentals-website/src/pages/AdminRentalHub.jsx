@@ -37,19 +37,49 @@ export default function AdminRentalHub() {
       reason = window.prompt(`Enter block reason for ${device.brand} ${device.model} (${device.serial}):`, 'Administrative review / maintenance');
       if (reason === null) return;
     } else {
-      if (!window.confirm(`Unblock device stream for ${device.brand} ${device.model} (${device.serial})?`)) return;
+      if (!window.confirm(`Unblock device stream for ${device.brand} ${device.model} (${device.serial})?\n\nA brand new, clean access link will be automatically generated and old links will be invalidated.`)) return;
     }
 
     try {
-      const { error } = await supabase.from('devices').update({
+      let newStreamUrl = device.stream_url;
+      if (isCurrentlyBlocked) {
+        // Unblocking: generate clean key
+        const words = ['flex', 'pulse', 'cloud', 'agent', 'cyber', 'hyper', 'nexus', 'shield', 'matrix', 'stream', 'turbo', 'quantum', 'vector', 'blaze', 'alpha', 'delta'];
+        const w1 = words[Math.floor(Math.random() * words.length)];
+        const w2 = words[Math.floor(Math.random() * words.length)];
+        const randHex = Math.floor(10000000 + Math.random() * 90000000).toString(16);
+        const newKey = `${w1}${w2}_${randHex}`;
+        const baseUrl = device.stream_url ? device.stream_url.split('?')[0] : 'https://agent.dennoh.site/';
+        const cleanBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+        newStreamUrl = `${cleanBase}?udid=${encodeURIComponent(device.serial)}&key=${encodeURIComponent(newKey)}`;
+      }
+
+      const updatePayload = {
         is_stream_blocked: !isCurrentlyBlocked,
         stream_blocked_reason: !isCurrentlyBlocked ? (reason || 'Blocked by Admin') : null,
         stream_blocked_by: !isCurrentlyBlocked ? profile?.id : null,
         updated_at: new Date().toISOString()
-      }).eq('id', device.id);
+      };
+      if (isCurrentlyBlocked) {
+        updatePayload.stream_url = newStreamUrl;
+        updatePayload.status = 'online';
+      }
+
+      const { error } = await supabase.from('devices').update(updatePayload).eq('id', device.id);
 
       if (error) throw error;
-      alert(`✅ Device stream ${!isCurrentlyBlocked ? 'BLOCKED' : 'UNBLOCKED'} successfully! Active viewers will immediately see the blocked message.`);
+
+      if (isCurrentlyBlocked && newStreamUrl) {
+        try {
+          await supabase.from('device_rentals').update({
+            stream_url: newStreamUrl,
+            status: 'active',
+            updated_at: new Date().toISOString()
+          }).eq('serial_number', device.serial);
+        } catch (_) {}
+      }
+
+      alert(`✅ Device stream ${!isCurrentlyBlocked ? 'BLOCKED' : 'UNBLOCKED'} successfully!${isCurrentlyBlocked ? ' A fresh clean link was generated.' : ''}`);
       loadRentalData();
     } catch (err) {
       alert('Error updating stream block state: ' + err.message);
