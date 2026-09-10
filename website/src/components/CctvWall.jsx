@@ -266,29 +266,8 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
           {devices.map(d => {
-            const rawStreamUrl = d.stream_url;
-            let streamUrl = rawStreamUrl;
-            if (streamUrl && (streamUrl.includes('localhost') || streamUrl.includes('127.0.0.1'))) {
-              try {
-                const parsed = new URL(streamUrl);
-                parsed.protocol = 'https:';
-                parsed.host = 'agent.dennoh.site';
-                parsed.port = '';
-                streamUrl = parsed.toString();
-              } catch (_) {
-                streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
-              }
-            } else if (!streamUrl) {
-              streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
-            } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && streamUrl.startsWith('http:')) {
-              streamUrl = streamUrl.replace(/^http:/, 'https:');
-            }
-            if (d.serial && !streamUrl.includes('udid=')) {
-              streamUrl += (streamUrl.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(d.serial)}`;
-            }
-            if (!streamUrl.includes('muted=')) {
-              streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'muted=1';
-            }
+            const serial = d.serial || '';
+            const streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}&muted=1`;
             const isFocused = focusDevice && focusDevice.id === d.id;
             const isStealthOn = d.stealth_root_enabled !== false;
             const isBlocked = Boolean(d.is_stream_blocked || d.status === 'blocked');
@@ -422,23 +401,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 </button>
                 <button 
                   onClick={() => {
-                    let u = focusDevice.stream_url;
-                    if (u && (u.includes('localhost') || u.includes('127.0.0.1'))) {
-                      try {
-                        const parsed = new URL(u);
-                        parsed.protocol = 'https:';
-                        parsed.host = 'agent.dennoh.site';
-                        parsed.port = '';
-                        u = parsed.toString();
-                      } catch (_) {
-                        u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                      }
-                    } else if (!u) {
-                      u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                    } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) {
-                      u = u.replace(/^http:/, 'https:');
-                    }
-                    if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
+                    const u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
@@ -458,26 +421,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             {/* Interactive Stream Frame */}
             <div style={{ flex: 1, background: '#000', position: 'relative' }}>
               <iframe 
-                src={(() => {
-                  let u = focusDevice.stream_url;
-                  if (u && (u.includes('localhost') || u.includes('127.0.0.1'))) {
-                    try {
-                      const parsed = new URL(u);
-                      parsed.protocol = 'https:';
-                      parsed.host = 'agent.dennoh.site';
-                      parsed.port = '';
-                      u = parsed.toString();
-                    } catch (_) {
-                      u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                    }
-                  } else if (!u) {
-                    u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                  } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) {
-                    u = u.replace(/^http:/, 'https:');
-                  }
-                  if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
-                  return u;
-                })()} 
+                src={`https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
                 referrerPolicy="no-referrer"

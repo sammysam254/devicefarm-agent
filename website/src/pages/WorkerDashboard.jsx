@@ -64,12 +64,13 @@ export default function WorkerDashboard() {
   }, [profile]);
 
   const handleOpenDevice = (assignment) => {
-    const streamUrl = assignment.devices?.stream_url;
-    if (!streamUrl) return;
+    const serial = assignment.devices?.serial;
+    if (!serial) return;
+    const streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}`;
     const w = 510, h = 900;
     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-    window.open(streamUrl, `Stream_${assignment.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+    window.open(streamUrl, `Stream_${serial}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
   };
 
   const isDeviceOnline = (d) => {
@@ -157,11 +158,6 @@ export default function WorkerDashboard() {
                       </span>
                     </div>
 
-                    {/* Serial / ID */}
-                    <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '16px', fontFamily: 'monospace' }}>
-                      UDID: {a.devices?.serial || 'Unknown'}
-                    </div>
-
                     {/* Access Mode Indicator */}
                     <div style={{
                       background: isBlocked ? 'rgba(239,68,68,0.06)' : 'rgba(56,189,248,0.06)',
@@ -180,24 +176,19 @@ export default function WorkerDashboard() {
                         </span>
                       </div>
                       <span style={{ fontSize: '11px', color: isBlocked ? '#f87171' : 'var(--text-muted)', fontFamily: 'monospace' }}>
-                        {isBlocked ? 'ACCESS PAUSED' : 'NO PIN NEEDED'}
+                        {isBlocked ? 'ACCESS PAUSED' : 'ACTIVE'}
                       </span>
                     </div>
 
-                    {/* Stream URL info */}
-                    {a.devices?.stream_url ? (
-                      <div style={{
-                        fontSize: '11px', fontFamily: 'monospace',
-                        color: 'var(--text-muted)', wordBreak: 'break-all',
-                        marginBottom: '14px', lineHeight: 1.5,
-                      }}>
-                        {a.devices.stream_url.substring(0, 55)}...
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', color: 'var(--text-dim)', fontSize: '12px' }}>
-                        <AlertCircle size={14} /> Device offline — stream link not yet available
-                      </div>
-                    )}
+                    {/* Stream Gateway info (UDID hidden from workers) */}
+                    <div style={{
+                      fontSize: '12px', fontFamily: 'monospace',
+                      color: 'var(--text-muted)',
+                      marginBottom: '16px', lineHeight: 1.5,
+                      display: 'flex', alignItems: 'center', gap: '6px'
+                    }}>
+                      <span style={{ color: 'var(--primary)', fontWeight: 700 }}>Host:</span> https://agent.dennoh.site/
+                    </div>
 
                     {/* Open Button */}
                     <button

@@ -872,6 +872,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   // ── WebSocket connection ─────────────────────────────────────────────────
+  const streamSearch = window.location.search;
+  // Security: Immediately mask query string from browser address bar so workers only see domain
+  try {
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, document.title, window.location.pathname || '/');
+    }
+  } catch (_) {}
+
   let ws = null, wsOk = false;
   let wsRetryTimer = null;
   let wsFailCount = 0;
@@ -891,7 +899,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
     hasKeyframe = false; // Reset so decoder waits for fresh SPS/PPS from new connection
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
+    ws = new WebSocket(proto + '//' + location.host + '/ws' + streamSearch);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
@@ -1452,17 +1460,7 @@ async function startStreamServer(serial, port) {
       } catch (_) {}
     }
 
-    // Invalidate stale / old stream links if device has a rotated clean key
-    if (!isSeedAdminDedicated && isCloudflareOrRemote && (p === '/' || p === '') && keyParam) {
-      const isKeyValid = await licenseService.validateDevicePin(effectiveSerial, keyParam, bindingCode);
-      if (!isKeyValid) {
-        res.writeHead(403, { 'Content-Type': 'text/html' });
-        res.end(getExpiredLinkHtml(effectiveSerial));
-        return;
-      }
-    }
-
-    // Direct access allowed without PIN requirement for seamless local & Cloudflare fast link control
+    // Direct access allowed without PIN or token requirement for seamless multi-device access
 
     if (p === '/upload' && req.method === 'POST') {
       const chunks = [];
@@ -1536,17 +1534,7 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    // Invalidate stale stream links on remote WebSocket connection
-    const wsKey = (wsUrl.searchParams.get('key') || '').trim();
-    const wsHost = req.headers.host || '';
-    const isWsRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (wsHost && !wsHost.includes('localhost') && !wsHost.includes('127.0.0.1')));
-    if (targetSerial !== 'R5CW114C0SP' && isWsRemote && wsKey) {
-      const isWsKeyValid = await licenseService.validateDevicePin(targetSerial, wsKey, bindingCode);
-      if (!isWsKeyValid) {
-        ws.close(4003, 'Stream Link Expired');
-        return;
-      }
-    }
+    // Direct WebSocket connection allowed without token requirement
 
     // Register active WS client for instantaneous block broadcast
     if (!activeWsClients.has(targetSerial)) {
