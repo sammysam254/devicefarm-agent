@@ -835,6 +835,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   // ── WebSocket connection ─────────────────────────────────────────────────
   let ws = null, wsOk = false;
   let wsRetryTimer = null;
+  let wsFailCount = 0;
   let lastFrameReceivedTime = 0;
 
   function connectWS() {
@@ -849,12 +850,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
       } catch (_) {}
       ws = null;
     }
+    hasKeyframe = false; // Reset so decoder waits for fresh SPS/PPS from new connection
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws' + location.search);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
       wsOk = true;
+      wsFailCount = 0; // Reset fail counter on successful connection
       lastFrameReceivedTime = Date.now();
       modeText.textContent = 'LIVE 60FPS';
       if (!decoderReady || !decoder || decoder.state === 'closed') {
@@ -1193,6 +1196,28 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   try { initAudio(); } catch (_) {}
   connectWS();
+
+  // ── Liveness Watchdog — auto-recover dead streams ────────────────────────
+  // If no video frame arrives for 8s while WS is open, force reconnect.
+  // If 20s with no frames at all (including during reconnect), hard reconnect.
+  setInterval(function() {
+    if (isStreamBlocked) return;
+    if (!lastFrameReceivedTime) return; // haven't received any frame yet
+    var elapsed = Date.now() - lastFrameReceivedTime;
+    if (elapsed > 8000 && wsOk && ws && ws.readyState === 1) {
+      console.warn('[Watchdog] No frames for ' + elapsed + 'ms — requesting keyframe');
+      send({ type: 'request_keyframe' });
+      if (elapsed > 15000) {
+        console.warn('[Watchdog] No frames for ' + elapsed + 'ms — forcing full reconnect');
+        modeText.textContent = 'RECOVERING';
+        reconnectStream();
+      }
+    } else if (elapsed > 20000 && !wsOk) {
+      console.warn('[Watchdog] Stream dead for ' + elapsed + 'ms with WS down — reconnecting');
+      modeText.textContent = 'RECOVERING';
+      reconnectStream();
+    }
+  }, 3000);
 </script>
 </body>
 </html>`;

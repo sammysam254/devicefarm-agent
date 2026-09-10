@@ -119,9 +119,25 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       }
     }, 300000);
 
+    // Periodic iframe health-check: every 3 minutes, force-remount all stream iframes
+    // to recover any that silently went stale/black due to WebSocket disconnects.
+    const iframeHealthCheck = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      setDevices(current => {
+        if (current.length === 0) return current;
+        setReloadKeys(prev => {
+          const next = { ...prev };
+          for (const d of current) next[d.id] = (next[d.id] || 0) + 1;
+          return next;
+        });
+        return current;
+      });
+    }, 180000); // 3 minutes
+
     return () => {
       supabase.removeChannel(channel);
       clearInterval(interval);
+      clearInterval(iframeHealthCheck);
     };
   }, []);
 

@@ -684,10 +684,22 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload) {
+    // Detect if this frame contains a keyframe (IDR/SPS/PPS) — always send these
+    const isKeyframe = hasSpsNal(payload) || (payload.length > 4 && (payload[4] & 0x1f) === 5);
+    const BACKPRESSURE_LIMIT = 256 * 1024; // 256KB — skip non-keyframes for slow consumers
+
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) {}
-      } else {
+      if (ws.readyState !== 1) {
+        this.wsClients.delete(ws);
+        continue;
+      }
+      // Backpressure check: if the client's send buffer is too full, drop delta frames
+      // but always send keyframes so the client can resync when it catches up
+      if (!isKeyframe && ws.bufferedAmount > BACKPRESSURE_LIMIT) {
+        // Drop this delta frame for this slow consumer
+        continue;
+      }
+      try { ws.send(payload, { binary: true }); } catch (_) {
         this.wsClients.delete(ws);
       }
     }
