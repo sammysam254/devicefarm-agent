@@ -852,7 +852,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  let cachedSpsPps = null;
   function parseH264(u8) {
     let hasIdr = false, hasSps = false, hasPps = false, hasSlice = false;
     for (let i = 0; i < Math.min(u8.length - 4, 1024); i++) {
