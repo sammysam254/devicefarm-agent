@@ -556,7 +556,6 @@ function handleControl(type, data, serial, engine, ws = null) {
     if (ws && (engine._keyframeBuffer || engine._configPacket)) {
       try { ws.send(engine._keyframeBuffer || engine._configPacket, { binary: true }); } catch (_) {}
     }
-    try { adbInput(serial, 'input keyevent 0'); } catch (_) {}
   }
 }
 
