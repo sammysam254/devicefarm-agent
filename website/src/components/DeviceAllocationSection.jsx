@@ -172,12 +172,19 @@ export default function DeviceAllocationSection({ currentUser }) {
       if (targetDev?.id) {
         await supabase.from('devices').update({
           stream_url: newStreamUrl,
+          is_stream_blocked: false,
+          stream_blocked_reason: null,
+          rental_status: 'rented',
+          rented_by_user_id: selectedUser,
+          rented_at: new Date().toISOString(),
+          status: 'online',
           updated_at: new Date().toISOString()
         }).eq('id', targetDev.id);
 
         try {
           await supabase.from('device_rentals').update({
             stream_url: newStreamUrl,
+            status: 'active',
             updated_at: new Date().toISOString()
           }).eq('serial_number', targetDev.serial);
         } catch (_) {}
@@ -227,8 +234,8 @@ export default function DeviceAllocationSection({ currentUser }) {
     }
   };
 
-  const handleRevokeAssignment = async (assignmentId, deviceName, userEmail, deviceId) => {
-    if (!window.confirm(`Unallocate ${deviceName} assigned to ${userEmail}?\n\nThis will completely remove the device from their worker dashboard and make it available for re-linking.`)) return;
+  const handleRevokeAssignment = async (assignmentId, deviceName, userEmail, deviceId, serial) => {
+    if (!window.confirm(`Terminate and unallocate ${deviceName} assigned to ${userEmail}?\n\nThis will immediately revoke their stream access, invalidate the stream URL, disconnect any active viewing session, and remove the device from their dashboard.`)) return;
 
     setUnassigningId(assignmentId);
     try {
@@ -236,22 +243,36 @@ export default function DeviceAllocationSection({ currentUser }) {
       const { error: delErr } = await supabase.from('device_assignments').delete().eq('id', assignmentId);
       if (delErr) throw delErr;
 
-      // 2. Reset device rental status in devices table if assigned
+      // 2. Generate a new rotated token so the old link cannot be used anymore
+      const cleanUrlData = generateCleanDeviceUrl('', serial || '');
+      const newDeadUrl = cleanUrlData.streamUrl;
+
+      // 3. Reset device rental status, mark blocked, and assign invalidated URL
       if (deviceId) {
         try {
           await supabase.from('devices').update({
             rental_status: 'available',
             rented_by_user_id: null,
             rented_at: null,
+            is_stream_blocked: true,
+            stream_blocked_reason: `Worker access terminated by Administrator (${currentUser?.email || 'Admin'}).`,
+            stream_url: newDeadUrl,
             updated_at: new Date().toISOString()
           }).eq('id', deviceId);
+
+          if (serial) {
+            await supabase.from('device_rentals').update({
+              stream_url: newDeadUrl,
+              updated_at: new Date().toISOString()
+            }).eq('serial_number', serial);
+          }
         } catch (_) {}
       }
 
-      alert(`✅ Device unallocated cleanly!\n\n${deviceName} has been completely removed from ${userEmail}'s dashboard and is available for re-linking.`);
+      alert(`✅ Worker access terminated & device unallocated cleanly!\n\n${deviceName} stream access has been revoked immediately from ${userEmail}. All old stream links are invalidated.`);
       loadAllocationData();
     } catch (err) {
-      alert('Error unallocating device: ' + err.message);
+      alert('Error terminating access: ' + err.message);
     } finally {
       setUnassigningId(null);
     }
@@ -421,13 +442,13 @@ export default function DeviceAllocationSection({ currentUser }) {
                             <Key size={12} /> Rotate & Re-Key
                           </button>
                           <button
-                            onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail, a.devices?.id)}
+                            onClick={() => handleRevokeAssignment(a.id, deviceName, userEmail, a.devices?.id, a.devices?.serial)}
                             disabled={unassigningId === a.id}
                             className="btn btn-danger"
                             style={{ padding: '6px 10px', fontSize: '11px' }}
-                            title="Unallocate device and remove from worker dashboard completely, releasing for re-linking"
+                            title="Terminate worker access, revoke stream URL server-side, and unallocate device"
                           >
-                            <Trash2 size={12} /> {unassigningId === a.id ? 'Unallocating...' : 'Unallocate Device'}
+                            <Trash2 size={12} /> {unassigningId === a.id ? 'Terminating...' : 'Terminate & Unallocate'}
                           </button>
                         </div>
                       </td>

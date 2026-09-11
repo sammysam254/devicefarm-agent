@@ -23,20 +23,17 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
 
     try {
       const targetDev = devices.find(d => d.id === deviceId);
-      let newStreamUrl = targetDev?.stream_url;
-      if (!nextBlocked) {
-        const generated = generateCleanDeviceUrl(targetDev?.stream_url, serial);
-        newStreamUrl = generated.streamUrl;
-      }
+      const generated = generateCleanDeviceUrl(targetDev?.stream_url, serial);
+      const newStreamUrl = generated.streamUrl;
 
       const updatePayload = {
         is_stream_blocked: nextBlocked,
         stream_blocked_reason: nextBlocked ? reason : null,
         stream_blocked_by: currentUser?.id || null,
+        stream_url: newStreamUrl,
         updated_at: new Date().toISOString()
       };
       if (!nextBlocked) {
-        updatePayload.stream_url = newStreamUrl;
         updatePayload.status = 'online';
       }
 
@@ -401,7 +398,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 </button>
                 <button 
                   onClick={() => {
-                    const u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                    const u = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
@@ -421,7 +418,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             {/* Interactive Stream Frame */}
             <div style={{ flex: 1, background: '#000', position: 'relative' }}>
               <iframe 
-                src={`https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`} 
+                src={focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
                 referrerPolicy="no-referrer"

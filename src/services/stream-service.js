@@ -262,6 +262,42 @@ function getExpiredLinkHtml(serial) {
 </html>`;
 }
 
+// ─── Worker Access Terminated HTML (403 Forbidden) ──────────────────────────
+
+function getAccessTerminatedHtml(serial, reason = 'Worker stream access has been terminated or revoked by an Administrator.') {
+  const cleanReason = (reason || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Access Terminated - ${serial}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background:#070b14; color:#f8fafc; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; text-align:center; }
+    .card { background:#0f172a; border:1px solid rgba(239,68,68,0.5); border-radius:24px; padding:40px 32px; max-width:480px; width:100%; box-shadow:0 25px 50px rgba(0,0,0,0.8); }
+    .icon-wrap { width:72px; height:72px; border-radius:20px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); display:flex; align-items:center; justify-content:center; font-size:36px; margin:0 auto 20px; }
+    .badge { display:inline-flex; align-items:center; gap:6px; background:rgba(239,68,68,0.18); border:1px solid rgba(239,68,68,0.4); color:#f87171; font-size:11px; font-weight:800; letter-spacing:1px; text-transform:uppercase; padding:4px 12px; border-radius:100px; margin-bottom:14px; }
+    h2 { font-size:22px; font-weight:800; margin-bottom:12px; color:#f87171; }
+    p { color:#94a3b8; font-size:14px; line-height:1.6; margin-bottom:20px; }
+    .udid { font-family:monospace; background:rgba(255,255,255,0.06); padding:8px 14px; border-radius:10px; color:#38bdf8; font-size:13px; font-weight:700; margin-bottom:20px; display:inline-block; }
+    .footer { font-size:12px; color:#64748b; margin-top:12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-wrap">🛡️</div>
+    <div class="badge">ACCESS REVOKED</div>
+    <h2>Device Access Terminated</h2>
+    <p>${cleanReason}</p>
+    <div class="udid">Device UDID: ${serial}</div>
+    <p style="font-size:13px; color:#cbd5e1;">This device is no longer allocated to your account or stream authorization has been permanently revoked by the Administrator.</p>
+    <div class="footer">Commercial Device Farm Cloud &bull; Unauthorized access is strictly logged &amp; prohibited.</div>
+  </div>
+</body>
+</html>`;
+}
+
 // ─── Payment-blocked HTML ────────────────────────────────────────────────────
 
 function getStreamBlockedHtml(serial, checkoutUrl, s = {}) {
@@ -279,7 +315,7 @@ function getStreamBlockedHtml(serial, checkoutUrl, s = {}) {
 }
 
 // ─── Active WebSocket Client Tracking ────────────────────────────────────────
-const activeWsClients = new Map(); // Map<serial, Set<WebSocket>>
+const activeWsClients = new Map(); // Map<serial, Set<WebSocket | { ws, token }>>
 
 function disconnectBlockedStream(serial, reason = 'This device stream has been suspended or blocked by an Administrator.') {
   const clients = activeWsClients.get(serial);
@@ -290,11 +326,12 @@ function disconnectBlockedStream(serial, reason = 'This device stream has been s
       serial: serial,
       timestamp: new Date().toISOString(),
     });
-    for (const ws of Array.from(clients)) {
+    for (const item of Array.from(clients)) {
+      const clientWs = item.ws || item;
       try {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(payload);
-          ws.close(4003, 'Stream Blocked');
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(payload);
+          clientWs.close(4003, 'Stream Blocked');
         }
       } catch (_) {}
     }
@@ -302,6 +339,95 @@ function disconnectBlockedStream(serial, reason = 'This device stream has been s
     logger.info(`[StreamServer] Disconnected all active WebSocket viewers for blocked device ${serial}`);
   }
 }
+
+// ─── Device Security & Authorization Verification ───────────────────────────
+const deviceSecurityCache = new Map(); // Map<serial, { isDeviceBlocked: boolean, blockReason: string, expectedToken: string|null, at: number }>
+const SECURITY_CACHE_TTL = 3000; // 3 seconds fast cache
+
+async function getDeviceSecurityStatus(targetSerial) {
+  if (!targetSerial) return { isDeviceBlocked: false, blockReason: null, expectedToken: null };
+  const now = Date.now();
+  const cached = deviceSecurityCache.get(targetSerial);
+  if (cached && (now - cached.at < SECURITY_CACHE_TTL)) {
+    return cached;
+  }
+
+  let isDeviceBlocked = false;
+  let blockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
+  let expectedToken = null;
+
+  // 1. Check local process manager
+  try {
+    const processManager = require('../main/process-manager');
+    const localBlock = processManager.isStreamBlocked(targetSerial);
+    if (localBlock && localBlock.isBlocked) {
+      isDeviceBlocked = true;
+      if (localBlock.reason) blockReason = localBlock.reason;
+    }
+  } catch (_) {}
+
+  // 2. Query Supabase devices table for real-time status and authorization token
+  try {
+    const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
+    if (client) {
+      const res = await client.get(`/devices?serial=eq.${encodeURIComponent(targetSerial)}&select=id,status,is_stream_blocked,stream_blocked_reason,stream_url,rental_status,rented_by_user_id`);
+      if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+        const row = res.data[0];
+        if (row.is_stream_blocked || row.status === 'blocked' || row.status === 'suspended') {
+          isDeviceBlocked = true;
+          if (row.stream_blocked_reason) blockReason = row.stream_blocked_reason;
+        }
+
+        // Extract expected authorization token from stream_url
+        if (row.stream_url) {
+          try {
+            const u = new URL(row.stream_url);
+            expectedToken = (u.searchParams.get('t') || u.searchParams.get('token') || u.searchParams.get('key') || '').trim();
+          } catch (_) {
+            const m = row.stream_url.match(/[?&](?:t|token|key)=([^&]+)/);
+            if (m) expectedToken = decodeURIComponent(m[1]).trim();
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn(`[StreamServer] Device security check notice for ${targetSerial}: ${err.message}`);
+  }
+
+  const result = { isDeviceBlocked, blockReason, expectedToken, at: now };
+  deviceSecurityCache.set(targetSerial, result);
+  return result;
+}
+
+// ─── Real-Time WebSocket Eviction Watcher (Worker Termination Enforcement) ───
+setInterval(async () => {
+  if (activeWsClients.size === 0) return;
+  for (const [targetSerial, clientSet] of Array.from(activeWsClients.entries())) {
+    if (!clientSet || clientSet.size === 0) continue;
+    try {
+      deviceSecurityCache.delete(targetSerial); // Force fresh cloud check
+      const sec = await getDeviceSecurityStatus(targetSerial);
+      if (sec.isDeviceBlocked || sec.expectedToken) {
+        for (const item of Array.from(clientSet)) {
+          const clientWs = item.ws || item;
+          const clientToken = item.token || '';
+          const shouldEvict = sec.isDeviceBlocked || (sec.expectedToken && clientToken !== sec.expectedToken);
+          if (shouldEvict && clientWs && clientWs.readyState === WebSocket.OPEN) {
+            try {
+              clientWs.send(JSON.stringify({
+                type: 'stream_blocked',
+                reason: sec.isDeviceBlocked ? sec.blockReason : 'Stream access has been terminated or revoked by an Administrator.',
+                serial: targetSerial
+              }));
+              clientWs.close(4003, 'Stream Blocked');
+            } catch (_) {}
+            clientSet.delete(item);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+}, 3500);
 
 // ─── Screencap fallback (one-shot, for /screen.jpg HTTP endpoint) ────────────
 
@@ -1326,40 +1452,6 @@ async function startStreamServer(serial, port) {
     return cachedLicenseResult;
   }
 
-  // Cache device block status per-serial (4 second TTL already in license-service,
-  // but avoid even calling into it on every request)
-  let cachedBlockResult = null;
-  let cachedBlockTime = 0;
-  const BLOCK_CACHE_TTL = 5000; // 5 seconds
-
-  async function getCachedBlockStatus() {
-    const now = Date.now();
-    if (cachedBlockResult && (now - cachedBlockTime < BLOCK_CACHE_TTL)) {
-      return cachedBlockResult;
-    }
-    let isDeviceBlocked = false;
-    let blockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
-    try {
-      const processManager = require('../main/process-manager');
-      const localBlock = processManager.isStreamBlocked(serial);
-      if (localBlock && localBlock.isBlocked) {
-        isDeviceBlocked = true;
-        if (localBlock.reason) blockReason = localBlock.reason;
-      }
-    } catch (_) {}
-    if (!isDeviceBlocked) {
-      try {
-        const cloudCheck = await licenseService.checkDeviceStreamBlocked(serial);
-        if (cloudCheck && cloudCheck.isBlocked) {
-          isDeviceBlocked = true;
-          if (cloudCheck.reason) blockReason = cloudCheck.reason;
-        }
-      } catch (_) {}
-    }
-    cachedBlockResult = { isDeviceBlocked, blockReason };
-    cachedBlockTime = now;
-    return cachedBlockResult;
-  }
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -1406,30 +1498,6 @@ async function startStreamServer(serial, port) {
     const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
     const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
-    // ── Check if Device Stream is Blocked by Administrator ──────────────────
-    const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status') || url.searchParams.get('stream_status');
-    const isExplicitlyBlocked = linkStatus === 'suspended' || linkStatus === 'revoked' || linkStatus === 'blocked' || url.searchParams.get('is_blocked') === '1' || url.searchParams.get('blocked') === '1';
-
-    let isDeviceBlocked = isExplicitlyBlocked;
-    let blockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
-
-    if (!isDeviceBlocked) {
-      const blockStatus = await getCachedBlockStatus();
-      isDeviceBlocked = blockStatus.isDeviceBlocked;
-      blockReason = blockStatus.blockReason;
-    }
-
-    if (isDeviceBlocked) {
-      res.writeHead(403, { 'Content-Type': 'text/html' });
-      res.end(getDeviceStreamBlockedHtml(serial, blockReason));
-      return;
-    }
-
-
-    // Check key parameter (16-char), PIN parameter (6-digit), or session token
-    const keyParam = (url.searchParams.get('key') || '').trim();
-    const cleanPinParam = pinParam ? pinParam.trim() : '';
-
     const udidParam = (url.searchParams.get('udid') || '').trim();
     const effectiveSerial = (udidParam && activeServers.has(udidParam)) ? udidParam : (udidParam || serial);
     const activeDev = activeServers.get(effectiveSerial);
@@ -1462,6 +1530,28 @@ async function startStreamServer(serial, port) {
 
     // Direct access allowed without PIN or token requirement for seamless multi-device access
 
+    // ── Check if Device Stream is Blocked or Access Terminated by Administrator ─
+    const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status') || url.searchParams.get('stream_status');
+    const isExplicitlyBlocked = linkStatus === 'suspended' || linkStatus === 'revoked' || linkStatus === 'blocked' || url.searchParams.get('is_blocked') === '1' || url.searchParams.get('blocked') === '1';
+
+    const sec = await getDeviceSecurityStatus(effectiveSerial);
+
+    if (isExplicitlyBlocked || sec.isDeviceBlocked) {
+      res.writeHead(403, { 'Content-Type': 'text/html' });
+      res.end(getDeviceStreamBlockedHtml(effectiveSerial, sec.blockReason));
+      return;
+    }
+
+    // Authorization token check (protects against terminated workers reusing stream URLs)
+    const clientToken = (url.searchParams.get('t') || url.searchParams.get('token') || url.searchParams.get('key') || '').trim();
+    if (sec.expectedToken) {
+      if (!clientToken || clientToken !== sec.expectedToken) {
+        res.writeHead(403, { 'Content-Type': 'text/html' });
+        res.end(getAccessTerminatedHtml(effectiveSerial, 'Access Denied: Stream authorization for this device has been revoked or terminated by the Administrator.'));
+        return;
+      }
+    }
+
     if (p === '/upload' && req.method === 'POST') {
       const chunks = [];
       req.on('data', c => chunks.push(c));
@@ -1487,6 +1577,11 @@ async function startStreamServer(serial, port) {
     }
 
     if (p === '/control') {
+      if (sec.isDeviceBlocked || (sec.expectedToken && clientToken !== sec.expectedToken)) {
+        res.writeHead(403, {'Content-Type':'application/json'});
+        res.end(JSON.stringify({ error: 'Access revoked' }));
+        return;
+      }
       handleControl(url.searchParams.get('type'), url.searchParams, effectiveSerial, effectiveEngine, null);
       res.writeHead(200, {'Content-Type':'application/json'});
       res.end('{"status":"ok"}'); return;
@@ -1516,31 +1611,32 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    // Check if device stream is blocked on connect
-    let isWsBlocked = false;
-    let wsBlockReason = 'This device stream has been temporarily suspended or blocked by an Administrator.';
+    // Check device security status and token on connect
+    const wsToken = (wsUrl.searchParams.get('t') || wsUrl.searchParams.get('token') || wsUrl.searchParams.get('key') || '').trim();
+    const sec = await getDeviceSecurityStatus(targetSerial);
 
-    const blockStatus = await getCachedBlockStatus();
-    if (blockStatus.isDeviceBlocked) {
-      isWsBlocked = true;
-      wsBlockReason = blockStatus.blockReason;
-    }
-
-    if (isWsBlocked) {
+    if (sec.isDeviceBlocked) {
       try {
-        ws.send(JSON.stringify({ type: 'stream_blocked', reason: wsBlockReason, serial: targetSerial }));
+        ws.send(JSON.stringify({ type: 'stream_blocked', reason: sec.blockReason, serial: targetSerial }));
       } catch (_) {}
       ws.close(4003, 'Stream Blocked');
       return;
     }
 
-    // Direct WebSocket connection allowed without token requirement
+    if (sec.expectedToken && wsToken !== sec.expectedToken) {
+      try {
+        ws.send(JSON.stringify({ type: 'stream_blocked', reason: 'Worker stream access has been revoked or expired by an Administrator.', serial: targetSerial }));
+      } catch (_) {}
+      ws.close(4003, 'Stream Access Revoked');
+      return;
+    }
 
-    // Register active WS client for instantaneous block broadcast
+    // Register active WS client with token for real-time eviction upon termination
     if (!activeWsClients.has(targetSerial)) {
       activeWsClients.set(targetSerial, new Set());
     }
-    activeWsClients.get(targetSerial).add(ws);
+    const clientEntry = { ws, token: wsToken };
+    activeWsClients.get(targetSerial).add(clientEntry);
 
     try { req.socket.setNoDelay(true); } catch (_) {}
     logger.info(`[StreamServer] WS connected for ${targetSerial}`);
@@ -1573,7 +1669,7 @@ async function startStreamServer(serial, port) {
         }
       }
 
-      // 2. JSON control message handler
+      // 2. Fast JSON control message handler
       try {
         const data = JSON.parse(msg.toString());
         if (data.type === 'wake' || data.type === 'request_keyframe') {

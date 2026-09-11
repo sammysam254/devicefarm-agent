@@ -41,16 +41,18 @@ export function generateCleanStreamKey() {
   return `${w1}${w2}_${hex}`;
 }
 
-// Generates a clean stream URL for a device using the working format
+// Generates a clean stream URL for a device with authorization token
 export function generateCleanDeviceUrl(currentUrl, serial) {
+  const token = generateCleanStreamKey();
   return {
-    streamUrl: `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}`,
-    key: serial,
+    streamUrl: `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}&t=${token}`,
+    key: token,
   };
 }
 
-// Constructs clean stream URL
-export function rotateUrlWithKeyAndPin(currentUrl, serial) {
-  return `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}`;
+// Constructs clean stream URL with rotated authorization token
+export function rotateUrlWithKeyAndPin(currentUrl, serial, key, pin) {
+  const token = key || generateCleanStreamKey();
+  return `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}&t=${token}`;
 }
 

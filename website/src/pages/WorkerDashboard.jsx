@@ -65,8 +65,7 @@ export default function WorkerDashboard() {
 
   const handleOpenDevice = (assignment) => {
     const serial = assignment.devices?.serial;
-    if (!serial) return;
-    const streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}`;
+    const streamUrl = assignment.devices?.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}`;
     const w = 510, h = 900;
     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
     const top = Math.max(0, Math.round((window.screen.height - h) / 2));

@@ -228,6 +228,23 @@ async function syncDeviceToCloud(params) {
 
   try {
     let finalStreamUrl = streamUrl || null;
+    let finalStatus = status || 'online';
+
+    // Protect existing security tokens and admin-blocked status in Supabase
+    try {
+      const curRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=stream_url,is_stream_blocked,status`);
+      if (curRes.data && curRes.data[0]) {
+        const curDev = curRes.data[0];
+        if (curDev.stream_url && (curDev.stream_url.includes('&t=') || curDev.stream_url.includes('token='))) {
+          if (!finalStreamUrl || (!finalStreamUrl.includes('&t=') && !finalStreamUrl.includes('token='))) {
+            finalStreamUrl = curDev.stream_url;
+          }
+        }
+        if (curDev.is_stream_blocked || curDev.status === 'blocked' || curDev.status === 'suspended') {
+          finalStatus = 'blocked';
+        }
+      }
+    } catch (_) {}
 
     // 1. Sync to public.devices table (used by website dashboards)
     const devicesPayload = {
@@ -239,7 +256,7 @@ async function syncDeviceToCloud(params) {
       port: port || null,
       binding_code: bindingCode || null,
       is_seed_only: serial === 'R5CW114C0SP',
-      status: status || 'online',
+      status: finalStatus,
       is_deleted_from_view: false, // Ensure active connected devices are visible in admin dashboards
       last_seen: new Date().toISOString(),
       updated_at: new Date().toISOString(),

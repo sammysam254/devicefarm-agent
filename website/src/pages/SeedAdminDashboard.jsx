@@ -35,19 +35,17 @@ export default function SeedAdminDashboard() {
     setBlockingDeviceId(device.id);
     try {
       let newStreamUrl = device.stream_url;
-      if (!nextBlocked) {
-        const generated = generateCleanDeviceUrl(device.stream_url, device.serial);
-        newStreamUrl = generated.streamUrl;
-      }
+      const generated = generateCleanDeviceUrl(device.stream_url, device.serial);
+      newStreamUrl = generated.streamUrl;
 
       const updatePayload = {
         is_stream_blocked: nextBlocked,
         stream_blocked_reason: nextBlocked ? reason : null,
         stream_blocked_by: myProfile?.id || null,
+        stream_url: newStreamUrl,
         updated_at: new Date().toISOString()
       };
       if (!nextBlocked) {
-        updatePayload.stream_url = newStreamUrl;
         updatePayload.status = 'online';
       }
 
