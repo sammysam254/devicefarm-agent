@@ -74,7 +74,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       const activeOnlineDevices = [];
       for (const d of (dData || [])) {
         if (d.is_deleted_from_view) continue;
-        if (d.status !== 'online') continue;
+        if (d.status === 'offline') continue;
         const s = (d.serial || '').trim();
         if (!s || seenSerials.has(s)) continue;
         seenSerials.add(s);

@@ -78,8 +78,8 @@ export default function WorkerDashboard() {
 
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
-    if (d.status === 'online') return true;
-    return false;
+    if (d.status === 'offline' || !d.status) return false;
+    return true;
   };
 
   return (
