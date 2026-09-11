@@ -46,6 +46,22 @@ export default function Sidebar({ isOpen, onClose }) {
         if (!payload.new.is_read) {
           setUnreadCount(prev => prev + 1);
           playDingSound();
+
+          // Native browser/phone system notification if not directly active on messages page
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            try {
+              const notif = new Notification(`💬 Message from ${payload.new.sender_email || 'User #' + payload.new.sender_chat_code}`, {
+                body: payload.new.message,
+                icon: '/favicon.ico',
+                tag: `msg-${payload.new.id}`,
+                data: { url: '/messages' }
+              });
+              notif.onclick = () => {
+                window.focus();
+                window.location.href = '/messages';
+              };
+            } catch (_) {}
+          }
         }
       })
       .on('postgres_changes', {

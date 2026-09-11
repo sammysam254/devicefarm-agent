@@ -20,7 +20,17 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { recipientChatCode, sessionId, callerEmail, callerChatCode } = await req.json();
+    const { 
+      type, 
+      recipientChatCode, 
+      sessionId, 
+      callerEmail, 
+      callerChatCode,
+      senderEmail,
+      senderChatCode,
+      messageText,
+      messageId 
+    } = await req.json();
 
     if (!recipientChatCode) {
       return new Response(JSON.stringify({ error: "Missing recipientChatCode" }), {
@@ -52,14 +62,25 @@ Deno.serve(async (req) => {
       });
     }
 
+    const isMessage = type === "message";
+    const title = isMessage 
+      ? `💬 Message from ${senderEmail || `User #${senderChatCode}`}`
+      : "📞 Incoming Voice Call";
+
+    const body = isMessage
+      ? (messageText || "You received a new message on FlexPulse.")
+      : `${callerEmail || `User #${callerChatCode}`} is calling you on FlexPulse! Tap to answer.`;
+
+    const tag = isMessage ? `msg-${messageId || Date.now()}` : `voice-call-${sessionId}`;
+
     const payload = JSON.stringify({
-      title: "📞 Incoming Voice Call",
-      body: `${callerEmail || `User #${callerChatCode}`} is calling you on FlexPulse! Tap to answer.`,
-      tag: `voice-call-${sessionId}`,
+      title,
+      body,
+      tag,
+      type: isMessage ? "message" : "call",
       sessionId,
-      chatCode: callerChatCode,
-      callerEmail,
-      url: `/messages?call=${sessionId}`,
+      chatCode: isMessage ? senderChatCode : callerChatCode,
+      url: `/messages`,
     });
 
     let sentCount = 0;

@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useCall } from '../context/CallContext';
 import { supabase } from '../lib/supabase';
 import { playDingSound } from '../lib/soundEffects';
+import { dispatchOfflineMessagePush } from '../lib/pushNotifications';
 import { 
   MessageSquare, 
   Send, 
@@ -277,11 +278,31 @@ export default function MessagesPage() {
               .from('chat_messages')
               .update({ is_read: true })
               .eq('id', msg.id);
+
+            if (document.hidden && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(`💬 Message from ${msg.sender_email || 'User #' + msg.sender_chat_code}`, {
+                  body: msg.message,
+                  icon: '/favicon.ico',
+                  tag: `msg-${msg.id}`
+                });
+              } catch (_) {}
+            }
           }
         } else {
           // If message is from another user
           if (isForMe) {
             playDingSound();
+
+            if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(`💬 Message from ${msg.sender_email || 'User #' + msg.sender_chat_code}`, {
+                  body: msg.message,
+                  icon: '/favicon.ico',
+                  tag: `msg-${msg.id}`
+                });
+              } catch (_) {}
+            }
           }
         }
 
@@ -330,6 +351,8 @@ export default function MessagesPage() {
           return [...prev, data];
         });
         loadConversations();
+        // Dispatch background push notification to recipient's devices
+        dispatchOfflineMessagePush(activePartnerCode, data);
       }
     } catch (err) {
       console.error('Send message exception:', err);

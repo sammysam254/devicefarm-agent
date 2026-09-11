@@ -35,7 +35,17 @@ export async function syncPushSubscription(chatCode, userId) {
 
     let sub = await reg.pushManager.getSubscription();
 
-    // If no existing subscription, subscribe using the user's hardcoded VAPID public key
+    // Ensure the subscription matches the current VAPID_PUBLIC_KEY
+    const savedKey = localStorage.getItem('df_vapid_key');
+    if (savedKey !== VAPID_PUBLIC_KEY && sub) {
+      console.log('[Push] VAPID key updated, renewing push subscription...');
+      try {
+        await sub.unsubscribe();
+      } catch (_) {}
+      sub = null;
+    }
+
+    // If no subscription or renewed, subscribe using the user's hardcoded VAPID public key
     if (!sub) {
       try {
         const convertedVapidKey = urlB64ToUint8Array(VAPID_PUBLIC_KEY);
@@ -43,10 +53,13 @@ export async function syncPushSubscription(chatCode, userId) {
           userVisibleOnly: true,
           applicationServerKey: convertedVapidKey
         });
-        console.log('[Push] Subscribed to browser push manager successfully.');
+        localStorage.setItem('df_vapid_key', VAPID_PUBLIC_KEY);
+        console.log('[Push] Subscribed to browser push manager successfully with VAPID key.');
       } catch (subErr) {
         console.warn('[Push] PushManager subscribe error:', subErr);
       }
+    } else {
+      localStorage.setItem('df_vapid_key', VAPID_PUBLIC_KEY);
     }
 
     if (sub) {
@@ -119,6 +132,28 @@ export async function dispatchOfflineCallAlert(recipientChatCode, callSession) {
     });
   } catch (err) {
     console.warn('[Push] Dispatch offline call alert error:', err);
+  }
+}
+
+/**
+ * Dispatch an offline chat message push notification to recipient's registered devices
+ */
+export async function dispatchOfflineMessagePush(recipientChatCode, messageData) {
+  if (!recipientChatCode || !messageData) return;
+
+  try {
+    supabase.functions.invoke('send-call-push', {
+      body: {
+        type: 'message',
+        recipientChatCode,
+        messageId: messageData.id,
+        messageText: messageData.message,
+        senderEmail: messageData.sender_email,
+        senderChatCode: messageData.sender_chat_code
+      }
+    }).catch(() => {});
+  } catch (err) {
+    console.warn('[Push] Dispatch message push error:', err);
   }
 }
 

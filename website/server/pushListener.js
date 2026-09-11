@@ -74,9 +74,51 @@ export async function sendCallPush(recipientChatCode, session) {
   }
 }
 
-// Subscribe to Realtime call_sessions INSERT events
+// Send message push notification to all devices registered for chatCode
+export async function sendMessagePush(recipientChatCode, msg) {
+  try {
+    const { data: subs, error } = await supabase
+      .from('push_subscriptions')
+      .select('*')
+      .eq('chat_code', recipientChatCode);
+
+    if (error || !subs || subs.length === 0) return;
+
+    const payload = JSON.stringify({
+      title: `💬 Message from ${msg.sender_email || `User #${msg.sender_chat_code}`}`,
+      body: msg.message,
+      tag: `msg-${msg.id}`,
+      type: 'message',
+      chatCode: msg.sender_chat_code,
+      senderEmail: msg.sender_email,
+      url: `/messages`
+    });
+
+    console.log(`[PushListener] Sending message push to ${subs.length} device(s) for User #${recipientChatCode}...`);
+
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification({
+          endpoint: sub.endpoint,
+          keys: { p256dh: sub.p256dh, auth: sub.auth }
+        }, payload, {
+          TTL: 86400,
+          urgency: 'normal'
+        });
+      } catch (err) {
+        if (err.statusCode === 410 || err.statusCode === 404) {
+          await supabase.from('push_subscriptions').delete().eq('id', sub.id);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[PushListener] Failed to dispatch message push:', err);
+  }
+}
+
+// Subscribe to Realtime call_sessions and chat_messages INSERT events
 const channel = supabase
-  .channel('call-push-dispatcher')
+  .channel('call-and-msg-push-dispatcher')
   .on('postgres_changes', {
     event: 'INSERT',
     schema: 'public',
@@ -86,6 +128,17 @@ const channel = supabase
     if (session && session.status === 'ringing') {
       console.log(`[PushListener] Detected incoming call session: ${session.id} -> Recipient #${session.recipient_chat_code}`);
       await sendCallPush(session.recipient_chat_code, session);
+    }
+  })
+  .on('postgres_changes', {
+    event: 'INSERT',
+    schema: 'public',
+    table: 'chat_messages'
+  }, async (payload) => {
+    const msg = payload.new;
+    if (msg && !msg.is_read) {
+      console.log(`[PushListener] Detected incoming chat message: ${msg.id} -> Recipient #${msg.recipient_chat_code}`);
+      await sendMessagePush(msg.recipient_chat_code, msg);
     }
   })
   .subscribe((status) => {
