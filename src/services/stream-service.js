@@ -630,7 +630,29 @@ function handleControl(type, data, serial, engine, ws = null) {
     const y = parseFloat(get(data, 'y'));
     const hscroll = parseFloat(get(data, 'hscroll')) || 0;
     const vscroll = parseFloat(get(data, 'vscroll')) || 0;
+    const deltaY = parseFloat(get(data, 'deltaY')) || (vscroll < 0 ? 100 : -100);
+
+    // 1. Send scrcpy scroll event (with corrected 21-byte fixed-point buffer)
     engine.sendScrollEvent(x, y, W, H, hscroll, vscroll);
+
+    // 2. Dual-dispatch touch swipe via persistent kernel shell:
+    // In Android apps, ACTION_SCROLL (SOURCE_MOUSE) is ignored by 95% of apps (ListView, RecyclerView, ScrollView).
+    // An instant touch swipe at the cursor position reliably scrolls ANY app, list, and webview!
+    if (vscroll !== 0 || deltaY !== 0) {
+      const devW = engine.screenWidth || W;
+      const devH = engine.screenHeight || H;
+      const realX = Math.round((x / W) * devW);
+      const realY = Math.round((y / H) * devH);
+      const safeX = Math.max(Math.round(devW * 0.2), Math.min(Math.round(devW * 0.8), realX));
+      const safeY = Math.max(Math.round(devH * 0.25), Math.min(Math.round(devH * 0.75), realY));
+      const dist = Math.round(devH * 0.16); // ~16% screen height per wheel step
+      const targetY = (deltaY > 0 || vscroll < 0)
+        ? Math.max(Math.round(devH * 0.08), safeY - dist)
+        : Math.min(Math.round(devH * 0.92), safeY + dist);
+      try {
+        getInputShell(serial).stdin.write(`input swipe ${safeX} ${safeY} ${safeX} ${targetY} 100\n`);
+      } catch (_) {}
+    }
   } else if (type === 'tap' || type === 'tap_fallback') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
     const realX = Math.round((x / W) * (engine.screenWidth || W));
@@ -641,7 +663,7 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
     // Guaranteed direct kernel tap via persistent adb shell
     try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
-  } else if (type === 'swipe') {
+  } else if (type === 'swipe' || type === 'swipe_fallback') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
     if (activeSwipeTimers.has(serial)) {
       activeSwipeTimers.get(serial).forEach(t => clearTimeout(t));
@@ -649,25 +671,42 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = Math.max(50, Math.min(300, parseInt(get(data, 'duration'), 10) || 120));
-    
-    engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
-    const steps = 8;
-    const dt = dur / steps;
-    const timers = [];
-    for (let i = 1; i <= steps; i++) {
-      const tm = setTimeout(() => {
-        const t = i / steps;
-        const p = 1 - Math.pow(1 - t, 2);
-        const cx = x1 + (x2 - x1) * p;
-        const cy = y1 + (y2 - y1) * p;
-        const act = (i === steps) ? 1 : 2;
-        engine.sendTouchEvent(act, cx, cy, W, H, act === 1 ? 0 : 1.0);
-        if (i === steps) activeSwipeTimers.delete(serial);
-      }, Math.round(i * dt));
-      timers.push(tm);
+    const dur = Math.max(50, Math.min(400, parseInt(get(data, 'duration'), 10) || 150));
+    const devW = engine.screenWidth || W;
+    const devH = engine.screenHeight || H;
+    const realX1 = Math.round((x1 / W) * devW);
+    const realY1 = Math.round((y1 / H) * devH);
+    const realX2 = Math.round((x2 / W) * devW);
+    const realY2 = Math.round((y2 / H) * devH);
+
+    if (type === 'swipe_fallback') {
+      // Fallback only invoked if scrcpy control socket was offline or unavailable
+      if (!engine.controlSocket || engine.controlSocket.destroyed) {
+        try { getInputShell(serial).stdin.write(`input swipe ${realX1} ${realY1} ${realX2} ${realY2} ${dur}\n`); } catch (_) {}
+      }
+    } else {
+      const ok = engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
+      if (!ok) {
+        try { getInputShell(serial).stdin.write(`input swipe ${realX1} ${realY1} ${realX2} ${realY2} ${dur}\n`); } catch (_) {}
+      } else {
+        const steps = 8;
+        const dt = dur / steps;
+        const timers = [];
+        for (let i = 1; i <= steps; i++) {
+          const tm = setTimeout(() => {
+            const t = i / steps;
+            const p = 1 - Math.pow(1 - t, 2);
+            const cx = x1 + (x2 - x1) * p;
+            const cy = y1 + (y2 - y1) * p;
+            const act = (i === steps) ? 1 : 2;
+            engine.sendTouchEvent(act, cx, cy, W, H, act === 1 ? 0 : 1.0);
+            if (i === steps) activeSwipeTimers.delete(serial);
+          }, Math.round(i * dt));
+          timers.push(tm);
+        }
+        activeSwipeTimers.set(serial, timers);
+      }
     }
-    activeSwipeTimers.set(serial, timers);
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
     engine.sendKeycode(0, code);
@@ -1656,10 +1695,24 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     const c = coords(e || {});
     send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
 
+    const dragDist = Math.hypot(c.x - downStartPos.x, c.y - downStartPos.y);
+    const dragDur = Date.now() - downStartTime;
+
     // Resilient Dual-Dispatch: If it was a clean stationary tap (short duration, didn't drag),
     // trigger tap_fallback so apps with security flags or resolution glitches register the touch 100%
-    if (!hasMovedFar && (Date.now() - downStartTime) < 450) {
+    if (!hasMovedFar && dragDur < 450) {
       send({ type:'tap_fallback', x:c.x, y:c.y, width:nativeW, height:nativeH });
+    } else if (hasMovedFar && dragDist > 20) {
+      send({
+        type: 'swipe_fallback',
+        x1: downStartPos.x,
+        y1: downStartPos.y,
+        x2: c.x,
+        y2: c.y,
+        duration: Math.max(80, Math.min(350, dragDur)),
+        width: nativeW,
+        height: nativeH
+      });
     }
   }
 
@@ -1672,11 +1725,11 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (wheelTimer) return;
-    wheelTimer = setTimeout(() => { wheelTimer = null; }, 35);
+    wheelTimer = setTimeout(() => { wheelTimer = null; }, 40);
     const c = coords(e);
     // Vertical scroll: deltaY > 0 is scroll down (vscroll = -1 in Android MotionEvent)
     const vscroll = e.deltaY > 0 ? -1 : 1;
-    send({ type:'scroll', x:c.x, y:c.y, width:nativeW, height:nativeH, hscroll:0, vscroll:vscroll });
+    send({ type:'scroll', x:c.x, y:c.y, width:nativeW, height:nativeH, hscroll:0, vscroll:vscroll, deltaY:e.deltaY });
   }, { passive:false });
 
   // ── Keyboard handling (Spacebar protection & full Android keys) ────────
@@ -2127,6 +2180,21 @@ async function startStreamServer(serial, port) {
           const hscroll = buf.readInt16BE(10);
           const vscroll = buf.readInt16BE(12);
           targetEngine.sendScrollEvent(x, y, w, h, hscroll, vscroll);
+          if (vscroll !== 0) {
+            const devW = targetEngine.screenWidth || w;
+            const devH = targetEngine.screenHeight || h;
+            const realX = Math.round((x / w) * devW);
+            const realY = Math.round((y / h) * devH);
+            const safeX = Math.max(Math.round(devW * 0.2), Math.min(Math.round(devW * 0.8), realX));
+            const safeY = Math.max(Math.round(devH * 0.25), Math.min(Math.round(devH * 0.75), realY));
+            const dist = Math.round(devH * 0.16);
+            const targetY = vscroll < 0
+              ? Math.max(Math.round(devH * 0.08), safeY - dist)
+              : Math.min(Math.round(devH * 0.92), safeY + dist);
+            try {
+              getInputShell(targetSerial).stdin.write(`input swipe ${safeX} ${safeY} ${safeX} ${targetY} 100\n`);
+            } catch (_) {}
+          }
           return;
         }
       }

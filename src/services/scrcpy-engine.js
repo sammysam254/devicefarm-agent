@@ -859,10 +859,15 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
 
-    // In scrcpy, mouse/single-touch pointing uses POINTER_ID_MOUSE = -1n (0xFFFFFFFFFFFFFFFFn)
-    // This allows actionButton & buttons to be processed cleanly by Android InputManager without pointer-index tracking drops
-    const pId = (pointerId === 0 || pointerId === undefined)
-      ? BigInt('-1')
+    // In scrcpy 2.x, SC_POINTER_ID_GENERIC_FINGER = -2n (0xFFFFFFFFFFFFFFFEn).
+    // Controller.java maps pointerId !== POINTER_ID_MOUSE directly to:
+    //   source   = InputDevice.SOURCE_TOUCHSCREEN
+    //   toolType = MotionEvent.TOOL_TYPE_FINGER
+    //   buttons  = 0, action_button = 0
+    // This allows Android's gesture recognizers (swiping, scrolling, flinging)
+    // to track touch dragging across all mobile apps and home screen without rejection.
+    const pId = (pointerId === 0 || pointerId === undefined || pointerId === -1 || pointerId === -1n)
+      ? BigInt('-2')
       : (typeof pointerId === 'bigint' ? pointerId : BigInt(pointerId));
     buf.writeBigInt64BE(pId, 2);          // pointerId
     buf.writeInt32BE(finalX, 10);
@@ -870,12 +875,8 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
-    const isDown = (action === 0);
-    const isUp = (action === 1);
-    const actionButton = isDown ? 1 : 0;
-    const buttons = isUp ? 0 : 1;
-    buf.writeInt32BE(actionButton, 24);   // action_button: 1 on DOWN, 0 otherwise
-    buf.writeInt32BE(buttons, 28);        // buttons: 1 on DOWN/MOVE, 0 on UP
+    buf.writeInt32BE(0, 24);              // action_button: 0 for touchscreen
+    buf.writeInt32BE(0, 28);              // buttons: 0 for touchscreen
     try {
       this.controlSocket.write(buf);
       return true;
@@ -891,9 +892,9 @@ class ScrcpyEngine extends EventEmitter {
    *   [5-8]   y i32BE
    *   [9-10]  screen width u16BE
    *   [11-12] screen height u16BE
-   *   [13-16] hscroll i32BE
-   *   [17-20] vscroll i32BE
-   *   [21-24] buttons i32BE (optional depending on protocol version)
+   *   [13-14] hscroll i16BE (signed fixed point: 0x7FFF = 1.0, -0x8000 = -1.0)
+   *   [15-16] vscroll i16BE (signed fixed point: 0x7FFF = 1.0, -0x8000 = -1.0)
+   *   [17-20] buttons i32BE (0)
    */
   sendScrollEvent(x, y, width, height, hScroll = 0, vScroll = 0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
@@ -912,8 +913,15 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeInt32BE(finalY, 5);
     buf.writeUInt16BE(targetW, 9);
     buf.writeUInt16BE(targetH, 11);
-    buf.writeInt32BE(Math.round(hScroll), 13);
-    buf.writeInt32BE(Math.round(vScroll), 17);
+
+    // Convert float (-1.0 to 1.0) to signed 16-bit fixed point for scrcpy Binary.i16FixedPointToFloat
+    const toFixed16 = (val) => {
+      const clamped = Math.max(-1.0, Math.min(1.0, val));
+      return clamped === 1.0 ? 0x7FFF : Math.round(clamped * 0x8000);
+    };
+    buf.writeInt16BE(toFixed16(hScroll), 13);
+    buf.writeInt16BE(toFixed16(vScroll), 15);
+    buf.writeInt32BE(0, 17);              // buttons
     try {
       this.controlSocket.write(buf);
       return true;
