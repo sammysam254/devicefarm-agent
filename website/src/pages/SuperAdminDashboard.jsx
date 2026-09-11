@@ -81,6 +81,11 @@ export default function SuperAdminDashboard() {
       const { data: bData } = await bQuery;
       setMyBindings(bData || []);
 
+      const { data: dData } = await supabase
+        .from('devices')
+        .select('*')
+        .order('updated_at', { ascending: false });
+
       const seenSerials = new Set();
       const visibleDevices = [];
       for (const d of (dData || [])) {

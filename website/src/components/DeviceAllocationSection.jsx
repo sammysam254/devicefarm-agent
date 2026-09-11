@@ -19,7 +19,7 @@ export default function DeviceAllocationSection({ currentUser }) {
 
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
-    if (d.status === 'online' || Boolean(d.stream_url)) return true;
+    if (d.status === 'online') return true;
     return false;
   };
 
@@ -304,7 +304,7 @@ export default function DeviceAllocationSection({ currentUser }) {
         <form onSubmit={handleAssign} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px', alignItems: 'end' }}>
           <div>
             <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
-              SELECT DEVICE ({devices.length} Available)
+              SELECT DEVICE ({devices.filter(d => isDeviceOnline(d)).length} Online)
             </label>
             <select 
               className="input-field" 
@@ -312,15 +312,12 @@ export default function DeviceAllocationSection({ currentUser }) {
               onChange={e => setSelectedDevice(e.target.value)}
               required
             >
-              <option value="">-- Choose Device --</option>
-              {devices.map(d => {
-                const online = isDeviceOnline(d);
-                return (
-                  <option key={d.id} value={d.id}>
-                    {d.brand || 'Android'} {d.model || 'Device'} ({d.serial}) [{online ? '🟢 ONLINE' : '🔴 OFFLINE'}]
-                  </option>
-                );
-              })}
+              <option value="">-- Choose Online Device --</option>
+              {devices.filter(d => isDeviceOnline(d)).map(d => (
+                <option key={d.id} value={d.id}>
+                  {d.brand || 'Android'} {d.model || 'Device'} ({d.serial}) [🟢 ONLINE]
+                </option>
+              ))}
             </select>
           </div>
 

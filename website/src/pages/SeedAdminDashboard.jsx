@@ -77,6 +77,10 @@ export default function SeedAdminDashboard() {
     try {
       const { data: bData } = await supabase.from('machine_bindings').select('*');
       const { data: pData } = await supabase.from('profiles').select('*');
+      const { data: dData } = await supabase
+        .from('devices')
+        .select('*')
+        .order('updated_at', { ascending: false });
       const seenSerials = new Set();
       const uniqueDevices = [];
       for (const d of (dData || [])) {
