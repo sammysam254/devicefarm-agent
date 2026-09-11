@@ -671,7 +671,7 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = Math.max(50, Math.min(400, parseInt(get(data, 'duration'), 10) || 150));
+    const dur = Math.max(60, Math.min(350, parseInt(get(data, 'duration'), 10) || 130));
     const devW = engine.screenWidth || W;
     const devH = engine.screenHeight || H;
     const realX1 = Math.round((x1 / W) * devW);
@@ -679,41 +679,47 @@ function handleControl(type, data, serial, engine, ws = null) {
     const realX2 = Math.round((x2 / W) * devW);
     const realY2 = Math.round((y2 / H) * devH);
 
-    if (type === 'swipe_fallback') {
-      // Fallback only invoked if scrcpy control socket was offline or unavailable
-      if (!engine.controlSocket || engine.controlSocket.destroyed) {
-        try { getInputShell(serial).stdin.write(`input swipe ${realX1} ${realY1} ${realX2} ${realY2} ${dur}\n`); } catch (_) {}
+    // Direct kernel swipe via persistent shell:
+    // Triggers Android VelocityTracker for natural, silky-smooth human fling inertia (just like mouse wheel)
+    try {
+      getInputShell(serial).stdin.write(`input swipe ${realX1} ${realY1} ${realX2} ${realY2} ${dur}\n`);
+    } catch (_) {}
+
+    // Also dispatch to scrcpy if connected for synchronized view state
+    if (engine.controlSocket && !engine.controlSocket.destroyed) {
+      engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
+      const steps = 6;
+      const dt = dur / steps;
+      const timers = [];
+      for (let i = 1; i <= steps; i++) {
+        const tm = setTimeout(() => {
+          const t = i / steps;
+          const p = 1 - Math.pow(1 - t, 2);
+          const cx = x1 + (x2 - x1) * p;
+          const cy = y1 + (y2 - y1) * p;
+          const act = (i === steps) ? 1 : 2;
+          engine.sendTouchEvent(act, cx, cy, W, H, act === 1 ? 0 : 1.0);
+          if (i === steps) activeSwipeTimers.delete(serial);
+        }, Math.round(i * dt));
+        timers.push(tm);
       }
-    } else {
-      const ok = engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
-      if (!ok) {
-        try { getInputShell(serial).stdin.write(`input swipe ${realX1} ${realY1} ${realX2} ${realY2} ${dur}\n`); } catch (_) {}
-      } else {
-        const steps = 8;
-        const dt = dur / steps;
-        const timers = [];
-        for (let i = 1; i <= steps; i++) {
-          const tm = setTimeout(() => {
-            const t = i / steps;
-            const p = 1 - Math.pow(1 - t, 2);
-            const cx = x1 + (x2 - x1) * p;
-            const cy = y1 + (y2 - y1) * p;
-            const act = (i === steps) ? 1 : 2;
-            engine.sendTouchEvent(act, cx, cy, W, H, act === 1 ? 0 : 1.0);
-            if (i === steps) activeSwipeTimers.delete(serial);
-          }, Math.round(i * dt));
-          timers.push(tm);
-        }
-        activeSwipeTimers.set(serial, timers);
-      }
+      activeSwipeTimers.set(serial, timers);
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    engine.sendKeycode(0, code);
+    const ok = engine.sendKeycode(0, code);
     setTimeout(() => engine.sendKeycode(1, code), 30);
+    // Direct kernel keyevent fallback if controlSocket was dropped or unresponsive
+    if (!ok) {
+      try { getInputShell(serial).stdin.write(`input keyevent ${code}\n`); } catch (_) {}
+    }
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
-    engine.sendText(text);
+    const ok = engine.sendText(text);
+    if (!ok && text) {
+      const escaped = text.replace(/([\\$`"!\s])/g, '\\$1');
+      try { getInputShell(serial).stdin.write(`input text "${escaped}"\n`); } catch (_) {}
+    }
   } else if (type === 'reboot') {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
   } else if (type === 'expand_notifications' || type === 'notifications') {
@@ -1642,8 +1648,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     };
   }
 
-  // ── Raw Direct Pointer Control (Instant 1:1 Zero Delay) ───────────────────
+  // ── Raw Direct Pointer Control (Instant 1:1 Zero Delay + Right-Click Swipe) ──
   let down = false;
+  let downButton = 0;
   let activePointerId = null;
   let pendingMove = null;
   let moveRafId = null;
@@ -1651,9 +1658,18 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   let downStartTime = 0;
   let hasMovedFar = false;
 
+  // Prevent browser context menu on stream canvas to allow right-click dragging & gestures
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault(), { passive: false });
+  window.addEventListener('contextmenu', (e) => {
+    if (e.target === canvas || (e.target && e.target.tagName === 'CANVAS')) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     down = true;
+    downButton = e.button; // 0 = Left, 2 = Right
     hasMovedFar = false;
     activePointerId = e.pointerId;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1661,7 +1677,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     const c = coords(e);
     downStartPos = { x: c.x, y: c.y };
     downStartTime = Date.now();
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    // Only send raw touch action 0 for primary left button so right-click drag doesn't trigger unwanted in-app clicks
+    if (e.button === 0) {
+      send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    }
   }, { passive: false });
 
   canvas.addEventListener('pointermove', (e) => {
@@ -1669,23 +1688,27 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     e.preventDefault();
     if (activePointerId !== null && e.pointerId !== activePointerId) return;
     const c = coords(e);
-    if (Math.abs(c.x - downStartPos.x) > 12 || Math.abs(c.y - downStartPos.y) > 12) {
+    if (Math.abs(c.x - downStartPos.x) > 10 || Math.abs(c.y - downStartPos.y) > 10) {
       hasMovedFar = true;
     }
-    pendingMove = c;
-    if (!moveRafId) {
-      moveRafId = requestAnimationFrame(() => {
-        moveRafId = null;
-        if (down && pendingMove) {
-          send({ type:'touch', action:2, x:pendingMove.x, y:pendingMove.y, width:nativeW, height:nativeH, pressure:1.0 });
-        }
-      });
+    // Only stream real-time scrcpy move for left-click
+    if (downButton === 0) {
+      pendingMove = c;
+      if (!moveRafId) {
+        moveRafId = requestAnimationFrame(() => {
+          moveRafId = null;
+          if (down && pendingMove && downButton === 0) {
+            send({ type:'touch', action:2, x:pendingMove.x, y:pendingMove.y, width:nativeW, height:nativeH, pressure:1.0 });
+          }
+        });
+      }
     }
   }, { passive: false });
 
   function releasePointer(e) {
     if (!down) return;
     if (activePointerId !== null && e && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
+    const wasDownButton = downButton;
     down = false;
     if (moveRafId) { cancelAnimationFrame(moveRafId); moveRafId = null; }
     if (activePointerId !== null) {
@@ -1693,23 +1716,47 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       activePointerId = null;
     }
     const c = coords(e || {});
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
-
     const dragDist = Math.hypot(c.x - downStartPos.x, c.y - downStartPos.y);
     const dragDur = Date.now() - downStartTime;
 
-    // Resilient Dual-Dispatch: If it was a clean stationary tap (short duration, didn't drag),
-    // trigger tap_fallback so apps with security flags or resolution glitches register the touch 100%
+    if (wasDownButton === 2) {
+      // RIGHT CLICK:
+      if (hasMovedFar && dragDist > 15) {
+        // Right-click drag: Smooth human-like swipe fling!
+        const smoothDur = Math.max(80, Math.min(260, Math.round(dragDur * 0.7) || 130));
+        send({
+          type: 'swipe',
+          x1: downStartPos.x,
+          y1: downStartPos.y,
+          x2: c.x,
+          y2: c.y,
+          duration: smoothDur,
+          width: nativeW,
+          height: nativeH
+        });
+      } else {
+        // Right-click tap (stationary): Android Back button
+        key(4); // Android KEYCODE_BACK
+      }
+      return;
+    }
+
+    // LEFT CLICK:
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+
     if (!hasMovedFar && dragDur < 450) {
+      // Stationary clean tap: dual-dispatch fallback ensures 100% click hit
       send({ type:'tap_fallback', x:c.x, y:c.y, width:nativeW, height:nativeH });
     } else if (hasMovedFar && dragDist > 20) {
+      // Left-click drag: Also trigger smooth human-like momentum fling
+      const smoothDur = Math.max(80, Math.min(260, Math.round(dragDur * 0.7) || 130));
       send({
-        type: 'swipe_fallback',
+        type: 'swipe',
         x1: downStartPos.x,
         y1: downStartPos.y,
         x2: c.x,
         y2: c.y,
-        duration: Math.max(80, Math.min(350, dragDur)),
+        duration: smoothDur,
         width: nativeW,
         height: nativeH
       });
@@ -1769,6 +1816,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
       key(22);
+    } else if (e.key === 'Delete') {
+      e.preventDefault();
+      key(112); // Android KEYCODE_FORWARD_DEL = 112
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       send({ type:'text', text:e.key });
