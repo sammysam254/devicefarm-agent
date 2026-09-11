@@ -1,5 +1,8 @@
 import { supabase } from './supabase';
 
+export const VAPID_PUBLIC_KEY = "BDfYf78UGUsVFs6WGFbo8g2Y4qleyEIl4iBZN7mxGkGaFjU69urLy54sFdxM8Za8IOeHYmov11AW5gqfdXXD2Ys";
+export const VAPID_SUBJECT = "mailto:Sammyseth260@gmail.com";
+
 /**
  * Register Service Worker for background notifications and offline call handling
  */
@@ -32,17 +35,17 @@ export async function syncPushSubscription(chatCode, userId) {
 
     let sub = await reg.pushManager.getSubscription();
 
-    // If no existing subscription, attempt to subscribe
+    // If no existing subscription, subscribe using the user's hardcoded VAPID public key
     if (!sub) {
-      // Use applicationServerKey if available or standard subscription
       try {
+        const convertedVapidKey = urlB64ToUint8Array(VAPID_PUBLIC_KEY);
         sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          // Generic public key or applicationServerKey
-          applicationServerKey: urlB64ToUint8Array('BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U')
+          applicationServerKey: convertedVapidKey
         });
+        console.log('[Push] Subscribed to browser push manager successfully.');
       } catch (subErr) {
-        console.warn('[Push] PushManager subscribe error (non-fatal):', subErr);
+        console.warn('[Push] PushManager subscribe error:', subErr);
       }
     }
 
@@ -50,7 +53,7 @@ export async function syncPushSubscription(chatCode, userId) {
       const p256dh = sub.getKey ? btoa(String.fromCharCode.apply(null, new Uint8Array(sub.getKey('p256dh')))) : null;
       const auth = sub.getKey ? btoa(String.fromCharCode.apply(null, new Uint8Array(sub.getKey('auth')))) : null;
 
-      await supabase
+      const { error } = await supabase
         .from('push_subscriptions')
         .upsert({
           user_id: userId || null,
@@ -61,7 +64,11 @@ export async function syncPushSubscription(chatCode, userId) {
           updated_at: new Date().toISOString()
         }, { onConflict: 'endpoint' });
 
-      console.log('[Push] Push subscription synced for Chat Code:', chatCode);
+      if (error) {
+        console.warn('[Push] Error saving push subscription in Supabase:', error);
+      } else {
+        console.log('[Push] Synced device push subscription for User Chat Code:', chatCode);
+      }
       return sub;
     }
   } catch (err) {
@@ -77,7 +84,23 @@ export async function dispatchOfflineCallAlert(recipientChatCode, callSession) {
   if (!recipientChatCode || !callSession) return;
 
   try {
-    // 1. Broadcast high-priority alert across Supabase channel
+    // 1. Invoke Supabase Edge Function to push to Google/Apple/Mozilla push gateways
+    supabase.functions.invoke('send-call-push', {
+      body: {
+        recipientChatCode,
+        sessionId: callSession.id,
+        callerEmail: callSession.caller_email,
+        callerChatCode: callSession.caller_chat_code
+      }
+    }).then(({ data, error }) => {
+      if (error) {
+        console.warn('[Push] Edge function send-call-push invoke warning:', error);
+      } else {
+        console.log('[Push] Edge function push sent result:', data);
+      }
+    }).catch(() => {});
+
+    // 2. Broadcast high-priority alert across Realtime channel
     const alertChannel = supabase.channel(`offline-call-alert-${recipientChatCode}`);
     await alertChannel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
@@ -94,16 +117,6 @@ export async function dispatchOfflineCallAlert(recipientChatCode, callSession) {
         supabase.removeChannel(alertChannel);
       }
     });
-
-    // 2. Fetch push subscriptions if any to trigger push
-    const { data: subs } = await supabase
-      .from('push_subscriptions')
-      .select('*')
-      .eq('chat_code', recipientChatCode);
-
-    if (subs && subs.length > 0) {
-      console.log(`[Push] Found ${subs.length} push subscriptions for User #${recipientChatCode}`);
-    }
   } catch (err) {
     console.warn('[Push] Dispatch offline call alert error:', err);
   }
