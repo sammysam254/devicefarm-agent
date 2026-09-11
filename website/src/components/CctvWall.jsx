@@ -69,17 +69,24 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
         .select('*')
         .order('updated_at', { ascending: false });
 
-      const activeOnlineDevices = (dData || []).filter(d => {
-        if (d.is_deleted_from_view) return false;
-        if (d.status === 'online' || Boolean(d.stream_url)) return true;
-        return false;
-      });
+      // Filter active and non-deleted devices, deduplicating strictly by device serial
+      const seenSerials = new Set();
+      const activeOnlineDevices = [];
+      for (const d of (dData || [])) {
+        if (d.is_deleted_from_view) continue;
+        if (d.status !== 'online' && !Boolean(d.stream_url)) continue;
+        const s = (d.serial || '').trim();
+        if (!s || seenSerials.has(s)) continue;
+        seenSerials.add(s);
+        activeOnlineDevices.push(d);
+      }
 
       setDevices(prev => {
         if (prev.length === activeOnlineDevices.length) {
           const isSame = prev.every((p, idx) => {
             const n = activeOnlineDevices[idx];
             return p.id === n.id && 
+                   p.serial === n.serial &&
                    p.stream_url === n.stream_url && 
                    p.stealth_root_enabled === n.stealth_root_enabled && 
                    p.status === n.status;

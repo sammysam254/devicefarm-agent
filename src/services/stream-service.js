@@ -475,6 +475,19 @@ function get(data, key) {
   return typeof data.get === 'function' ? data.get(key) : data[key];
 }
 
+const activeSwipeTimers = new Map();
+
+function getActiveServerEntry(requestedUdid) {
+  if (!requestedUdid) return null;
+  const clean = String(requestedUdid).trim();
+  if (activeServers.has(clean)) return { serial: clean, ...activeServers.get(clean) };
+  const lower = clean.toLowerCase();
+  for (const [s, data] of activeServers.entries()) {
+    if (s.toLowerCase() === lower) return { serial: s, ...data };
+  }
+  return null;
+}
+
 function handleControl(type, data, serial, engine, ws = null) {
   const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
   const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
@@ -502,23 +515,32 @@ function handleControl(type, data, serial, engine, ws = null) {
     engine.sendTouchEvent(0, x, y, W, H, 1.0);
     setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
   } else if (type === 'swipe') {
+    // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
+    if (activeSwipeTimers.has(serial)) {
+      activeSwipeTimers.get(serial).forEach(t => clearTimeout(t));
+      activeSwipeTimers.delete(serial);
+    }
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
-    const dur = parseInt(get(data, 'duration'), 10) || 120;
+    const dur = Math.max(50, Math.min(300, parseInt(get(data, 'duration'), 10) || 120));
+    
     engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
-    const steps = 12;
+    const steps = 8;
     const dt = dur / steps;
+    const timers = [];
     for (let i = 1; i <= steps; i++) {
-      setTimeout(() => {
-        // Cubic ease-out gives natural momentum to Android's gesture and fling physics
+      const tm = setTimeout(() => {
         const t = i / steps;
-        const p = 1 - Math.pow(1 - t, 3);
+        const p = 1 - Math.pow(1 - t, 2);
         const cx = x1 + (x2 - x1) * p;
         const cy = y1 + (y2 - y1) * p;
         const act = (i === steps) ? 1 : 2;
         engine.sendTouchEvent(act, cx, cy, W, H, act === 1 ? 0 : 1.0);
+        if (i === steps) activeSwipeTimers.delete(serial);
       }, Math.round(i * dt));
+      timers.push(tm);
     }
+    activeSwipeTimers.set(serial, timers);
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
     engine.sendKeycode(0, code);
@@ -547,12 +569,12 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Stream ${serial}</title>
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-    html,body{height:100%;width:100%;background:#020617;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden;display:flex;flex-direction:column}
-    body{user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+    html,body{position:fixed;width:100%;height:100%;background:#020617;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden;display:flex;flex-direction:column;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
+    body{-webkit-tap-highlight-color:transparent}
     
     /* Top Header Bar */
     .header{display:flex;align-items:center;justify-content:space-between;width:100%;height:44px;padding:0 12px;background:rgba(15,23,42,.98);border-bottom:1px solid rgba(255,255,255,.08);flex-shrink:0;z-index:20}
@@ -569,7 +591,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     /* Stage - Fit to Screen for desktop & mobile */
     .stage{flex:1;display:flex;flex-direction:row !important;align-items:center;justify-content:center;gap:12px;width:100%;height:calc(100vh - 44px);min-height:0;padding:8px 12px;box-sizing:border-box;position:relative}
     .wrap{position:relative;background:#000;border-radius:20px;border:2px solid rgba(56,189,248,.4);box-shadow:0 0 35px rgba(56,189,248,.2),0 20px 40px rgba(0,0,0,.8);overflow:hidden;touch-action:none;display:flex;align-items:center;justify-content:center;height:100%;max-height:calc(100vh - 58px);max-width:calc(100vw - 75px);width:auto;aspect-ratio:9/19.5;flex-shrink:1}
-    canvas{display:block;width:100%;height:100%;object-fit:contain;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent}
+    canvas{display:block;width:100%;height:100%;object-fit:contain;cursor:crosshair;touch-action:none;-webkit-tap-highlight-color:transparent;image-rendering:-webkit-optimize-contrast;image-rendering:high-quality}
 
     /* Sidebar ALWAYS on the right side */
     .sidebar{display:flex !important;flex-direction:column;align-items:center;gap:5px;background:rgba(15,23,42,.95);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:8px 6px;max-height:calc(100vh - 58px);overflow-y:auto;flex-shrink:0;box-shadow:0 10px 30px rgba(0,0,0,.6);z-index:20}
@@ -900,10 +922,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     const f = pendingFrame; pendingFrame = null;
     const w = f.displayWidth  || f.codedWidth  || f.width;
     const h = f.displayHeight || f.codedHeight || f.height;
-    if (w && h && (canvas.width !== w || canvas.height !== h)) {
+    if (w && h && (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2)) {
       canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
       wrap.style.aspectRatio = w + ' / ' + h;
-      console.log('[Canvas] Resized to ' + w + 'x' + h);
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
@@ -1113,7 +1134,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
           lastFrameReceivedTime = Date.now();
           const w = frame.displayWidth  || frame.codedWidth  || frame.width;
           const h = frame.displayHeight || frame.codedHeight || frame.height;
-          if (w && h && (canvas.width !== w || canvas.height !== h)) {
+          if (w && h && (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2)) {
             canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
             wrap.style.aspectRatio = w + ' / ' + h;
           }
@@ -1172,15 +1193,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     return { hasIdr, hasSps, hasPps, hasSlice };
   }
 
-  // ── WebSocket connection ─────────────────────────────────────────────────
-  const streamSearch = window.location.search;
-  // Security: Immediately mask query string from browser address bar so workers only see domain
-  try {
-    if (window.history && window.history.replaceState) {
-      window.history.replaceState({}, document.title, window.location.pathname || '/');
-    }
-  } catch (_) {}
+  // ── Target device serial locked for this viewer session ───────────────────
+  const TARGET_DEVICE_SERIAL = "${serial}";
 
+  // ── WebSocket connection ─────────────────────────────────────────────────
   let ws = null, wsOk = false;
   let wsRetryTimer = null;
   let wsFailCount = 0;
@@ -1200,7 +1216,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     }
     hasKeyframe = false; // Reset so decoder waits for fresh SPS/PPS from new connection
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/ws' + streamSearch);
+    const wsParams = new URLSearchParams(window.location.search);
+    wsParams.set('udid', TARGET_DEVICE_SERIAL);
+    ws = new WebSocket(proto + '//' + location.host + '/ws?' + wsParams.toString());
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
@@ -1366,8 +1384,18 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
 
   function coords(e) {
     const r = canvas.getBoundingClientRect();
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    let cx = e.clientX;
+    let cy = e.clientY;
+    if (cx === undefined && e.touches && e.touches.length > 0) {
+      cx = e.touches[0].clientX;
+      cy = e.touches[0].clientY;
+    }
+    if (cx === undefined && e.changedTouches && e.changedTouches.length > 0) {
+      cx = e.changedTouches[0].clientX;
+      cy = e.changedTouches[0].clientY;
+    }
+    cx = cx || 0;
+    cy = cy || 0;
     
     // Use canvas size first (actual rendered), fall back to nativeW/H, then server defaults
     const canvasW = canvas.width || nativeW || ${screenW};
@@ -1378,7 +1406,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     const rectH = r.height || canvasH;
     
     // Prevent division by zero
-    if (rectW === 0 || rectH === 0) return { x: 0, y: 0, cx, cy };
+    if (rectW <= 0 || rectH <= 0) return { x: 0, y: 0, cx, cy };
     
     const x = Math.round((cx - r.left) * (canvasW / rectW));
     const y = Math.round((cy - r.top)  * (canvasH / rectH));
@@ -1393,6 +1421,8 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
   // ── Raw Direct Pointer Control (Instant 1:1 Zero Delay) ───────────────────
   let down = false;
   let activePointerId = null;
+  let pendingMove = null;
+  let moveRafId = null;
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -1402,39 +1432,51 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     initAudio();
     const c = coords(e);
     send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
-  });
+  }, { passive: false });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
     const c = coords(e);
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
-  });
+    pendingMove = c;
+    if (!moveRafId) {
+      moveRafId = requestAnimationFrame(() => {
+        moveRafId = null;
+        if (down && pendingMove) {
+          send({ type:'touch', action:2, x:pendingMove.x, y:pendingMove.y, width:nativeW, height:nativeH, pressure:1.0 });
+        }
+      });
+    }
+  }, { passive: false });
 
   function releasePointer(e) {
     if (!down) return;
+    if (activePointerId !== null && e && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
     down = false;
+    if (moveRafId) { cancelAnimationFrame(moveRafId); moveRafId = null; }
     if (activePointerId !== null) {
       try { canvas.releasePointerCapture(activePointerId); } catch (_) {}
       activePointerId = null;
     }
-    const c = coords(e);
+    const c = coords(e || {});
     send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
   }
 
-  canvas.addEventListener('pointerup', releasePointer);
-  canvas.addEventListener('pointercancel', releasePointer);
-  window.addEventListener('pointerup', releasePointer);
+  canvas.addEventListener('pointerup', releasePointer, { passive: false });
+  canvas.addEventListener('pointercancel', releasePointer, { passive: false });
+  window.addEventListener('pointerup', releasePointer, { passive: false });
 
-  // Direct wheel scroll
-  let wheelT = null;
+  // ── Native smooth wheel scroll ────────────────────────────────────────────
+  let wheelTimer = null;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (wheelT) return;
-    wheelT = setTimeout(() => { wheelT = null; }, 80);
+    if (wheelTimer) return;
+    wheelTimer = setTimeout(() => { wheelTimer = null; }, 35);
     const c = coords(e);
-    const d = e.deltaY > 0 ? -350 : 350;
-    send({ type:'swipe', x1:c.x, y1:c.y, x2:c.x, y2:Math.max(50, Math.min(nativeH - 50, c.y + d)), duration: 100 });
+    // Vertical scroll: deltaY > 0 is scroll down (vscroll = -1 in Android MotionEvent)
+    const vscroll = e.deltaY > 0 ? -1 : 1;
+    send({ type:'scroll', x:c.x, y:c.y, width:nativeW, height:nativeH, hscroll:0, vscroll:vscroll });
   }, { passive:false });
 
   // ── Keyboard handling (Spacebar protection & full Android keys) ────────
@@ -1679,13 +1721,13 @@ async function startStreamServer(serial, port) {
     const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
     const udidParam = (url.searchParams.get('udid') || '').trim();
-    const effectiveSerial = (udidParam && activeServers.has(udidParam)) ? udidParam : (udidParam || serial);
-    const activeDev = activeServers.get(effectiveSerial);
-    const effectiveEngine = activeDev ? activeDev.engine : engine;
+    const activeEntry = getActiveServerEntry(udidParam) || getActiveServerEntry(serial) || { serial, server, wss, engine };
+    const effectiveSerial = activeEntry.serial;
+    const effectiveEngine = activeEntry.engine || engine;
     const isSeedAdminDedicated = (effectiveSerial === 'R5CW114C0SP');
 
     // Cross-Machine router: if requested device is not on this machine, look up in Supabase & redirect
-    if (udidParam && !activeServers.has(udidParam)) {
+    if (udidParam && !getActiveServerEntry(udidParam)) {
       try {
         const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
         if (client) {
@@ -1796,9 +1838,9 @@ async function startStreamServer(serial, port) {
   wss.on('connection', async (ws, req) => {
     const wsUrl = new URL(req.url, 'http://localhost');
     const wsUdid = (wsUrl.searchParams.get('udid') || '').trim();
-    const targetSerial = (wsUdid && activeServers.has(wsUdid)) ? wsUdid : serial;
-    const activeDev = activeServers.get(targetSerial);
-    const targetEngine = activeDev ? activeDev.engine : engine;
+    const activeWsEntry = getActiveServerEntry(wsUdid) || getActiveServerEntry(serial) || { serial, server, wss, engine };
+    const targetSerial = activeWsEntry.serial;
+    const targetEngine = activeWsEntry.engine || engine;
     const isAdminWs = checkIsAdminRequest(wsUrl);
 
     const lic = await getCachedLicenseStatus();

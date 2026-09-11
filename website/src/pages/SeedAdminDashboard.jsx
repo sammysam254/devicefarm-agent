@@ -77,10 +77,18 @@ export default function SeedAdminDashboard() {
     try {
       const { data: bData } = await supabase.from('machine_bindings').select('*');
       const { data: pData } = await supabase.from('profiles').select('*');
-      const { data: dData } = await supabase.from('devices').select('*').order('created_at', { ascending: false });
+      const seenSerials = new Set();
+      const uniqueDevices = [];
+      for (const d of (dData || [])) {
+        const s = (d.serial || '').trim();
+        if (!s || seenSerials.has(s)) continue;
+        seenSerials.add(s);
+        uniqueDevices.push(d);
+      }
+
       setBindings(bData || []);
       setProfiles(pData || []);
-      setDevices(dData || []);
+      setDevices(uniqueDevices);
     } catch (e) {
       console.error('Error loading seed data:', e);
     } finally {

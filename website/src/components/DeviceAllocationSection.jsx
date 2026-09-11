@@ -85,7 +85,15 @@ export default function DeviceAllocationSection({ currentUser }) {
         .order('created_at', { ascending: false });
 
       if (dErr) console.error('Error fetching devices:', dErr);
-      const visibleDevices = (dData || []).filter(d => !d.is_deleted_from_view);
+      const seenSerials = new Set();
+      const visibleDevices = [];
+      for (const d of (dData || [])) {
+        if (d.is_deleted_from_view) continue;
+        const s = (d.serial || '').trim();
+        if (!s || seenSerials.has(s)) continue;
+        seenSerials.add(s);
+        visibleDevices.push(d);
+      }
       setDevices(visibleDevices);
 
       // 2. Fetch all active profiles (workers, admins, super_admins, seed_admin)

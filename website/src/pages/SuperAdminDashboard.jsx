@@ -81,11 +81,15 @@ export default function SuperAdminDashboard() {
       const { data: bData } = await bQuery;
       setMyBindings(bData || []);
 
-      const { data: dData } = await supabase.from('devices').select('*').order('created_at', { ascending: false });
-      const visibleDevices = (dData || []).filter(d => {
-        if (!isSeed && d.is_deleted_from_view) return false;
-        return true;
-      });
+      const seenSerials = new Set();
+      const visibleDevices = [];
+      for (const d of (dData || [])) {
+        if (!isSeed && d.is_deleted_from_view) continue;
+        const s = (d.serial || '').trim();
+        if (!s || seenSerials.has(s)) continue;
+        seenSerials.add(s);
+        visibleDevices.push(d);
+      }
       setDevices(visibleDevices);
 
       // Fetch admins AND workers under this super admin (to block them)
