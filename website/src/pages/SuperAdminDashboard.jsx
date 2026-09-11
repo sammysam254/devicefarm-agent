@@ -385,7 +385,8 @@ export default function SuperAdminDashboard() {
                               onClick={(e) => {
                                 e.preventDefault();
                                 const base = d.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
-                                const adminUrl = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
+                                const chatParam = profile?.chat_code ? `&chat_code=${encodeURIComponent(profile.chat_code)}` : '';
+                                const adminUrl = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487${chatParam}` : `${base}?admin=1&k=flexpulse_admin_cctv_9487${chatParam}`;
                                 const w = 510, h = 900;
                                 const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                                 const top = Math.max(0, Math.round((window.screen.height - h) / 2));

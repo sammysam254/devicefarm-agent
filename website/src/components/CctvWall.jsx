@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
 import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, ExternalLink, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { generateCleanDeviceUrl } from '../lib/keyGenerator';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
+  const { profile } = useAuth();
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cctvLocked, setCctvLocked] = useState(false);
@@ -399,7 +401,8 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 <button 
                   onClick={() => {
                     const base = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                    const u = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
+                    const chatParam = profile?.chat_code ? `&chat_code=${encodeURIComponent(profile.chat_code)}` : '';
+                    const u = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487${chatParam}` : `${base}?admin=1&k=flexpulse_admin_cctv_9487${chatParam}`;
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));

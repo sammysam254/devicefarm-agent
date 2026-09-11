@@ -607,6 +607,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
   <div class="hdr-left">
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="if(history.length>1)history.back();else window.close()" title="Back">&#x2190;</button>
     <div class="hdr-title" id="hdrTitle">Stream ${serial}</div>
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" style="width:auto;padding:0 8px;font-size:11px;font-weight:700;display:inline-flex;align-items:center;gap:4px" onclick="promptSetChatCode()" title="Active Chat Code (Click to edit)">
+      <span id="hdrChatCode">💬 Chat</span>
+    </button>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="reconnectStream()" title="Refresh Stream">&#x21BB;</button>
@@ -620,6 +623,26 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
 <div class="stage">
   <div class="wrap" id="wrap">
     <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
+
+    <!-- In-Stream Floating Live Chat Alert (Centered directly on phone screen between borders) -->
+    <div id="streamChatPopup" style="display:none;position:absolute;top:16px;left:10px;right:10px;z-index:90;background:rgba(15,23,42,0.96);backdrop-filter:blur(24px);border:1.5px solid rgba(56,189,248,0.65);box-shadow:0 14px 40px rgba(0,0,0,0.85),0 0 25px rgba(56,189,248,0.35);border-radius:14px;padding:12px 14px;animation:slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);user-select:none;pointer-events:auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:15px;">💬</span>
+          <span style="font-size:11px;font-weight:800;color:#38bdf8;letter-spacing:0.5px;text-transform:uppercase;">New Message</span>
+          <span id="chatSenderBadge" style="background:rgba(56,189,248,0.18);color:#7dd3fc;border:1px solid rgba(56,189,248,0.4);padding:1px 7px;border-radius:100px;font-size:10px;font-family:monospace;font-weight:700;">#000000</span>
+        </div>
+        <button onclick="dismissChatPopup()" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#cbd5e1;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;line-height:1;" title="Close (or auto-closes in 10s)">&times;</button>
+      </div>
+      <div id="chatSenderEmail" style="font-size:11px;color:#94a3b8;margin-bottom:4px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Sender</div>
+      <div id="chatMessageText" style="font-size:13px;color:#f8fafc;line-height:1.45;word-break:break-word;max-height:85px;overflow-y:auto;font-weight:500;">
+        Message text here...
+      </div>
+      <!-- 10-second auto-close animated progress bar -->
+      <div style="width:100%;height:3px;background:rgba(255,255,255,0.12);border-radius:2px;overflow:hidden;margin-top:10px;">
+        <div id="chatProgressBar" style="height:100%;background:linear-gradient(90deg,#38bdf8,#0ea5e9);width:100%;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Sleek Dark Control Sidebar (Right Side) -->
@@ -675,26 +698,6 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
   </div>
 </div>
 
-<!-- Floating In-Stream Live Chat Alert Popup (10s auto-dismiss & Ding Sound) -->
-<div id="streamChatPopup" style="display:none;position:fixed;top:54px;left:50%;transform:translateX(-50%);z-index:25;background:rgba(15,23,42,0.95);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.5);box-shadow:0 12px 36px rgba(0,0,0,0.8),0 0 25px rgba(56,189,248,0.3);border-radius:16px;padding:14px 20px;max-width:440px;width:calc(100% - 32px);animation:slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);pointer-events:auto;user-select:none;">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span style="font-size:16px;">💬</span>
-      <span style="font-size:11px;font-weight:800;color:#38bdf8;letter-spacing:0.5px;text-transform:uppercase;">Incoming Message</span>
-      <span id="chatSenderBadge" style="background:rgba(56,189,248,0.15);color:#7dd3fc;border:1px solid rgba(56,189,248,0.3);padding:2px 8px;border-radius:100px;font-size:10px;font-family:monospace;font-weight:700;">#000000</span>
-    </div>
-    <button onclick="dismissChatPopup()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;" title="Dismiss">&times;</button>
-  </div>
-  <div id="chatSenderEmail" style="font-size:11px;color:#94a3b8;margin-bottom:4px;font-weight:600;">Sender</div>
-  <div id="chatMessageText" style="font-size:13px;color:#f8fafc;line-height:1.4;word-break:break-word;max-height:80px;overflow-y:auto;font-weight:500;">
-    Message text here...
-  </div>
-  <!-- 10-second auto-close progress bar -->
-  <div style="width:100%;height:3px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;margin-top:10px;">
-    <div id="chatProgressBar" style="height:100%;background:linear-gradient(90deg,#38bdf8,#0ea5e9);width:100%;"></div>
-  </div>
-</div>
-
 <!-- Stream Blocked Fullscreen Overlay -->
 <div id="streamBlockedOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,9,17,0.97);backdrop-filter:blur(16px);z-index:9999;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;">
   <div style="background:#0f172a;border:1px solid rgba(239,68,68,0.45);border-radius:24px;padding:40px 32px;max-width:480px;width:100%;box-shadow:0 0 50px rgba(239,68,68,0.25);">
@@ -720,9 +723,36 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
 
 <script>
   // ── In-Stream Chat Alert & Ding Audio ─────────────────────────────────────
-  const ownerChatCode = '${ownerChatCode || ''}' || (new URLSearchParams(window.location.search)).get('chat_code') || '';
-  let lastChatPolledTime = Date.now();
+  let urlChatCode = (new URLSearchParams(window.location.search)).get('chat_code') || '';
+  if (urlChatCode) {
+    try { localStorage.setItem('agent_chat_code', urlChatCode); } catch(_) {}
+  }
+  let ownerChatCode = '${ownerChatCode || ''}' || urlChatCode || (function(){ try { return localStorage.getItem('agent_chat_code') || ''; } catch(_) { return ''; } })() || '';
+  if (ownerChatCode) {
+    try { localStorage.setItem('agent_chat_code', ownerChatCode); } catch(_) {}
+  }
+
+  function updateHdrChatCode() {
+    const el = document.getElementById('hdrChatCode');
+    if (el) {
+      el.textContent = ownerChatCode ? ('💬 #' + ownerChatCode) : '💬 Set Code';
+    }
+  }
+  setTimeout(updateHdrChatCode, 100);
+
+  function promptSetChatCode() {
+    const code = prompt('Enter your 6-digit Chat Code to receive in-stream message alerts here:', ownerChatCode || '');
+    if (code && code.trim().length === 6) {
+      ownerChatCode = code.trim();
+      try { localStorage.setItem('agent_chat_code', ownerChatCode); } catch(_) {}
+      updateHdrChatCode();
+      startChatPolling();
+    }
+  }
+
+  let lastChatPolledTime = Date.now() - 3000;
   let chatDismissTimer = null;
+  let chatPollInterval = null;
 
   function playStreamDing() {
     try {
@@ -783,11 +813,14 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     if (popup) popup.style.display = 'none';
   }
 
-  if (ownerChatCode) {
+  function startChatPolling() {
+    if (chatPollInterval) clearInterval(chatPollInterval);
+    if (!ownerChatCode) return;
+
     const SUPABASE_REST = 'https://lazdyihryfvrlczczvxz.supabase.co/rest/v1';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNzYxNjgsImV4cCI6MjEwMjk1MjE2OH0.fUBdMbDgV8e0Fk4mfVB8DqQc88vrw8oA6MdHXHFsXAs';
 
-    setInterval(function() {
+    chatPollInterval = setInterval(function() {
       if (isStreamBlocked) return;
       fetch(SUPABASE_REST + '/chat_messages?recipient_chat_code=eq.' + encodeURIComponent(ownerChatCode) + '&order=created_at.desc&limit=1', {
         headers: {
@@ -807,8 +840,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
         }
       })
       .catch(function() {});
-    }, 2500);
+    }, 2000);
   }
+
+  startChatPolling();
   let isStreamBlocked = false;
   function showBlockedScreen(reason) {
     isStreamBlocked = true;
@@ -1522,7 +1557,12 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     const width = 510, height = 900;
     const left = Math.max(0, Math.round((window.screen.width - width) / 2));
     const top = Math.max(0, Math.round((window.screen.height - height) / 2));
-    window.open(window.location.href, 'Stream_${serial}', 'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left + ',resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes');
+    let popUrl = window.location.href;
+    if (ownerChatCode && !popUrl.includes('chat_code=')) {
+      const sep = popUrl.includes('?') ? '&' : '?';
+      popUrl = popUrl + sep + 'chat_code=' + encodeURIComponent(ownerChatCode);
+    }
+    window.open(popUrl, 'Stream_${serial}', 'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left + ',resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes');
   }
 
   window.addEventListener('click', e => { if (e.target.classList.contains('modal')) e.target.style.display='none'; });
