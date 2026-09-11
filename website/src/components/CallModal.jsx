@@ -3,9 +3,25 @@ import { useCall } from '../context/CallContext';
 import { Phone, PhoneOff, Mic, MicOff, Volume2 } from 'lucide-react';
 
 export default function CallModal() {
-  const { callState, isMuted, callDuration, acceptCall, declineCall, endCall, toggleMute } = useCall();
+  const { 
+    callState, 
+    isMuted, 
+    callDuration, 
+    remoteAudioRef, 
+    acceptCall, 
+    declineCall, 
+    endCall, 
+    toggleMute 
+  } = useCall();
 
   if (!callState) return null;
+
+  const handleAcceptCall = () => {
+    if (remoteAudioRef?.current) {
+      remoteAudioRef.current.play().catch(() => {});
+    }
+    acceptCall();
+  };
 
   const formatDuration = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -126,7 +142,7 @@ export default function CallModal() {
         {isIncoming && (
           <div style={{ display: 'flex', gap: '16px', width: '100%', justifyContent: 'center', marginTop: '10px' }}>
             <button
-              onClick={acceptCall}
+              onClick={handleAcceptCall}
               style={{
                 flex: 1,
                 padding: '14px 20px',
@@ -249,6 +265,9 @@ export default function CallModal() {
             </button>
           </div>
         )}
+
+        {/* Dedicated remote voice audio playback element */}
+        <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
 
       </div>
     </div>

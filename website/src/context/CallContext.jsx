@@ -15,8 +15,35 @@ const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ],
+  iceCandidatePoolSize: 10
+};
+
+// Helper: Wait for ICE candidates to be gathered into local description
+const waitForIceGathering = (pc, maxWaitMs = 1500) => {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve();
+      return;
+    }
+    let resolved = false;
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      pc.removeEventListener('icegatheringstatechange', onStateChange);
+      resolve();
+    };
+    const onStateChange = () => {
+      if (pc.iceGatheringState === 'complete') {
+        cleanup();
+      }
+    };
+    pc.addEventListener('icegatheringstatechange', onStateChange);
+    const timer = setTimeout(cleanup, maxWaitMs);
+  });
 };
 
 export function CallProvider({ children }) {
@@ -32,19 +59,34 @@ export function CallProvider({ children }) {
   const remoteAudioRef = useRef(null);
   const durationTimerRef = useRef(null);
   const activeSessionIdRef = useRef(null);
+  const callStateRef = useRef(null);
+  const iceChannelRef = useRef(null);
+  const pendingCandidatesRef = useRef([]);
+  const pollTimerRef = useRef(null);
 
-  // Initialize hidden remote audio element
+  // Keep callStateRef synchronized
   useEffect(() => {
-    const audio = document.createElement('audio');
-    audio.autoplay = true;
-    audio.playsInline = true;
-    audio.style.display = 'none';
-    document.body.appendChild(audio);
-    remoteAudioRef.current = audio;
+    callStateRef.current = callState;
+  }, [callState]);
+
+  // Initialize hidden remote audio element in the DOM
+  useEffect(() => {
+    let audio = remoteAudioRef.current;
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.autoplay = true;
+      audio.playsInline = true;
+      audio.muted = false;
+      audio.volume = 1.0;
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+      remoteAudioRef.current = audio;
+    }
 
     return () => {
-      if (audio.parentNode) {
+      if (audio && audio.parentNode) {
         audio.parentNode.removeChild(audio);
+        remoteAudioRef.current = null;
       }
     };
   }, []);
@@ -119,7 +161,36 @@ export function CallProvider({ children }) {
     return false;
   };
 
-  // ── 2. Listen for Incoming Calls & Session State Changes ───────────────────
+  // Helper to connect caller with recipient answer
+  const handleConnectedFromAnswer = async (sess) => {
+    if (callStateRef.current?.type !== 'outgoing') return;
+
+    stopRingtone();
+    playCallConnectedSound();
+    startDurationTimer();
+    setCallState(prev => prev ? ({ ...prev, type: 'connected', session: sess }) : null);
+
+    if (sess.answer && pcRef.current && pcRef.current.signalingState !== 'closed') {
+      try {
+        console.log('[WebRTC] Applying recipient answer SDP:', sess.answer.type);
+        const remoteDesc = new RTCSessionDescription(sess.answer);
+        await pcRef.current.setRemoteDescription(remoteDesc);
+
+        // Flush any queued remote ICE candidates
+        while (pendingCandidatesRef.current.length > 0) {
+          const cand = pendingCandidatesRef.current.shift();
+          try {
+            await pcRef.current.addIceCandidate(new RTCIceCandidate(cand));
+            console.log('[WebRTC] Flushed queued ICE candidate on caller');
+          } catch (_) {}
+        }
+      } catch (err) {
+        console.warn('[WebRTC] Set remote description answer error:', err);
+      }
+    }
+  };
+
+  // ── 2. Listen for Incoming Calls & Session State Changes (Stable Listener) ──
   useEffect(() => {
     if (!profile?.chat_code) return;
 
@@ -162,20 +233,8 @@ export function CallProvider({ children }) {
         if (!activeSessionIdRef.current || activeSessionIdRef.current !== sess.id) return;
 
         // Recipient accepted: handle answer on caller side
-        if (sess.status === 'connected' && callState?.type === 'outgoing') {
-          stopRingtone();
-          playCallConnectedSound();
-          startDurationTimer();
-          setCallState(prev => prev ? ({ ...prev, type: 'connected', session: sess }) : null);
-
-          if (sess.answer && pcRef.current && pcRef.current.signalingState !== 'closed') {
-            try {
-              const remoteDesc = new RTCSessionDescription(sess.answer);
-              await pcRef.current.setRemoteDescription(remoteDesc);
-            } catch (err) {
-              console.warn('Set remote description answer error:', err);
-            }
-          }
+        if (sess.status === 'connected') {
+          await handleConnectedFromAnswer(sess);
         }
 
         // Call ended or declined
@@ -189,7 +248,7 @@ export function CallProvider({ children }) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile?.chat_code, callState?.type]);
+  }, [profile?.chat_code]);
 
   // Duration timer
   const startDurationTimer = () => {
@@ -206,6 +265,15 @@ export function CallProvider({ children }) {
       clearInterval(durationTimerRef.current);
       durationTimerRef.current = null;
     }
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    if (iceChannelRef.current) {
+      supabase.removeChannel(iceChannelRef.current);
+      iceChannelRef.current = null;
+    }
+    pendingCandidatesRef.current = [];
     setCallDuration(0);
     setCallState(null);
     activeSessionIdRef.current = null;
@@ -223,11 +291,86 @@ export function CallProvider({ children }) {
       } catch (_) {}
       pcRef.current = null;
     }
+
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
+    }
+  };
+
+  // Setup PeerConnection with all audio and ICE listeners
+  const setupPeerConnection = (sessionId) => {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    pcRef.current = pc;
+
+    // Handle remote audio stream arrival
+    pc.ontrack = (event) => {
+      console.log('[WebRTC] ontrack received:', event.track.kind, event.streams);
+      const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = stream;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.play()
+          .then(() => console.log('[WebRTC] Remote voice stream is now playing'))
+          .catch((err) => console.warn('[WebRTC] Remote audio play error:', err));
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('[WebRTC] ICE connection state:', pc.iceConnectionState);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log('[WebRTC] Connection state:', pc.connectionState);
+    };
+
+    // Setup Realtime Broadcast channel for Trickle ICE candidates
+    const iceChannel = supabase.channel(`call-ice-${sessionId}`);
+    iceChannelRef.current = iceChannel;
+
+    iceChannel
+      .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
+        if (!payload || payload.sender === profile.chat_code) return;
+        const candidate = payload.candidate;
+        if (!candidate) return;
+
+        if (pcRef.current && pcRef.current.remoteDescription && pcRef.current.remoteDescription.type) {
+          try {
+            await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log('[WebRTC] Realtime ICE candidate added successfully');
+          } catch (e) {
+            console.warn('[WebRTC] Error adding ICE candidate:', e);
+          }
+        } else {
+          pendingCandidatesRef.current.push(candidate);
+        }
+      })
+      .subscribe();
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate && iceChannelRef.current) {
+        iceChannelRef.current.send({
+          type: 'broadcast',
+          event: 'ice-candidate',
+          payload: {
+            candidate: event.candidate.toJSON(),
+            sender: profile.chat_code
+          }
+        }).catch(() => {});
+      }
+    };
+
+    return pc;
   };
 
   // ── 3. Start Outgoing Call ────────────────────────────────────────────────
   const startCall = async (partnerCode, partnerEmail) => {
     if (!profile?.chat_code || !partnerCode) return { success: false, reason: 'invalid_code' };
+
+    // Prime the remote audio element
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.play().catch(() => {});
+    }
 
     // Check if recipient is online on the site
     const isOnline = await checkIsUserOnline(partnerCode);
@@ -237,40 +380,44 @@ export function CallProvider({ children }) {
     }
 
     try {
-      // 1. Get microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // 1. Get microphone stream with clear voice constraints
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      });
       localStreamRef.current = stream;
 
-      // 2. Create WebRTC PeerConnection
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      pcRef.current = pc;
+      // Temporary session placeholder to create channel
+      const tempSessionId = crypto.randomUUID();
+      const pc = setupPeerConnection(tempSessionId);
 
-      // Add local audio tracks to PC
+      // Add microphone tracks to connection
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Handle remote audio stream
-      pc.ontrack = (event) => {
-        if (remoteAudioRef.current && event.streams && event.streams[0]) {
-          remoteAudioRef.current.srcObject = event.streams[0];
-          remoteAudioRef.current.play().catch(() => {});
-        }
-      };
-
-      // Create Offer
+      // Create Offer SDP
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
 
-      // Create call session in Supabase
+      // Wait for ICE gathering so candidates are embedded in SDP
+      await waitForIceGathering(pc, 1500);
+      const finalOffer = pc.localDescription || offer;
+
+      // Create call session in Supabase with embedded offer
       const { data: session, error } = await supabase
         .from('call_sessions')
         .insert([{
+          id: tempSessionId,
           caller_id: profile.id,
           caller_chat_code: profile.chat_code,
           caller_email: profile.email,
           recipient_chat_code: partnerCode,
           recipient_email: partnerEmail || `User #${partnerCode}`,
           status: 'ringing',
-          offer: { type: offer.type, sdp: offer.sdp }
+          offer: { type: finalOffer.type, sdp: finalOffer.sdp }
         }])
         .select()
         .single();
@@ -288,6 +435,32 @@ export function CallProvider({ children }) {
       });
 
       playRingtone();
+
+      // Polling fallback: check every 1000ms if session is answered
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = setInterval(async () => {
+        if (callStateRef.current?.type !== 'outgoing' || !activeSessionIdRef.current) {
+          clearInterval(pollTimerRef.current);
+          return;
+        }
+        try {
+          const { data: latestSess } = await supabase
+            .from('call_sessions')
+            .select('*')
+            .eq('id', activeSessionIdRef.current)
+            .maybeSingle();
+
+          if (latestSess?.status === 'connected' && latestSess.answer && callStateRef.current?.type === 'outgoing') {
+            clearInterval(pollTimerRef.current);
+            await handleConnectedFromAnswer(latestSess);
+          } else if (latestSess?.status === 'declined' || latestSess?.status === 'ended') {
+            clearInterval(pollTimerRef.current);
+            handleCleanupCall();
+            playCallEndedSound();
+          }
+        } catch (_) {}
+      }, 1000);
+
       return { success: true };
     } catch (err) {
       console.error('Start call error:', err);
@@ -303,40 +476,57 @@ export function CallProvider({ children }) {
 
     stopRingtone();
 
+    // Prime remote audio element on click
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.play().catch(() => {});
+    }
+
     try {
       // 1. Get microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      });
       localStreamRef.current = stream;
 
-      // 2. Create WebRTC PeerConnection
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      pcRef.current = pc;
-
+      // 2. Setup PeerConnection
+      const pc = setupPeerConnection(sess.id);
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      pc.ontrack = (event) => {
-        if (remoteAudioRef.current && event.streams && event.streams[0]) {
-          remoteAudioRef.current.srcObject = event.streams[0];
-          remoteAudioRef.current.play().catch(() => {});
-        }
-      };
-
-      // Set Remote Offer
+      // 3. Set Remote Description from Caller's Offer
       if (sess.offer) {
+        console.log('[WebRTC] Recipient setting remote offer SDP');
         const remoteDesc = new RTCSessionDescription(sess.offer);
         await pc.setRemoteDescription(remoteDesc);
+
+        // Flush any candidates received early
+        while (pendingCandidatesRef.current.length > 0) {
+          const cand = pendingCandidatesRef.current.shift();
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+            console.log('[WebRTC] Flushed queued candidate on recipient');
+          } catch (_) {}
+        }
       }
 
-      // Create Answer
+      // 4. Create Answer SDP
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      // Update call session in Supabase
+      // Wait for ICE gathering so candidates are embedded in Answer SDP
+      await waitForIceGathering(pc, 1500);
+      const finalAnswer = pc.localDescription || answer;
+
+      // 5. Update call session in Supabase with embedded answer
       await supabase
         .from('call_sessions')
         .update({
           status: 'connected',
-          answer: { type: answer.type, sdp: answer.sdp },
+          answer: { type: finalAnswer.type, sdp: finalAnswer.sdp },
           updated_at: new Date().toISOString()
         })
         .eq('id', sess.id);
@@ -389,6 +579,7 @@ export function CallProvider({ children }) {
     isMuted,
     callDuration,
     onlineChatCodes,
+    remoteAudioRef,
     startCall,
     acceptCall,
     declineCall,
