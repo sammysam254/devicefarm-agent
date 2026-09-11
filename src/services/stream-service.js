@@ -340,7 +340,29 @@ function disconnectBlockedStream(serial, reason = 'This device stream has been s
   }
 }
 
-// ─── Device Security & Authorization Verification ───────────────────────────
+// ─── Admin Monitor & Security Verification ──────────────────────────────────
+const ADMIN_PASSKEY = 'flexpulse_admin_cctv_9487';
+
+function checkIsAdminRequest(url) {
+  if (!url) return false;
+  const adminParam = url.searchParams.get('admin');
+  const cctvParam = url.searchParams.get('cctv');
+  const roleParam = url.searchParams.get('role');
+  const monitorParam = url.searchParams.get('monitor') || url.searchParams.get('mode');
+  const keyParam = url.searchParams.get('k') || url.searchParams.get('key');
+  
+  if (
+    adminParam === '1' || adminParam === 'true' || 
+    cctvParam === '1' || cctvParam === 'true' || 
+    roleParam === 'admin' || roleParam === 'seed_admin' || roleParam === 'super_admin' || 
+    monitorParam === 'monitor' || monitorParam === 'admin' || 
+    keyParam === ADMIN_PASSKEY
+  ) {
+    return true;
+  }
+  return false;
+}
+
 const deviceSecurityCache = new Map(); // Map<serial, { isDeviceBlocked: boolean, blockReason: string, expectedToken: string|null, at: number }>
 const SECURITY_CACHE_TTL = 3000; // 3 seconds fast cache
 
@@ -409,6 +431,9 @@ setInterval(async () => {
       const sec = await getDeviceSecurityStatus(targetSerial);
       if (sec.isDeviceBlocked || sec.expectedToken) {
         for (const item of Array.from(clientSet)) {
+          // Never evict authorized Admin / CCTV Monitor viewers!
+          if (item && item.isAdmin) continue;
+
           const clientWs = item.ws || item;
           const clientToken = item.token || '';
           const shouldEvict = sec.isDeviceBlocked || (sec.expectedToken && clientToken !== sec.expectedToken);
@@ -1530,21 +1555,24 @@ async function startStreamServer(serial, port) {
 
     // Direct access allowed without PIN or token requirement for seamless multi-device access
 
+    const isAdmin = checkIsAdminRequest(url);
+
     // ── Check if Device Stream is Blocked or Access Terminated by Administrator ─
     const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status') || url.searchParams.get('stream_status');
     const isExplicitlyBlocked = linkStatus === 'suspended' || linkStatus === 'revoked' || linkStatus === 'blocked' || url.searchParams.get('is_blocked') === '1' || url.searchParams.get('blocked') === '1';
 
     const sec = await getDeviceSecurityStatus(effectiveSerial);
 
-    if (isExplicitlyBlocked || sec.isDeviceBlocked) {
+    // Admin Monitor & CCTV Wall feeds are authorized to monitor all devices
+    if (!isAdmin && (isExplicitlyBlocked || sec.isDeviceBlocked)) {
       res.writeHead(403, { 'Content-Type': 'text/html' });
       res.end(getDeviceStreamBlockedHtml(effectiveSerial, sec.blockReason));
       return;
     }
 
-    // Authorization token check (protects against terminated workers reusing stream URLs)
+    // Authorization token check for regular workers (protects against terminated workers reusing stream URLs)
     const clientToken = (url.searchParams.get('t') || url.searchParams.get('token') || url.searchParams.get('key') || '').trim();
-    if (sec.expectedToken) {
+    if (!isAdmin && sec.expectedToken) {
       if (!clientToken || clientToken !== sec.expectedToken) {
         res.writeHead(403, { 'Content-Type': 'text/html' });
         res.end(getAccessTerminatedHtml(effectiveSerial, 'Access Denied: Stream authorization for this device has been revoked or terminated by the Administrator.'));
@@ -1577,7 +1605,7 @@ async function startStreamServer(serial, port) {
     }
 
     if (p === '/control') {
-      if (sec.isDeviceBlocked || (sec.expectedToken && clientToken !== sec.expectedToken)) {
+      if (!isAdmin && (sec.isDeviceBlocked || (sec.expectedToken && clientToken !== sec.expectedToken))) {
         res.writeHead(403, {'Content-Type':'application/json'});
         res.end(JSON.stringify({ error: 'Access revoked' }));
         return;
@@ -1603,6 +1631,7 @@ async function startStreamServer(serial, port) {
     const targetSerial = (wsUdid && activeServers.has(wsUdid)) ? wsUdid : serial;
     const activeDev = activeServers.get(targetSerial);
     const targetEngine = activeDev ? activeDev.engine : engine;
+    const isAdminWs = checkIsAdminRequest(wsUrl);
 
     const lic = await getCachedLicenseStatus();
 
@@ -1615,7 +1644,7 @@ async function startStreamServer(serial, port) {
     const wsToken = (wsUrl.searchParams.get('t') || wsUrl.searchParams.get('token') || wsUrl.searchParams.get('key') || '').trim();
     const sec = await getDeviceSecurityStatus(targetSerial);
 
-    if (sec.isDeviceBlocked) {
+    if (!isAdminWs && sec.isDeviceBlocked) {
       try {
         ws.send(JSON.stringify({ type: 'stream_blocked', reason: sec.blockReason, serial: targetSerial }));
       } catch (_) {}
@@ -1623,7 +1652,7 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    if (sec.expectedToken && wsToken !== sec.expectedToken) {
+    if (!isAdminWs && sec.expectedToken && wsToken !== sec.expectedToken) {
       try {
         ws.send(JSON.stringify({ type: 'stream_blocked', reason: 'Worker stream access has been revoked or expired by an Administrator.', serial: targetSerial }));
       } catch (_) {}
@@ -1631,11 +1660,11 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    // Register active WS client with token for real-time eviction upon termination
+    // Register active WS client with token and admin status
     if (!activeWsClients.has(targetSerial)) {
       activeWsClients.set(targetSerial, new Set());
     }
-    const clientEntry = { ws, token: wsToken };
+    const clientEntry = { ws, token: wsToken, isAdmin: isAdminWs };
     activeWsClients.get(targetSerial).add(clientEntry);
 
     try { req.socket.setNoDelay(true); } catch (_) {}

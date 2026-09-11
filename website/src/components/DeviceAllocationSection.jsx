@@ -399,10 +399,12 @@ export default function DeviceAllocationSection({ currentUser }) {
                             style={{ color: isBlocked ? 'var(--danger)' : 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                             onClick={(e) => {
                               e.preventDefault();
+                              const base = a.devices.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(a.devices?.serial || '')}`;
+                              const adminUrl = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
                               const w = 510, h = 900;
                               const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                               const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-                              window.open(a.devices.stream_url, `Stream_${a.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+                              window.open(adminUrl, `Stream_${a.devices?.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
                             }}
                           >
                             Open Stream <ExternalLink size={12} />

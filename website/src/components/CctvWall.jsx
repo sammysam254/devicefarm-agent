@@ -264,7 +264,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
           {devices.map(d => {
             const serial = d.serial || '';
-            const streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}&muted=1`;
+            const streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}&muted=1&admin=1&cctv=1&k=flexpulse_admin_cctv_9487`;
             const isFocused = focusDevice && focusDevice.id === d.id;
             const isStealthOn = d.stealth_root_enabled !== false;
             const isBlocked = Boolean(d.is_stream_blocked || d.status === 'blocked');
@@ -398,7 +398,8 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 </button>
                 <button 
                   onClick={() => {
-                    const u = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                    const base = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                    const u = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
@@ -418,7 +419,10 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             {/* Interactive Stream Frame */}
             <div style={{ flex: 1, background: '#000', position: 'relative' }}>
               <iframe 
-                src={focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`} 
+                src={(() => {
+                  const base = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                  return base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
+                })()} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
                 referrerPolicy="no-referrer"

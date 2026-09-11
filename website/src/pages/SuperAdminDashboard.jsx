@@ -384,10 +384,12 @@ export default function SuperAdminDashboard() {
                               style={{ padding: '6px 12px', fontSize: '12px' }}
                               onClick={(e) => {
                                 e.preventDefault();
+                                const base = d.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
+                                const adminUrl = base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
                                 const w = 510, h = 900;
                                 const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                                 const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-                                window.open(d.stream_url, `Stream_${d.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
+                                window.open(adminUrl, `Stream_${d.serial || 'Device'}`, `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no,popup=yes`);
                               }}
                             >
                               Open Stream <ExternalLink size={12} />
