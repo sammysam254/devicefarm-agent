@@ -221,8 +221,8 @@ async function syncDeviceToCloud(params) {
 
   const syncSignature = `${serial}:${model || ''}:${brand || ''}:${streamUrl || ''}:${localUrl || ''}:${port || ''}:${bindingCode || ''}:${status || ''}`;
   const lastState = lastDeviceSyncState.get(serial);
-  // Skip redundant cloud sync if device state hasn't changed and synced in the last 15 minutes
-  if (lastState && lastState.signature === syncSignature && (Date.now() - lastState.at < 15 * 60 * 1000)) {
+  // Skip redundant cloud sync if device state hasn't changed and synced in the last 45 seconds
+  if (lastState && lastState.signature === syncSignature && (Date.now() - lastState.at < 45 * 1000)) {
     return;
   }
 
@@ -230,16 +230,11 @@ async function syncDeviceToCloud(params) {
     let finalStreamUrl = streamUrl || null;
     let finalStatus = status || 'online';
 
-    // Protect existing security tokens and admin-blocked status in Supabase
+    // Protect existing admin-blocked status in Supabase
     try {
       const curRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=stream_url,is_stream_blocked,status`);
       if (curRes.data && curRes.data[0]) {
         const curDev = curRes.data[0];
-        if (curDev.stream_url && (curDev.stream_url.includes('&t=') || curDev.stream_url.includes('token='))) {
-          if (!finalStreamUrl || (!finalStreamUrl.includes('&t=') && !finalStreamUrl.includes('token='))) {
-            finalStreamUrl = curDev.stream_url;
-          }
-        }
         if (curDev.is_stream_blocked || curDev.status === 'blocked' || curDev.status === 'suspended') {
           finalStatus = 'blocked';
         }

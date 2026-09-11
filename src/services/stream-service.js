@@ -262,6 +262,126 @@ function getExpiredLinkHtml(serial) {
 </html>`;
 }
 
+// ─── Device Offline HTML (When requested device is disconnected) ────────────
+
+function getDeviceOfflineHtml(serial) {
+  const cleanSerial = (serial || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Offline - ${cleanSerial}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    body {
+      background: #060911;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+    }
+    .card {
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(251, 191, 36, 0.4);
+      border-radius: 24px;
+      padding: 44px 36px;
+      max-width: 500px;
+      width: 100%;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 30px rgba(251, 191, 36, 0.15);
+      backdrop-filter: blur(16px);
+    }
+    .icon-box {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: rgba(251, 191, 36, 0.12);
+      border: 2px solid rgba(251, 191, 36, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 38px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(251, 191, 36, 0.15);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      color: #fbbf24;
+      padding: 4px 14px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+    h1 { font-size: 22px; font-weight: 800; color: #f8fafc; margin-bottom: 10px; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin-bottom: 22px; }
+    .device-info {
+      background: rgba(2, 6, 23, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #cbd5e1;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .device-serial {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+    .btn-refresh {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px 20px;
+      background: linear-gradient(135deg, #0ea5e9, #0284c7);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(14, 165, 233, 0.3);
+    }
+    .btn-refresh:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(14, 165, 233, 0.45); }
+    .footer-text { margin-top: 18px; font-size: 12px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-box">🔌</div>
+    <div class="badge">DEVICE OFFLINE</div>
+    <h1>Device Currently Offline</h1>
+    <p>This Android hardware device is disconnected or offline on the USB farm station. Please check cable connection or verify device power.</p>
+    <div class="device-info">
+      <span>Requested UDID</span>
+      <span class="device-serial">${cleanSerial}</span>
+    </div>
+    <button class="btn-refresh" onclick="location.reload()">
+      🔄 Refresh Stream
+    </button>
+    <div class="footer-text">
+      The device stream will automatically connect once the device is online.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 // ─── Worker Access Terminated HTML (403 Forbidden) ──────────────────────────
 
 function getAccessTerminatedHtml(serial, reason = 'Worker stream access has been terminated or revoked by an Administrator.') {
@@ -563,7 +683,7 @@ function handleControl(type, data, serial, engine, ws = null) {
 
 // ─── Player HTML (WebCodecs H264 decoder + screencap fallback) ───────────────
 
-function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
+function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = false) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -607,6 +727,14 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:380px;box-shadow:0 20px 30px rgba(0,0,0,.6)}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
+
+    ${isCctv ? `
+    /* CCTV Pure Feed Mode - Zero padding, no headers/sidebars, full responsive canvas */
+    .header, .sidebar, .modal, #streamChatPopup, .hdr-btn { display: none !important; }
+    .stage { padding: 0 !important; margin: 0 !important; width: 100vw !important; height: 100vh !important; background: #000 !important; justify-content: center !important; }
+    .wrap { width: 100% !important; height: 100% !important; max-width: 100% !important; max-height: 100% !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; aspect-ratio: auto !important; }
+    canvas { width: 100% !important; height: 100% !important; object-fit: contain !important; cursor: pointer !important; }
+    ` : ''}
 
     @keyframes slideDown {
       from { opacity: 0; transform: translate(-50%, -18px); }
@@ -743,6 +871,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
 </div>
 
 <script>
+  const isCctvMode = ${isCctv ? 'true' : 'false'};
   // ── In-Stream Chat Alert & Ding Audio ─────────────────────────────────────
   let urlChatCode = (new URLSearchParams(window.location.search)).get('chat_code') || '';
   if (urlChatCode) {
@@ -923,7 +1052,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
     const h = f.displayHeight || f.codedHeight || f.height;
     if (w && h && (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2)) {
       canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-      wrap.style.aspectRatio = w + ' / ' + h;
+      if (!isCctvMode) wrap.style.aspectRatio = w + ' / ' + h;
     }
     ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
     if (f.close) f.close();
@@ -1135,7 +1264,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
           const h = frame.displayHeight || frame.codedHeight || frame.height;
           if (w && h && (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2)) {
             canvas.width = w; canvas.height = h; nativeW = w; nativeH = h;
-            wrap.style.aspectRatio = w + ' / ' + h;
+            if (!isCctvMode) wrap.style.aspectRatio = w + ' / ' + h;
           }
           ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
           frame.close();
@@ -1720,24 +1849,22 @@ async function startStreamServer(serial, port) {
     const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
 
     const udidParam = (url.searchParams.get('udid') || '').trim();
-    const activeEntry = getActiveServerEntry(udidParam) || getActiveServerEntry(serial) || { serial, server, wss, engine };
-    const effectiveSerial = activeEntry.serial;
-    const effectiveEngine = activeEntry.engine || engine;
-    const isSeedAdminDedicated = (effectiveSerial === 'R5CW114C0SP');
+    let activeEntry = getActiveServerEntry(udidParam);
 
-    // Cross-Machine router: if requested device is not on this machine, look up in Supabase & redirect
-    if (udidParam && !getActiveServerEntry(udidParam)) {
+    // Cross-Machine router & Offline guard: if requested device is not on this machine
+    if (udidParam && !activeEntry) {
       try {
         const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
         if (client) {
           const devRes = await client.get(`/devices?serial=eq.${encodeURIComponent(udidParam)}&select=stream_url,status,is_stream_blocked,stream_blocked_reason`);
-          if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0 && devRes.data[0].stream_url) {
-            const remoteUrl = devRes.data[0].stream_url;
-            if (devRes.data[0].is_stream_blocked || devRes.data[0].status === 'blocked') {
+          if (devRes.data && Array.isArray(devRes.data) && devRes.data.length > 0) {
+            const row = devRes.data[0];
+            if (row.is_stream_blocked || row.status === 'blocked') {
               res.writeHead(403, { 'Content-Type': 'text/html' });
-              res.end(getDeviceStreamBlockedHtml(udidParam, devRes.data[0].stream_blocked_reason));
+              res.end(getDeviceStreamBlockedHtml(udidParam, row.stream_blocked_reason));
               return;
             }
+            const remoteUrl = row.stream_url;
             const isDifferent = remoteUrl && (!remoteUrl.includes(hostHeader) || remoteUrl.includes('trycloudflare.com') || remoteUrl.includes('loca.lt'));
             if (isDifferent) {
               res.writeHead(302, { 'Location': remoteUrl });
@@ -1747,13 +1874,23 @@ async function startStreamServer(serial, port) {
           }
         }
       } catch (_) {}
+
+      // Device is NOT active on this machine — show clean offline status (never cross-route to wrong device)
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(getDeviceOfflineHtml(udidParam));
+      return;
     }
 
-    // Direct access allowed without PIN or token requirement for seamless multi-device access
+    if (!activeEntry) {
+      activeEntry = getActiveServerEntry(serial) || { serial, server, wss, engine };
+    }
+    const effectiveSerial = activeEntry.serial;
+    const effectiveEngine = activeEntry.engine || engine;
+    const isSeedAdminDedicated = (effectiveSerial === 'R5CW114C0SP');
 
     const isAdmin = checkIsAdminRequest(url);
 
-    // ── Check if Device Stream is Blocked or Access Terminated by Administrator ─
+    // ── Check if Device Stream is Blocked by Administrator (Server-side validation) ─
     const linkStatus = url.searchParams.get('status') || url.searchParams.get('link_status') || url.searchParams.get('stream_status');
     const isExplicitlyBlocked = linkStatus === 'suspended' || linkStatus === 'revoked' || linkStatus === 'blocked' || url.searchParams.get('is_blocked') === '1' || url.searchParams.get('blocked') === '1';
 
@@ -1764,16 +1901,6 @@ async function startStreamServer(serial, port) {
       res.writeHead(403, { 'Content-Type': 'text/html' });
       res.end(getDeviceStreamBlockedHtml(effectiveSerial, sec.blockReason));
       return;
-    }
-
-    // Authorization token check for regular workers (protects against terminated workers reusing stream URLs)
-    const clientToken = (url.searchParams.get('t') || url.searchParams.get('token') || url.searchParams.get('key') || '').trim();
-    if (!isAdmin && sec.expectedToken) {
-      if (!clientToken || clientToken !== sec.expectedToken) {
-        res.writeHead(403, { 'Content-Type': 'text/html' });
-        res.end(getAccessTerminatedHtml(effectiveSerial, 'Access Denied: Stream authorization for this device has been revoked or terminated by the Administrator.'));
-        return;
-      }
     }
 
     if (p === '/upload' && req.method === 'POST') {
@@ -1801,7 +1928,7 @@ async function startStreamServer(serial, port) {
     }
 
     if (p === '/control') {
-      if (!isAdmin && (sec.isDeviceBlocked || (sec.expectedToken && clientToken !== sec.expectedToken))) {
+      if (!isAdmin && (isExplicitlyBlocked || sec.isDeviceBlocked)) {
         res.writeHead(403, {'Content-Type':'application/json'});
         res.end(JSON.stringify({ error: 'Access revoked' }));
         return;
@@ -1828,7 +1955,8 @@ async function startStreamServer(serial, port) {
     // Prefer the negotiated stream resolution; fall back to physical screen size.
     const playerW = effectiveEngine.videoWidth  > 0 ? effectiveEngine.videoWidth  : effectiveEngine.screenWidth;
     const playerH = effectiveEngine.videoHeight > 0 ? effectiveEngine.videoHeight : effectiveEngine.screenHeight;
-    res.end(buildPlayerHtml(effectiveSerial, playerW, playerH, chatCodeParam));
+    const isCctv = url.searchParams.get('cctv') === '1' || url.searchParams.get('embed') === '1';
+    res.end(buildPlayerHtml(effectiveSerial, playerW, playerH, chatCodeParam, isCctv));
   });
 
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
@@ -1837,7 +1965,15 @@ async function startStreamServer(serial, port) {
   wss.on('connection', async (ws, req) => {
     const wsUrl = new URL(req.url, 'http://localhost');
     const wsUdid = (wsUrl.searchParams.get('udid') || '').trim();
-    const activeWsEntry = getActiveServerEntry(wsUdid) || getActiveServerEntry(serial) || { serial, server, wss, engine };
+    let activeWsEntry = getActiveServerEntry(wsUdid);
+    if (wsUdid && !activeWsEntry) {
+      try {
+        ws.send(JSON.stringify({ type: 'stream_offline', reason: 'Device is offline or disconnected from ADB hardware', serial: wsUdid }));
+      } catch (_) {}
+      ws.close(4004, 'Device Offline');
+      return;
+    }
+    if (!activeWsEntry) activeWsEntry = getActiveServerEntry(serial) || { serial, server, wss, engine };
     const targetSerial = activeWsEntry.serial;
     const targetEngine = activeWsEntry.engine || engine;
     const isAdminWs = checkIsAdminRequest(wsUrl);

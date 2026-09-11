@@ -302,8 +302,8 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                   )}
                 </div>
 
-                {/* Viewport Frame */}
-                <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
+                {/* Viewport Frame (Standard phone 9 / 19.5 aspect ratio) */}
+                <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 19.5', background: '#000', overflow: 'hidden' }}>
                   {isBlocked ? (
                     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#090d16', padding: '16px', textAlign: 'center' }}>
                       <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(239,68,68,0.15)', border: '2px solid rgba(239,68,68,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>
