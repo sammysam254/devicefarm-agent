@@ -13,8 +13,14 @@ export default function PermissionsModal() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Check initial permissions state
+  // Check initial permissions state (only ask once per user/browser)
   useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && localStorage.getItem('df_permissions_prompted')) {
+        return; // Already asked once — do not prompt again
+      }
+    } catch (_) {}
+
     // Check Notification
     const notifGranted = typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
 
@@ -31,20 +37,28 @@ export default function PermissionsModal() {
     };
 
     checkMic().then(micGranted => {
-      const audioGranted = Boolean(sessionStorage.getItem('df_audio_unlocked'));
+      const audioGranted = Boolean(localStorage.getItem('df_audio_unlocked') || sessionStorage.getItem('df_audio_unlocked'));
       setStatus({
         audio: audioGranted,
         mic: micGranted,
         notification: notifGranted
       });
 
-      // If any of the required permissions are missing, show the modal
+      // If any of the required permissions are missing, show the modal ONCE
       if (!audioGranted || !micGranted || !notifGranted) {
         // Determine first incomplete step
         if (!audioGranted) setCurrentStep(0);
         else if (!micGranted) setCurrentStep(1);
         else if (!notifGranted) setCurrentStep(2);
         setIsOpen(true);
+        // Mark as prompted in localStorage so user is never asked repeatedly
+        try {
+          localStorage.setItem('df_permissions_prompted', '1');
+        } catch (_) {}
+      } else {
+        try {
+          localStorage.setItem('df_permissions_prompted', '1');
+        } catch (_) {}
       }
     });
   }, []);
@@ -58,6 +72,7 @@ export default function PermissionsModal() {
         if (ctx.state === 'suspended') ctx.resume();
       }
       playDingSound();
+      localStorage.setItem('df_audio_unlocked', '1');
       sessionStorage.setItem('df_audio_unlocked', '1');
       setStatus(prev => ({ ...prev, audio: true }));
       setErrorMessage('');
@@ -119,9 +134,15 @@ export default function PermissionsModal() {
           setErrorMessage('Notifications were not allowed. You can enable them later in browser settings.');
         }
       }
+      try {
+        localStorage.setItem('df_permissions_prompted', '1');
+      } catch (_) {}
       setCurrentStep(3);
     } catch (err) {
       console.warn('Notification error:', err);
+      try {
+        localStorage.setItem('df_permissions_prompted', '1');
+      } catch (_) {}
       setCurrentStep(3);
     } finally {
       setLoading(false);
@@ -129,6 +150,9 @@ export default function PermissionsModal() {
   };
 
   const handleClose = () => {
+    try {
+      localStorage.setItem('df_permissions_prompted', '1');
+    } catch (_) {}
     setIsOpen(false);
   };
 
