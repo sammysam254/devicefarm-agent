@@ -79,6 +79,8 @@ ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rented_at TIMESTAMP WITH TIM
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS is_stream_blocked BOOLEAN DEFAULT FALSE;
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS stream_blocked_reason TEXT DEFAULT NULL;
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS stream_blocked_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS stream_token TEXT DEFAULT NULL;
+CREATE INDEX IF NOT EXISTS idx_devices_serial_security ON public.devices (serial, is_stream_blocked, status);
 
 -- Ensure device_rentals columns exist for binding code and stream links
 CREATE TABLE IF NOT EXISTS public.device_rentals (
