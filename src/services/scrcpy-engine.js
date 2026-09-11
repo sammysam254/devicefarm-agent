@@ -708,7 +708,7 @@ class ScrcpyEngine extends EventEmitter {
     audioFrame[1] = codec; // 'O' = opus, 'R' = raw
     payload.copy(audioFrame, 2);
 
-    const BACKPRESSURE_LIMIT = 256 * 1024;
+    const BACKPRESSURE_LIMIT = 48 * 1024; // 48KB — skip non-critical audio for slow consumers
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) {
         this.wsClients.delete(ws);
@@ -725,7 +725,7 @@ class ScrcpyEngine extends EventEmitter {
   _broadcastVideo(payload) {
     // Detect if this frame contains a keyframe (IDR/SPS/PPS) — always send these
     const isKeyframe = hasSpsNal(payload) || (payload.length > 4 && (payload[4] & 0x1f) === 5);
-    const BACKPRESSURE_LIMIT = 256 * 1024; // 256KB — skip non-keyframes for slow consumers
+    const BACKPRESSURE_LIMIT = 48 * 1024; // 48KB — drop delta frames immediately if client network lags to enforce sub-second live time
 
     for (const ws of this.wsClients) {
       if (ws.readyState !== 1) {

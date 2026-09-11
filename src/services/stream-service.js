@@ -9,6 +9,7 @@ const logger = require('../utils/logger');
 const ScrcpyEngine = require('./scrcpy-engine');
 const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
+const deviceTimeService = require('./device-time-service');
 
 // ─── Config & ADB ────────────────────────────────────────────────────────────
 
@@ -673,9 +674,14 @@ function handleControl(type, data, serial, engine, ws = null) {
   } else if (type === 'expand_notifications' || type === 'notifications') {
     exec(`"${ADB_BIN}" -s ${serial} shell cmd statusbar expand`);
   } else if (type === 'wake' || type === 'refresh' || type === 'request_keyframe') {
+    if (typeof engine._requestIdrKeyframe === 'function') {
+      engine._requestIdrKeyframe();
+    }
     if (ws && (engine._keyframeBuffer || engine._configPacket)) {
       try { ws.send(engine._keyframeBuffer || engine._configPacket, { binary: true }); } catch (_) {}
     }
+  } else if (type === 'sync_time') {
+    deviceTimeService.syncDeviceTime(serial).catch(() => {});
   }
 }
 
@@ -1260,6 +1266,11 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
+          // Zero-Latency Catchup: If decoder is draining a queued burst, discard stale intermediate frames
+          if (decoder && decoder.decodeQueueSize > 1) {
+            frame.close();
+            return;
+          }
           const w = frame.displayWidth  || frame.codedWidth  || frame.width;
           const h = frame.displayHeight || frame.codedHeight || frame.height;
           if (w && h && (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2)) {
@@ -1361,8 +1372,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       fbRunning = false;
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
       flushQueue();
-      // Nudge Android encoder to send initial keyframe immediately
+      // Nudge Android encoder to send initial keyframe immediately and sync device time
       send({ type: 'wake' });
+      send({ type: 'sync_time' });
       setTimeout(function() {
         if (!hasKeyframe && ws && ws.readyState === 1) {
           send({ type: 'request_keyframe' });
@@ -1458,6 +1470,30 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       }
 
       if (!hasKeyframe) return; // Wait for initial IDR keyframe
+
+      // Anti-Lag Watchdog: Keep stream in real-time. If decoder queue exceeds 2 frames, drop delta frame
+      if (decoder && decoder.decodeQueueSize > 2) {
+        if (!isKey) {
+          return; // Drop non-essential delta frames so decoder catches up instantly
+        } else {
+          // Fresh keyframe arrived: reset decoder to clear stale backlog
+          try {
+            decoder.reset();
+            decoder.configure({
+              codec: 'avc1.42E01E',
+              optimizeForLatency: true,
+              hardwareAcceleration: 'no-preference'
+            });
+            decoderReady = true;
+          } catch (_) {}
+        }
+      } else if (decoder && decoder.decodeQueueSize > 5) {
+        resetDecoder();
+        initDecoder();
+        hasKeyframe = false;
+        send({ type: 'request_keyframe' });
+        return;
+      }
 
       try {
         const chunk = new EncodedVideoChunk({
@@ -1710,6 +1746,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   function reconnectStream() {
     modeText.textContent = 'CONNECTING';
     resetDecoder();
+    send({ type: 'sync_time' });
     connectWS();
   }
 
@@ -1751,6 +1788,26 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
     try { resetDecoder(); } catch (_) {}
     try { if (audioCtx) audioCtx.close(); } catch (_) {}
+  });
+
+  // ── Instant Live Re-sync on Tab Visibility / Wakeup ──────────────────────
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      if (decoder && decoder.state === 'configured') {
+        try {
+          decoder.reset();
+          decoder.configure({
+            codec: 'avc1.42E01E',
+            optimizeForLatency: true,
+            hardwareAcceleration: 'no-preference'
+          });
+        } catch (_) {}
+      }
+      hasKeyframe = false;
+      send({ type: 'wake' });
+      send({ type: 'request_keyframe' });
+      send({ type: 'sync_time' });
+    }
   });
 
   try { initAudio(); } catch (_) {}
@@ -1997,13 +2054,7 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    if (!isAdminWs && sec.expectedToken && wsToken !== sec.expectedToken) {
-      try {
-        ws.send(JSON.stringify({ type: 'stream_blocked', reason: 'Worker stream access has been revoked or expired by an Administrator.', serial: targetSerial }));
-      } catch (_) {}
-      ws.close(4003, 'Stream Access Revoked');
-      return;
-    }
+    // Device block status is verified server-side via sec.isDeviceBlocked
 
     // Register active WS client with token and admin status
     if (!activeWsClients.has(targetSerial)) {
@@ -2014,6 +2065,7 @@ async function startStreamServer(serial, port) {
 
     try { req.socket.setNoDelay(true); } catch (_) {}
     logger.info(`[StreamServer] WS connected for ${targetSerial}`);
+    deviceTimeService.syncDeviceTime(targetSerial).catch(() => {});
     targetEngine.addClient(ws);
 
     ws.on('message', (msg) => {
@@ -2052,6 +2104,10 @@ async function startStreamServer(serial, port) {
             try { ws.send(targetEngine._keyframeBuffer || targetEngine._configPacket, { binary: true }); } catch (_) {}
           }
           targetEngine._requestIdrKeyframe();
+          return;
+        }
+        if (data.type === 'sync_time') {
+          deviceTimeService.syncDeviceTime(targetSerial).catch(() => {});
           return;
         }
         handleControl(data.type, data, targetSerial, targetEngine, ws);

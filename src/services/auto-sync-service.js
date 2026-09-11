@@ -41,6 +41,7 @@ function invalidateModuleCache() {
     './stream-service',
     './scrcpy-engine',
     './stealth-service',
+    './device-time-service',
     './api-client',
     './binding-service',
     './license-service',

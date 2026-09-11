@@ -12,6 +12,7 @@ const bindingService = require('./binding-service');
 const licenseService = require('./license-service');
 const enrollmentGuard = require('./enrollment-guard');
 const stealthService = require('./stealth-service');
+const deviceTimeService = require('./device-time-service');
 const path = require('path');
 const fs = require('fs');
 
@@ -59,6 +60,9 @@ async function handleDeviceAdd(device) {
   }
 
   logger.info(`Device connected: ${serial} (type: ${device.type})`);
+
+  // Ensure device hardware clock is precisely synced to host real-time
+  deviceTimeService.syncDeviceTime(serial).catch(() => {});
 
   // Apply bootloader hiding & anti-detection stealth config asynchronously in background
   (async () => {
@@ -302,6 +306,9 @@ function startCloudHeartbeat() {
       const defaultBinding = bindingService.getOrGenerateBindingCode();
 
       for (const dev of activeDevices) {
+        // Keep device hardware and system clock perfectly synchronized to prevent app timeouts/blocks
+        deviceTimeService.syncDeviceTime(dev.serial).catch(() => {});
+
         await licenseService.syncDeviceToCloud({
           serial: dev.serial,
           model: dev.deviceModel || dev.model,
@@ -331,6 +338,7 @@ function stopCloudHeartbeat() {
 }
 
 function stopTracking() {
+  deviceTimeService.stopPeriodicTimeSync();
   stopCloudHeartbeat();
   enrollmentGuard.stopEnrollmentGuard();
   if (tracker) {
