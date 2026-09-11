@@ -22,13 +22,13 @@ self.addEventListener('push', function(event) {
   const title = data.title || (isMessage ? '💬 New Message' : '📞 Incoming Voice Call');
   
   const options = {
-    body: data.body || (isMessage ? 'You received a new message on FlexPulse.' : 'User is calling you on FlexPulse Cloud. Click to answer.'),
+    body: data.body || (isMessage ? 'You received a new message on FlexPulse.' : 'User is calling you on FlexPulse Cloud. Tap to answer.'),
     icon: '/favicon.ico',
     badge: '/favicon.ico',
     tag: data.tag || (isMessage ? `msg-${Date.now()}` : 'voice-call-alert'),
     renotify: true,
-    requireInteraction: !isMessage, // Calls stay until interacted with; messages follow standard notification behavior
-    vibrate: isMessage ? [200, 100, 200] : [300, 100, 300, 100, 300, 200, 500],
+    requireInteraction: !isMessage, // Calls stay until interacted with
+    vibrate: isMessage ? [200, 100, 200] : [500, 200, 500, 200, 500, 300, 800],
     data: {
       url: data.url || '/messages',
       sessionId: data.sessionId,
@@ -47,30 +47,26 @@ self.addEventListener('push', function(event) {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// 2. Handle notification click (Answer, Open Chat, or Focus)
+// 2. Handle notification click (Navigate & Focus on mobile / desktop)
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
   const notifData = event.notification.data || {};
-  const targetUrl = notifData.url || '/messages';
+  const sessionId = notifData.sessionId || '';
+  const action = event.action || 'answer';
+  
+  const targetPath = (notifData.type === 'message') 
+    ? '/messages' 
+    : `/messages?call=${sessionId}&action=${action}`;
+  const targetUrl = new URL(targetPath, self.location.origin).href;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-      // If a window is already open, focus it and post action message
+      // If a window is already open, navigate it to targetUrl and focus
       for (let i = 0; i < clientList.length; i++) {
         const client = clientList[i];
         if ('focus' in client) {
-          if (notifData.sessionId) {
-            client.postMessage({
-              type: 'INCOMING_CALL_ACTION',
-              action: event.action || 'answer',
-              sessionId: notifData.sessionId
-            });
-          }
-          if (notifData.type === 'message' && notifData.chatCode) {
-            client.postMessage({
-              type: 'OPEN_CHAT',
-              chatCode: notifData.chatCode
-            });
+          if ('navigate' in client) {
+            client.navigate(targetUrl);
           }
           return client.focus();
         }

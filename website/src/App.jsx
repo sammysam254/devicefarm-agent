@@ -11,6 +11,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import WorkerDashboard from './pages/WorkerDashboard';
 import MessagesPage from './pages/MessagesPage';
 import BlockedScreen from './pages/BlockedScreen';
+import CallModal from './components/CallModal';
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth();
@@ -52,6 +53,8 @@ export default function App() {
     <AuthProvider>
       <CallProvider>
         <BrowserRouter>
+          {/* Global incoming/outgoing/connected voice call popup */}
+          <CallModal />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />

@@ -100,40 +100,84 @@ export function CallProvider({ children }) {
     }
   }, [profile?.chat_code, profile?.id]);
 
-  // 2. Check for active incoming calls on startup / window focus (wakes up receiver)
+  // 2. Check for active incoming calls on startup / URL / window focus / mobile visibility
   useEffect(() => {
-    if (!profile?.chat_code) return;
-
-    const checkPendingCalls = async () => {
+    const checkIncomingAndUrlCalls = async () => {
       if (callStateRef.current) return;
-      try {
-        const cutoff = new Date(Date.now() - 45000).toISOString();
-        const { data: pending } = await supabase
-          .from('call_sessions')
-          .select('*')
-          .eq('recipient_chat_code', profile.chat_code)
-          .eq('status', 'ringing')
-          .gt('created_at', cutoff)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
 
-        if (pending && !callStateRef.current) {
-          activeSessionIdRef.current = pending.id;
+      try {
+        let incomingSession = null;
+
+        // A. Check if URL has ?call=SESSION_ID (e.g. from notification tap)
+        if (typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          const callId = params.get('call');
+
+          if (callId) {
+            const { data: byId } = await supabase
+              .from('call_sessions')
+              .select('*')
+              .eq('id', callId)
+              .maybeSingle();
+
+            if (byId && byId.status === 'ringing') {
+              incomingSession = byId;
+            }
+          }
+        }
+
+        // B. Check if active user has any ringing call in last 50s
+        if (!incomingSession && profile?.chat_code) {
+          const cutoff = new Date(Date.now() - 50000).toISOString();
+          const { data: pending } = await supabase
+            .from('call_sessions')
+            .select('*')
+            .eq('recipient_chat_code', profile.chat_code)
+            .eq('status', 'ringing')
+            .gt('created_at', cutoff)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (pending) {
+            incomingSession = pending;
+          }
+        }
+
+        if (incomingSession && !callStateRef.current) {
+          activeSessionIdRef.current = incomingSession.id;
           setCallState({
             type: 'incoming',
-            session: pending,
-            partnerEmail: pending.caller_email || `User #${pending.caller_chat_code}`,
-            partnerCode: pending.caller_chat_code
+            session: incomingSession,
+            partnerEmail: incomingSession.caller_email || `User #${incomingSession.caller_chat_code}`,
+            partnerCode: incomingSession.caller_chat_code
           });
           playRingtone();
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[CallContext] Error checking incoming calls:', err);
+      }
     };
 
-    checkPendingCalls();
-    window.addEventListener('focus', checkPendingCalls);
-    return () => window.removeEventListener('focus', checkPendingCalls);
+    checkIncomingAndUrlCalls();
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        checkIncomingAndUrlCalls();
+      }
+    };
+
+    window.addEventListener('focus', checkIncomingAndUrlCalls);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Periodic check every 3s to guarantee mobile popup even if WebSocket was sleeping
+    const pollIncoming = setInterval(checkIncomingAndUrlCalls, 3000);
+
+    return () => {
+      window.removeEventListener('focus', checkIncomingAndUrlCalls);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(pollIncoming);
+    };
   }, [profile?.chat_code]);
 
   // Initialize hidden remote audio element in DOM

@@ -32,9 +32,6 @@ export default function DashboardLayout({ children }) {
         </main>
       </div>
 
-      {/* Global Call UI (Incoming / Outgoing / Active Voice Call) */}
-      <CallModal />
-
       {/* Step-by-step Onboarding Permissions Modal */}
       <PermissionsModal />
     </div>
