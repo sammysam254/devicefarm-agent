@@ -631,10 +631,16 @@ function handleControl(type, data, serial, engine, ws = null) {
     const hscroll = parseFloat(get(data, 'hscroll')) || 0;
     const vscroll = parseFloat(get(data, 'vscroll')) || 0;
     engine.sendScrollEvent(x, y, W, H, hscroll, vscroll);
-  } else if (type === 'tap') {
+  } else if (type === 'tap' || type === 'tap_fallback') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    engine.sendTouchEvent(0, x, y, W, H, 1.0);
-    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
+    const realX = Math.round((x / W) * (engine.screenWidth || W));
+    const realY = Math.round((y / H) * (engine.screenHeight || H));
+    if (type === 'tap') {
+      engine.sendTouchEvent(0, x, y, W, H, 1.0);
+      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
+    }
+    // Guaranteed direct kernel tap via persistent adb shell
+    try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
   } else if (type === 'swipe') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
     if (activeSwipeTimers.has(serial)) {
@@ -1564,16 +1570,31 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     // Use canvas size first (actual rendered), fall back to nativeW/H, then server defaults
     const canvasW = canvas.width || nativeW || ${screenW};
     const canvasH = canvas.height || nativeH || ${screenH};
-    
-    // rect dimensions (CSS pixels on screen)
     const rectW = r.width || canvasW;
     const rectH = r.height || canvasH;
-    
-    // Prevent division by zero
     if (rectW <= 0 || rectH <= 0) return { x: 0, y: 0, cx, cy };
-    
-    const x = Math.round((cx - r.left) * (canvasW / rectW));
-    const y = Math.round((cy - r.top)  * (canvasH / rectH));
+
+    // Precise letterboxing & pillarboxing calculation for object-fit: contain
+    const canvasAspect = canvasW / canvasH;
+    const rectAspect = rectW / rectH;
+    let renderedW = rectW, renderedH = rectH;
+    let offsetX = 0, offsetY = 0;
+
+    if (rectAspect > canvasAspect) {
+      // Container is wider than video aspect ratio: black bars on left and right
+      renderedW = rectH * canvasAspect;
+      offsetX = (rectW - renderedW) / 2;
+    } else if (rectAspect < canvasAspect) {
+      // Container is taller than video aspect ratio: black bars on top and bottom
+      renderedH = rectW / canvasAspect;
+      offsetY = (rectH - renderedH) / 2;
+    }
+
+    const relX = cx - r.left - offsetX;
+    const relY = cy - r.top - offsetY;
+
+    const x = Math.round(relX * (canvasW / renderedW));
+    const y = Math.round(relY * (canvasH / renderedH));
     
     return {
       x: Math.max(0, Math.min(canvasW - 1, x)),
@@ -1587,14 +1608,20 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   let activePointerId = null;
   let pendingMove = null;
   let moveRafId = null;
+  let downStartPos = { x: 0, y: 0 };
+  let downStartTime = 0;
+  let hasMovedFar = false;
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     down = true;
+    hasMovedFar = false;
     activePointerId = e.pointerId;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
+    downStartPos = { x: c.x, y: c.y };
+    downStartTime = Date.now();
     send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
   }, { passive: false });
 
@@ -1603,6 +1630,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     e.preventDefault();
     if (activePointerId !== null && e.pointerId !== activePointerId) return;
     const c = coords(e);
+    if (Math.abs(c.x - downStartPos.x) > 12 || Math.abs(c.y - downStartPos.y) > 12) {
+      hasMovedFar = true;
+    }
     pendingMove = c;
     if (!moveRafId) {
       moveRafId = requestAnimationFrame(() => {
@@ -1625,6 +1655,12 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
     const c = coords(e || {});
     send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+
+    // Resilient Dual-Dispatch: If it was a clean stationary tap (short duration, didn't drag),
+    // trigger tap_fallback so apps with security flags or resolution glitches register the touch 100%
+    if (!hasMovedFar && (Date.now() - downStartTime) < 450) {
+      send({ type:'tap_fallback', x:c.x, y:c.y, width:nativeW, height:nativeH });
+    }
   }
 
   canvas.addEventListener('pointerup', releasePointer, { passive: false });

@@ -100,18 +100,14 @@ async function applyDeviceStealth(serial, stealthRootEnabled = true) {
     'settings put global package_verifier_enable 1',
     'settings put system show_touches 0',
     'settings put system pointer_location 0',
-    'settings put global stay_awake 0',
-    'settings put system stay_awake 0',
+    'settings put global stay_awake 3',
+    'settings put system stay_awake 3',
   ];
 
-  // 3. Hide Remote Control & Accessibility Service flags & Input Method automation signatures
+  // 3. Ensure input injection and remote control are permitted across all devices & apps
   const remoteControlCmds = [
-    'settings put secure accessibility_enabled 0',
-    'settings put secure enabled_accessibility_services ""',
-    'settings put global remote_control_enabled 0',
-    'settings put secure remote_control_enabled 0',
-    'settings put secure touch_exploration_enabled 0',
-    'settings put secure set_accessibility_services_ready 1',
+    'settings put global remote_control_enabled 1',
+    'settings put secure remote_control_enabled 1',
   ];
 
   // 4. Enforce Real Physical Location & Network Time Consistency

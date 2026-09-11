@@ -617,6 +617,8 @@ class ScrcpyEngine extends EventEmitter {
               }
               this.videoWidth  = spsW;
               this.videoHeight = spsH;
+              this.scrcpyServerWidth = spsW;
+              this.scrcpyServerHeight = spsH;
             }
           } catch (err) {
             logger.warn(`[ScrcpyEngine ${this.serial}] SPS parse error: ${err.message}`);
@@ -836,17 +838,15 @@ class ScrcpyEngine extends EventEmitter {
       return false;
     }
 
-    // Use scrcpyServerWidth/Height (the EXACT videoSize scrcpy server negotiated on device)
-    // This guarantees scrcpy server never drops touch events with "different device size" mismatch
-    let targetW = this.scrcpyServerWidth || this.videoWidth;
-    let targetH = this.scrcpyServerHeight || this.videoHeight;
-    if (!targetW || !targetH) {
-      targetW = this.screenWidth || 1080;
-      targetH = this.screenHeight || 2340;
-    }
+    // Determine target resolution. Must strictly match the scrcpy-server videoSize on device.
+    // Client width/height comes from the WebCodecs decoded frame (live truth).
+    const clientW = (width > 10) ? Math.round(width) : 0;
+    const clientH = (height > 10) ? Math.round(height) : 0;
+    const targetW = this.videoWidth || this.scrcpyServerWidth || clientW || this.screenWidth || 1080;
+    const targetH = this.videoHeight || this.scrcpyServerHeight || clientH || this.screenHeight || 2340;
 
-    const srcW = (width  > 10) ? width  : targetW;
-    const srcH = (height > 10) ? height : targetH;
+    const srcW = clientW || targetW;
+    const srcH = clientH || targetH;
     
     const scaledX = Math.round((x / srcW) * targetW);
     const scaledY = Math.round((y / srcH) * targetH);
@@ -858,7 +858,12 @@ class ScrcpyEngine extends EventEmitter {
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
-    const pId = typeof pointerId === 'bigint' ? pointerId : BigInt(pointerId || 0);
+
+    // In scrcpy, mouse/single-touch pointing uses POINTER_ID_MOUSE = -1n (0xFFFFFFFFFFFFFFFFn)
+    // This allows actionButton & buttons to be processed cleanly by Android InputManager without pointer-index tracking drops
+    const pId = (pointerId === 0 || pointerId === undefined)
+      ? BigInt('-1')
+      : (typeof pointerId === 'bigint' ? pointerId : BigInt(pointerId));
     buf.writeBigInt64BE(pId, 2);          // pointerId
     buf.writeInt32BE(finalX, 10);
     buf.writeInt32BE(finalY, 14);
@@ -892,10 +897,12 @@ class ScrcpyEngine extends EventEmitter {
    */
   sendScrollEvent(x, y, width, height, hScroll = 0, vScroll = 0) {
     if (!this.controlSocket || this.controlSocket.destroyed) return false;
-    let targetW = this.scrcpyServerWidth || this.videoWidth || this.screenWidth || 1080;
-    let targetH = this.scrcpyServerHeight || this.videoHeight || this.screenHeight || 2340;
-    const srcW = (width > 10) ? width : targetW;
-    const srcH = (height > 10) ? height : targetH;
+    const clientW = (width > 10) ? Math.round(width) : 0;
+    const clientH = (height > 10) ? Math.round(height) : 0;
+    const targetW = this.videoWidth || this.scrcpyServerWidth || clientW || this.screenWidth || 1080;
+    const targetH = this.videoHeight || this.scrcpyServerHeight || clientH || this.screenHeight || 2340;
+    const srcW = clientW || targetW;
+    const srcH = clientH || targetH;
     const finalX = Math.max(0, Math.min(targetW - 1, Math.round((x / srcW) * targetW)));
     const finalY = Math.max(0, Math.min(targetH - 1, Math.round((y / srcH) * targetH)));
 
