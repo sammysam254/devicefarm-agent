@@ -8,6 +8,7 @@ import SeedAdminDashboard from './pages/SeedAdminDashboard';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import WorkerDashboard from './pages/WorkerDashboard';
+import MessagesPage from './pages/MessagesPage';
 import BlockedScreen from './pages/BlockedScreen';
 
 function ProtectedRoute({ children, allowedRoles }) {
@@ -86,6 +87,15 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={['worker']}>
                 <WorkerDashboard />
+              </ProtectedRoute>
+            } 
+          />
+
+          <Route 
+            path="/messages" 
+            element={
+              <ProtectedRoute allowedRoles={['worker', 'admin', 'super_admin', 'seed_admin']}>
+                <MessagesPage />
               </ProtectedRoute>
             } 
           />

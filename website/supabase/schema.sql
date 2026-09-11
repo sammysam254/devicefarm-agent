@@ -230,10 +230,65 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'profiles') THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'device_rentals') THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.device_rentals;
-  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'system_settings') THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings;
+  END IF;
+END $$;
+
+-- 6. CHAT CODES & MESSAGING SYSTEM
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS chat_code TEXT UNIQUE;
+
+-- Generate 6-digit chat codes for any profile missing one
+UPDATE public.profiles 
+SET chat_code = floor(random() * (999999 - 100000 + 1) + 100000)::text 
+WHERE chat_code IS NULL;
+
+-- Function to auto-assign 6-digit code on new user creation
+CREATE OR REPLACE FUNCTION generate_chat_code()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.chat_code IS NULL OR NEW.chat_code = '' THEN
+    NEW.chat_code := floor(random() * (999999 - 100000 + 1) + 100000)::text;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_generate_chat_code ON public.profiles;
+CREATE TRIGGER trigger_generate_chat_code
+BEFORE INSERT ON public.profiles
+FOR EACH ROW
+EXECUTE FUNCTION generate_chat_code();
+
+-- Create chat_messages table
+CREATE TABLE IF NOT EXISTS public.chat_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sender_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    sender_email TEXT,
+    sender_chat_code TEXT NOT NULL,
+    recipient_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    recipient_chat_code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_recipient ON public.chat_messages(recipient_chat_code, is_read);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON public.chat_messages(sender_chat_code);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON public.chat_messages(created_at);
+
+ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read chat_messages" ON public.chat_messages;
+CREATE POLICY "Allow public read chat_messages" ON public.chat_messages FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow all write chat_messages" ON public.chat_messages;
+CREATE POLICY "Allow all write chat_messages" ON public.chat_messages FOR ALL USING (true);
+
+-- Enable REPLICA IDENTITY FULL and Realtime broadcasting
+ALTER TABLE public.chat_messages REPLICA IDENTITY FULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'chat_messages') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_messages;
   END IF;
 END $$;

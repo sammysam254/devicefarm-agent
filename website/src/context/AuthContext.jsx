@@ -72,13 +72,21 @@ export function AuthProvider({ children }) {
       if (error && error.code === 'PGRST116') {
         // Fallback profile creation
         const isSeed = currentUser.email?.toLowerCase() === 'sammyseth260@gmail.com';
+        const generatedCode = String(Math.floor(100000 + Math.random() * 900000));
         const { data: newProf } = await supabase.from('profiles').insert([{
           id: currentUser.id,
           email: currentUser.email,
           role: isSeed ? 'seed_admin' : 'worker',
           is_blocked: false,
+          chat_code: generatedCode,
         }]).select().single();
         data = newProf;
+      }
+
+      if (data && !data.chat_code) {
+        const generatedCode = String(Math.floor(100000 + Math.random() * 900000));
+        await supabase.from('profiles').update({ chat_code: generatedCode }).eq('id', currentUser.id);
+        data.chat_code = generatedCode;
       }
 
       setProfile(data);

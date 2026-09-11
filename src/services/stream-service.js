@@ -542,7 +542,7 @@ function handleControl(type, data, serial, engine, ws = null) {
 
 // ─── Player HTML (WebCodecs H264 decoder + screencap fallback) ───────────────
 
-function buildPlayerHtml(serial, screenW, screenH) {
+function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '') {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -586,6 +586,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .mbox{background:#0f172a;border:1px solid rgba(56,189,248,.4);border-radius:14px;padding:18px;width:90%;max-width:380px;box-shadow:0 20px 30px rgba(0,0,0,.6)}
     .minput{width:100%;padding:9px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:9px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
     .mbtn{width:100%;padding:9px;background:#38bdf8;color:#0f172a;border:none;border-radius:9px;font-weight:700;cursor:pointer}
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translate(-50%, -18px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
 
     @media (max-width: 580px){
       .stage{padding:4px;gap:6px}
@@ -670,6 +675,26 @@ function buildPlayerHtml(serial, screenW, screenH) {
   </div>
 </div>
 
+<!-- Floating In-Stream Live Chat Alert Popup (10s auto-dismiss & Ding Sound) -->
+<div id="streamChatPopup" style="display:none;position:fixed;top:54px;left:50%;transform:translateX(-50%);z-index:25;background:rgba(15,23,42,0.95);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.5);box-shadow:0 12px 36px rgba(0,0,0,0.8),0 0 25px rgba(56,189,248,0.3);border-radius:16px;padding:14px 20px;max-width:440px;width:calc(100% - 32px);animation:slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);pointer-events:auto;user-select:none;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="font-size:16px;">💬</span>
+      <span style="font-size:11px;font-weight:800;color:#38bdf8;letter-spacing:0.5px;text-transform:uppercase;">Incoming Message</span>
+      <span id="chatSenderBadge" style="background:rgba(56,189,248,0.15);color:#7dd3fc;border:1px solid rgba(56,189,248,0.3);padding:2px 8px;border-radius:100px;font-size:10px;font-family:monospace;font-weight:700;">#000000</span>
+    </div>
+    <button onclick="dismissChatPopup()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;" title="Dismiss">&times;</button>
+  </div>
+  <div id="chatSenderEmail" style="font-size:11px;color:#94a3b8;margin-bottom:4px;font-weight:600;">Sender</div>
+  <div id="chatMessageText" style="font-size:13px;color:#f8fafc;line-height:1.4;word-break:break-word;max-height:80px;overflow-y:auto;font-weight:500;">
+    Message text here...
+  </div>
+  <!-- 10-second auto-close progress bar -->
+  <div style="width:100%;height:3px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;margin-top:10px;">
+    <div id="chatProgressBar" style="height:100%;background:linear-gradient(90deg,#38bdf8,#0ea5e9);width:100%;"></div>
+  </div>
+</div>
+
 <!-- Stream Blocked Fullscreen Overlay -->
 <div id="streamBlockedOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,9,17,0.97);backdrop-filter:blur(16px);z-index:9999;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;">
   <div style="background:#0f172a;border:1px solid rgba(239,68,68,0.45);border-radius:24px;padding:40px 32px;max-width:480px;width:100%;box-shadow:0 0 50px rgba(239,68,68,0.25);">
@@ -694,6 +719,96 @@ function buildPlayerHtml(serial, screenW, screenH) {
 </div>
 
 <script>
+  // ── In-Stream Chat Alert & Ding Audio ─────────────────────────────────────
+  const ownerChatCode = '${ownerChatCode || ''}' || (new URLSearchParams(window.location.search)).get('chat_code') || '';
+  let lastChatPolledTime = Date.now();
+  let chatDismissTimer = null;
+
+  function playStreamDing() {
+    try {
+      const actx = window.AudioContext ? new (window.AudioContext || window.webkitAudioContext)() : null;
+      if (!actx) return;
+      if (actx.state === 'suspended') actx.resume().catch(function(){});
+      const tones = [
+        { freq: 1760.0, delay: 0, gain: 0.32, decay: 0.65 },
+        { freq: 2637.0, delay: 0.08, gain: 0.28, decay: 0.60 }
+      ];
+      tones.forEach(function(t) {
+        const st = actx.currentTime + t.delay;
+        const osc = actx.createOscillator();
+        const gn = actx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(t.freq, st);
+        gn.gain.setValueAtTime(0.001, st);
+        gn.gain.exponentialRampToValueAtTime(t.gain, st + 0.015);
+        gn.gain.exponentialRampToValueAtTime(0.0001, st + t.decay);
+        osc.connect(gn);
+        gn.connect(actx.destination);
+        osc.start(st);
+        osc.stop(st + t.decay + 0.05);
+      });
+    } catch(e) {}
+  }
+
+  function showInStreamChat(senderEmail, senderCode, text) {
+    playStreamDing();
+    const popup = document.getElementById('streamChatPopup');
+    const badgeEl = document.getElementById('chatSenderBadge');
+    const emailEl = document.getElementById('chatSenderEmail');
+    const textEl = document.getElementById('chatMessageText');
+    const barEl = document.getElementById('chatProgressBar');
+
+    if (!popup) return;
+    if (badgeEl) badgeEl.textContent = '#' + (senderCode || '------');
+    if (emailEl) emailEl.textContent = senderEmail || ('User #' + senderCode);
+    if (textEl) textEl.textContent = text || '';
+
+    if (barEl) {
+      barEl.style.transition = 'none';
+      barEl.style.width = '100%';
+      void barEl.offsetWidth;
+      barEl.style.transition = 'width 10s linear';
+      barEl.style.width = '0%';
+    }
+
+    popup.style.display = 'block';
+
+    if (chatDismissTimer) clearTimeout(chatDismissTimer);
+    chatDismissTimer = setTimeout(dismissChatPopup, 10000);
+  }
+
+  function dismissChatPopup() {
+    if (chatDismissTimer) { clearTimeout(chatDismissTimer); chatDismissTimer = null; }
+    const popup = document.getElementById('streamChatPopup');
+    if (popup) popup.style.display = 'none';
+  }
+
+  if (ownerChatCode) {
+    const SUPABASE_REST = 'https://lazdyihryfvrlczczvxz.supabase.co/rest/v1';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNzYxNjgsImV4cCI6MjEwMjk1MjE2OH0.fUBdMbDgV8e0Fk4mfVB8DqQc88vrw8oA6MdHXHFsXAs';
+
+    setInterval(function() {
+      if (isStreamBlocked) return;
+      fetch(SUPABASE_REST + '/chat_messages?recipient_chat_code=eq.' + encodeURIComponent(ownerChatCode) + '&order=created_at.desc&limit=1', {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + SUPABASE_KEY
+        }
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(rows) {
+        if (Array.isArray(rows) && rows.length > 0) {
+          const m = rows[0];
+          const mTime = new Date(m.created_at).getTime();
+          if (mTime > lastChatPolledTime) {
+            lastChatPolledTime = mTime;
+            showInStreamChat(m.sender_email, m.sender_chat_code, m.message);
+          }
+        }
+      })
+      .catch(function() {});
+    }, 2500);
+  }
   let isStreamBlocked = false;
   function showBlockedScreen(reason) {
     isStreamBlocked = true;
@@ -1483,7 +1598,7 @@ async function startStreamServer(serial, port) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:;");
+    res.setHeader('Content-Security-Policy', "default-src 'self' https://*.supabase.co wss://*.supabase.co; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss: https://*.supabase.co wss://*.supabase.co;");
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const licenseInfo = await getCachedLicenseStatus();
@@ -1615,11 +1730,24 @@ async function startStreamServer(serial, port) {
       res.end('{"status":"ok"}'); return;
     }
 
+    let chatCodeParam = (url.searchParams.get('chat_code') || '').trim();
+    if (!chatCodeParam) {
+      try {
+        const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
+        if (client) {
+          const assignRes = await client.get(`/device_assignments?serial=eq.${encodeURIComponent(effectiveSerial)}&select=profiles(chat_code)&limit=1`);
+          if (assignRes.data && assignRes.data[0]?.profiles?.chat_code) {
+            chatCodeParam = assignRes.data[0].profiles.chat_code;
+          }
+        }
+      } catch (_) {}
+    }
+
     res.writeHead(200, {'Content-Type':'text/html'});
     // Prefer the negotiated stream resolution; fall back to physical screen size.
     const playerW = effectiveEngine.videoWidth  > 0 ? effectiveEngine.videoWidth  : effectiveEngine.screenWidth;
     const playerH = effectiveEngine.videoHeight > 0 ? effectiveEngine.videoHeight : effectiveEngine.screenHeight;
-    res.end(buildPlayerHtml(effectiveSerial, playerW, playerH));
+    res.end(buildPlayerHtml(effectiveSerial, playerW, playerH, chatCodeParam));
   });
 
   // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────

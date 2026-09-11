@@ -1,15 +1,67 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Shield, Server, Users, Smartphone, X, Key } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { playDingSound } from '../lib/soundEffects';
+import { Shield, Server, Users, Smartphone, MessageSquare, X, Key } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
   const { profile } = useAuth();
+  const [unreadCount, setUnreadCount] = useState(0);
   const role = profile?.role || 'worker';
 
   const isSeed = role === 'seed_admin';
   const isSuper = role === 'super_admin' || isSeed;
   const isAdmin = role === 'admin' || isSuper;
+
+  useEffect(() => {
+    if (!profile?.chat_code) return;
+
+    const fetchUnread = async () => {
+      try {
+        const { count, error } = await supabase
+          .from('chat_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('recipient_chat_code', profile.chat_code)
+          .eq('is_read', false);
+
+        if (!error && typeof count === 'number') {
+          setUnreadCount(count);
+        }
+      } catch (e) {
+        console.warn('Error fetching unread messages count:', e);
+      }
+    };
+
+    fetchUnread();
+
+    const channel = supabase
+      .channel(`chat-sidebar-${profile.chat_code}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'chat_messages',
+        filter: `recipient_chat_code=eq.${profile.chat_code}`,
+      }, (payload) => {
+        if (!payload.new.is_read) {
+          setUnreadCount(prev => prev + 1);
+          playDingSound();
+        }
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'chat_messages',
+        filter: `recipient_chat_code=eq.${profile.chat_code}`,
+      }, () => {
+        fetchUnread();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile?.chat_code]);
 
   const linkStyle = ({ isActive }) => ({
     display: 'flex',
@@ -85,6 +137,31 @@ export default function Sidebar({ isOpen, onClose }) {
 
         <NavLink to="/worker" onClick={onClose} style={linkStyle}>
           <Smartphone size={18} /> My Assigned Devices
+        </NavLink>
+
+        <NavLink to="/messages" onClick={onClose} style={linkStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+            <MessageSquare size={18} />
+            <span>Messages</span>
+          </div>
+          {unreadCount > 0 && (
+            <span style={{
+              background: '#ef4444',
+              color: '#ffffff',
+              fontSize: '11px',
+              fontWeight: 800,
+              padding: '2px 7px',
+              borderRadius: '999px',
+              lineHeight: 1,
+              boxShadow: '0 0 10px rgba(239, 68, 68, 0.6)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: '18px'
+            }}>
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
         </NavLink>
 
         <div style={{ marginTop: 'auto', padding: '14px', background: 'var(--bg-main)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
