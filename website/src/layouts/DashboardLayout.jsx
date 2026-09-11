@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import Sidebar from '../components/Sidebar';
+import CallModal from '../components/CallModal';
+import PermissionsModal from '../components/PermissionsModal';
 
 export default function DashboardLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -29,6 +31,12 @@ export default function DashboardLayout({ children }) {
           {children}
         </main>
       </div>
+
+      {/* Global Call UI (Incoming / Outgoing / Active Voice Call) */}
+      <CallModal />
+
+      {/* Step-by-step Onboarding Permissions Modal */}
+      <PermissionsModal />
     </div>
   );
 }

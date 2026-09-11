@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { CallProvider } from './context/CallContext';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
@@ -49,60 +50,62 @@ function ProtectedRoute({ children, allowedRoles }) {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
+      <CallProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
 
-          <Route 
-            path="/seed-admin" 
-            element={
-              <ProtectedRoute allowedRoles={['seed_admin']}>
-                <SeedAdminDashboard />
-              </ProtectedRoute>
-            } 
-          />
+            <Route 
+              path="/seed-admin" 
+              element={
+                <ProtectedRoute allowedRoles={['seed_admin']}>
+                  <SeedAdminDashboard />
+                </ProtectedRoute>
+              } 
+            />
 
-          <Route 
-            path="/super-admin" 
-            element={
-              <ProtectedRoute allowedRoles={['super_admin']}>
-                <SuperAdminDashboard />
-              </ProtectedRoute>
-            } 
-          />
+            <Route 
+              path="/super-admin" 
+              element={
+                <ProtectedRoute allowedRoles={['super_admin']}>
+                  <SuperAdminDashboard />
+                </ProtectedRoute>
+              } 
+            />
 
-          <Route 
-            path="/admin" 
-            element={
-              <ProtectedRoute allowedRoles={['admin']}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            } 
-          />
+            <Route 
+              path="/admin" 
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              } 
+            />
 
-          <Route 
-            path="/worker" 
-            element={
-              <ProtectedRoute allowedRoles={['worker']}>
-                <WorkerDashboard />
-              </ProtectedRoute>
-            } 
-          />
+            <Route 
+              path="/worker" 
+              element={
+                <ProtectedRoute allowedRoles={['worker']}>
+                  <WorkerDashboard />
+                </ProtectedRoute>
+              } 
+            />
 
-          <Route 
-            path="/messages" 
-            element={
-              <ProtectedRoute allowedRoles={['worker', 'admin', 'super_admin', 'seed_admin']}>
-                <MessagesPage />
-              </ProtectedRoute>
-            } 
-          />
+            <Route 
+              path="/messages" 
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'admin', 'super_admin', 'seed_admin']}>
+                  <MessagesPage />
+                </ProtectedRoute>
+              } 
+            />
 
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </BrowserRouter>
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </CallProvider>
     </AuthProvider>
   );
 }

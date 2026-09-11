@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import SEO from '../components/SEO';
 import { useAuth } from '../context/AuthContext';
+import { useCall } from '../context/CallContext';
 import { supabase } from '../lib/supabase';
 import { playDingSound } from '../lib/soundEffects';
 import { 
@@ -17,7 +18,10 @@ import {
   User, 
   ShieldCheck, 
   RefreshCw,
-  ArrowLeft
+  ArrowLeft,
+  Phone,
+  PhoneOff,
+  AlertCircle
 } from 'lucide-react';
 
 export default function MessagesPage() {
@@ -42,6 +46,10 @@ export default function MessagesPage() {
   const [loadingDirectory, setLoadingDirectory] = useState(false);
   const [copiedCodeMap, setCopiedCodeMap] = useState({});
 
+  // Voice calling & presence integration
+  const { startCall, onlineChatCodes } = useCall();
+  const [callNotice, setCallNotice] = useState(null);
+
   const messagesEndRef = useRef(null);
   const chatChannelRef = useRef(null);
 
@@ -62,6 +70,30 @@ export default function MessagesPage() {
     setTimeout(() => {
       setCopiedCodeMap(prev => ({ ...prev, [code]: false }));
     }, 2000);
+  };
+
+  // Voice call initiator with offline sound & notice handling
+  const handleInitiateCall = async (targetCode, targetEmail) => {
+    const code = targetCode || activePartnerCode;
+    const email = targetEmail || activePartnerInfo?.email;
+    if (!code) return;
+
+    setCallNotice(null);
+    const res = await startCall(code, email);
+    if (!res?.success) {
+      if (res?.reason === 'offline') {
+        setCallNotice({
+          type: 'error',
+          message: `User #${code} is currently offline (not active on site).`
+        });
+      } else {
+        setCallNotice({
+          type: 'error',
+          message: res?.message || 'Call could not be connected. Please verify microphone permissions.'
+        });
+      }
+      setTimeout(() => setCallNotice(null), 6000);
+    }
   };
 
   // 1. Fetch Conversations list for the current user
@@ -511,6 +543,16 @@ export default function MessagesPage() {
           .msg-input-field {
             font-size: 16px !important; /* Prevents auto-zoom on iOS Safari */
           }
+
+          .call-btn-text {
+            display: inline;
+          }
+
+          @media (max-width: 640px) {
+            .call-btn-text {
+              display: none;
+            }
+          }
         }
       `}</style>
 
@@ -865,20 +907,86 @@ export default function MessagesPage() {
                             #{activePartnerCode}
                           </span>
                           <span style={{ color: 'var(--text-dim)' }}>•</span>
-                          <span style={{ color: '#22c55e', fontWeight: 600 }}>Active</span>
+                          {onlineChatCodes?.has(activePartnerCode) ? (
+                            <span style={{ color: '#22c55e', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e' }} />
+                              Online
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-dim)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#64748b' }} />
+                              Offline
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => handleCopyAnyCode(activePartnerCode)}
-                      className="btn btn-secondary"
-                      style={{ padding: '6px 10px', fontSize: '11px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-                    >
-                      {copiedCodeMap[activePartnerCode] ? <Check size={12} color="#22c55e" /> : <Copy size={12} />}
-                      <span>{copiedCodeMap[activePartnerCode] ? 'Copied' : 'Copy'}</span>
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {/* Voice Call Button */}
+                      <button
+                        onClick={() => handleInitiateCall(activePartnerCode, activePartnerInfo?.email)}
+                        className="btn"
+                        style={{
+                          padding: '6px 12px',
+                          fontSize: '12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'linear-gradient(135deg, #10b981, #059669)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          color: '#fff',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)',
+                          transition: 'all 0.2s ease',
+                          flexShrink: 0
+                        }}
+                        title={`Voice Call User #${activePartnerCode}`}
+                      >
+                        <Phone size={13} />
+                        <span className="call-btn-text">Voice Call</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleCopyAnyCode(activePartnerCode)}
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 10px', fontSize: '11px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+                      >
+                        {copiedCodeMap[activePartnerCode] ? <Check size={12} color="#22c55e" /> : <Copy size={12} />}
+                        <span>{copiedCodeMap[activePartnerCode] ? 'Copied' : 'Copy'}</span>
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Offline / Call Status Banner */}
+                  {callNotice && (
+                    <div style={{
+                      padding: '10px 14px',
+                      background: 'rgba(239, 68, 68, 0.15)',
+                      borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
+                      color: '#fca5a5',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      animation: 'fadeIn 0.2s ease'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <AlertCircle size={15} color="#ef4444" style={{ flexShrink: 0 }} />
+                        <span>{callNotice.message}</span>
+                      </div>
+                      <button 
+                        onClick={() => setCallNotice(null)} 
+                        style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
 
                   {/* Message Stream */}
                   <div style={{
@@ -1199,23 +1307,48 @@ export default function MessagesPage() {
                           </td>
 
                           <td style={{ padding: '12px', textAlign: 'right' }}>
-                            <button
-                              disabled={isMe || !u.chat_code}
-                              onClick={() => selectPartner(u.chat_code, u.email)}
-                              className="btn btn-primary"
-                              style={{
-                                padding: '5px 12px',
-                                fontSize: '11px',
-                                borderRadius: '6px',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                opacity: (isMe || !u.chat_code) ? 0.4 : 1,
-                                cursor: (isMe || !u.chat_code) ? 'not-allowed' : 'pointer'
-                              }}
-                            >
-                              <MessageSquare size={12} /> Chat Now
-                            </button>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                              <button
+                                disabled={isMe || !u.chat_code}
+                                onClick={() => handleInitiateCall(u.chat_code, u.email)}
+                                className="btn"
+                                style={{
+                                  padding: '5px 10px',
+                                  fontSize: '11px',
+                                  borderRadius: '6px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: 'rgba(16, 185, 129, 0.15)',
+                                  color: '#34d399',
+                                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                                  fontWeight: 600,
+                                  opacity: (isMe || !u.chat_code) ? 0.4 : 1,
+                                  cursor: (isMe || !u.chat_code) ? 'not-allowed' : 'pointer'
+                                }}
+                                title="Call User"
+                              >
+                                <Phone size={11} /> Call
+                              </button>
+
+                              <button
+                                disabled={isMe || !u.chat_code}
+                                onClick={() => selectPartner(u.chat_code, u.email)}
+                                className="btn btn-primary"
+                                style={{
+                                  padding: '5px 12px',
+                                  fontSize: '11px',
+                                  borderRadius: '6px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  opacity: (isMe || !u.chat_code) ? 0.4 : 1,
+                                  cursor: (isMe || !u.chat_code) ? 'not-allowed' : 'pointer'
+                                }}
+                              >
+                                <MessageSquare size={12} /> Chat Now
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

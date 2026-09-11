@@ -292,3 +292,40 @@ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_messages;
   END IF;
 END $$;
+
+-- 7. VOICE CALLING & PRESENCE SYSTEM
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS public.call_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    caller_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    caller_chat_code TEXT NOT NULL,
+    caller_email TEXT,
+    recipient_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    recipient_chat_code TEXT NOT NULL,
+    recipient_email TEXT,
+    status TEXT DEFAULT 'ringing' CHECK (status IN ('ringing', 'connected', 'declined', 'ended', 'missed', 'busy')),
+    offer JSONB,
+    answer JSONB,
+    ice_candidates JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_call_sessions_recipient ON public.call_sessions(recipient_chat_code, status);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_caller ON public.call_sessions(caller_chat_code, status);
+
+ALTER TABLE public.call_sessions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read call_sessions" ON public.call_sessions;
+CREATE POLICY "Allow public read call_sessions" ON public.call_sessions FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow all write call_sessions" ON public.call_sessions;
+CREATE POLICY "Allow all write call_sessions" ON public.call_sessions FOR ALL USING (true);
+
+ALTER TABLE public.call_sessions REPLICA IDENTITY FULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'call_sessions') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.call_sessions;
+  END IF;
+END $$;
