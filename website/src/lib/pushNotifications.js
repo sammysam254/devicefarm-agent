@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 
-export const VAPID_PUBLIC_KEY = "BDfYf78UGUsVFs6WGFbo8g2Y4qleyEIl4iBZN7mxGkGaFjU69urLy54sFdxM8Za8IOeHYmov11AW5gqfdXXD2Ys";
-export const VAPID_SUBJECT = "mailto:Sammyseth260@gmail.com";
+export const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "BDfYf78UGUsVFs6WGFbo8g2Y4qleyEIl4iBZN7mxGkGaFjU69urLy54sFdxM8Za8IOeHYmov11AW5gqfdXXD2Ys";
+export const VAPID_SUBJECT = import.meta.env.VITE_VAPID_SUBJECT || "mailto:Sammyseth260@gmail.com";
 
 /**
  * Register Service Worker for background notifications and offline call handling
