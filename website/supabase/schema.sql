@@ -329,3 +329,23 @@ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.call_sessions;
   END IF;
 END $$;
+
+-- 8. WEB PUSH NOTIFICATIONS FOR OFFLINE CALLING
+CREATE TABLE IF NOT EXISTS public.push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    chat_code TEXT NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT,
+    auth TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subs_chat_code ON public.push_subscriptions(chat_code);
+
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read push_subscriptions" ON public.push_subscriptions;
+CREATE POLICY "Allow public read push_subscriptions" ON public.push_subscriptions FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow all write push_subscriptions" ON public.push_subscriptions;
+CREATE POLICY "Allow all write push_subscriptions" ON public.push_subscriptions FOR ALL USING (true);

@@ -8,6 +8,11 @@ import {
   playCallConnectedSound, 
   playCallEndedSound 
 } from '../lib/soundEffects';
+import { 
+  registerServiceWorker, 
+  syncPushSubscription, 
+  dispatchOfflineCallAlert 
+} from '../lib/pushNotifications';
 
 const CallContext = createContext();
 
@@ -49,15 +54,17 @@ const waitForIceGathering = (pc, maxWaitMs = 1500) => {
 export function CallProvider({ children }) {
   const { profile, user } = useAuth();
   const [callState, setCallState] = useState(null); 
-  // callState: null | { type: 'incoming' | 'outgoing' | 'connected', session, partnerEmail, partnerCode }
+  // callState: null | { type: 'incoming' | 'outgoing' | 'connected', session, partnerEmail, partnerCode, isWaitingForOffline }
   const [isMuted, setIsMuted] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+  const [ringCountdown, setRingCountdown] = useState(45);
   const [onlineChatCodes, setOnlineChatCodes] = useState(new Set());
 
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const durationTimerRef = useRef(null);
+  const ringCountdownTimerRef = useRef(null);
   const activeSessionIdRef = useRef(null);
   const callStateRef = useRef(null);
   const iceChannelRef = useRef(null);
@@ -69,7 +76,67 @@ export function CallProvider({ children }) {
     callStateRef.current = callState;
   }, [callState]);
 
-  // Initialize hidden remote audio element in the DOM
+  // 1. Service Worker & Push Registration on startup
+  useEffect(() => {
+    registerServiceWorker();
+
+    if (profile?.chat_code) {
+      syncPushSubscription(profile.chat_code, profile.id);
+    }
+
+    // Listen for service worker notification clicks
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      const handleSwMessage = (event) => {
+        if (event.data?.type === 'INCOMING_CALL_ACTION') {
+          if (event.data.action === 'answer') {
+            acceptCall();
+          } else if (event.data.action === 'decline') {
+            declineCall();
+          }
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    }
+  }, [profile?.chat_code, profile?.id]);
+
+  // 2. Check for active incoming calls on startup / window focus (wakes up receiver)
+  useEffect(() => {
+    if (!profile?.chat_code) return;
+
+    const checkPendingCalls = async () => {
+      if (callStateRef.current) return;
+      try {
+        const cutoff = new Date(Date.now() - 45000).toISOString();
+        const { data: pending } = await supabase
+          .from('call_sessions')
+          .select('*')
+          .eq('recipient_chat_code', profile.chat_code)
+          .eq('status', 'ringing')
+          .gt('created_at', cutoff)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (pending && !callStateRef.current) {
+          activeSessionIdRef.current = pending.id;
+          setCallState({
+            type: 'incoming',
+            session: pending,
+            partnerEmail: pending.caller_email || `User #${pending.caller_chat_code}`,
+            partnerCode: pending.caller_chat_code
+          });
+          playRingtone();
+        }
+      } catch (_) {}
+    };
+
+    checkPendingCalls();
+    window.addEventListener('focus', checkPendingCalls);
+    return () => window.removeEventListener('focus', checkPendingCalls);
+  }, [profile?.chat_code]);
+
+  // Initialize hidden remote audio element in DOM
   useEffect(() => {
     let audio = remoteAudioRef.current;
     if (!audio) {
@@ -91,7 +158,7 @@ export function CallProvider({ children }) {
     };
   }, []);
 
-  // ── 1. Presence Tracking (Online / Offline detection on site) ───────────────
+  // ── 3. Presence Tracking (Online / Offline detection on site) ───────────────
   useEffect(() => {
     if (!profile?.chat_code) return;
 
@@ -166,6 +233,10 @@ export function CallProvider({ children }) {
     if (callStateRef.current?.type !== 'outgoing') return;
 
     stopRingtone();
+    if (ringCountdownTimerRef.current) {
+      clearInterval(ringCountdownTimerRef.current);
+      ringCountdownTimerRef.current = null;
+    }
     playCallConnectedSound();
     startDurationTimer();
     setCallState(prev => prev ? ({ ...prev, type: 'connected', session: sess }) : null);
@@ -190,7 +261,7 @@ export function CallProvider({ children }) {
     }
   };
 
-  // ── 2. Listen for Incoming Calls & Session State Changes (Stable Listener) ──
+  // ── 4. Listen for Incoming Calls & Session State Changes (Stable Listener) ──
   useEffect(() => {
     if (!profile?.chat_code) return;
 
@@ -218,7 +289,8 @@ export function CallProvider({ children }) {
             try {
               new Notification('Incoming Voice Call', {
                 body: `${sess.caller_email || 'User #' + sess.caller_chat_code} is calling you...`,
-                icon: '/favicon.ico'
+                icon: '/favicon.ico',
+                requireInteraction: true
               });
             } catch (_) {}
           }
@@ -237,8 +309,8 @@ export function CallProvider({ children }) {
           await handleConnectedFromAnswer(sess);
         }
 
-        // Call ended or declined
-        if (sess.status === 'ended' || sess.status === 'declined') {
+        // Call ended, declined, or missed
+        if (sess.status === 'ended' || sess.status === 'declined' || sess.status === 'missed') {
           handleCleanupCall();
           playCallEndedSound();
         }
@@ -265,6 +337,10 @@ export function CallProvider({ children }) {
       clearInterval(durationTimerRef.current);
       durationTimerRef.current = null;
     }
+    if (ringCountdownTimerRef.current) {
+      clearInterval(ringCountdownTimerRef.current);
+      ringCountdownTimerRef.current = null;
+    }
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
@@ -275,6 +351,7 @@ export function CallProvider({ children }) {
     }
     pendingCandidatesRef.current = [];
     setCallDuration(0);
+    setRingCountdown(45);
     setCallState(null);
     activeSessionIdRef.current = null;
 
@@ -363,7 +440,7 @@ export function CallProvider({ children }) {
     return pc;
   };
 
-  // ── 3. Start Outgoing Call ────────────────────────────────────────────────
+  // ── 5. Start Outgoing Call (Supports reaching offline users with 45s ringing) ──
   const startCall = async (partnerCode, partnerEmail) => {
     if (!profile?.chat_code || !partnerCode) return { success: false, reason: 'invalid_code' };
 
@@ -372,12 +449,8 @@ export function CallProvider({ children }) {
       remoteAudioRef.current.play().catch(() => {});
     }
 
-    // Check if recipient is online on the site
+    // Check if recipient is active on the site (used to customize status display)
     const isOnline = await checkIsUserOnline(partnerCode);
-    if (!isOnline) {
-      playOfflineSound();
-      return { success: false, reason: 'offline' };
-    }
 
     try {
       // 1. Get microphone stream with clear voice constraints
@@ -431,10 +504,36 @@ export function CallProvider({ children }) {
         type: 'outgoing',
         session,
         partnerEmail: partnerEmail || `User #${partnerCode}`,
-        partnerCode
+        partnerCode,
+        isWaitingForOffline: !isOnline
       });
 
+      // Dispatch background push alert to reach offline user's device
+      dispatchOfflineCallAlert(partnerCode, session);
+
       playRingtone();
+
+      // Start 45-second ringing countdown timer
+      setRingCountdown(45);
+      if (ringCountdownTimerRef.current) clearInterval(ringCountdownTimerRef.current);
+      ringCountdownTimerRef.current = setInterval(() => {
+        setRingCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(ringCountdownTimerRef.current);
+            // 45 seconds expired without answer -> Mark as missed
+            if (callStateRef.current?.type === 'outgoing' && activeSessionIdRef.current) {
+              supabase
+                .from('call_sessions')
+                .update({ status: 'missed', updated_at: new Date().toISOString() })
+                .eq('id', activeSessionIdRef.current);
+              handleCleanupCall();
+              playOfflineSound();
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
 
       // Polling fallback: check every 1000ms if session is answered
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -453,7 +552,7 @@ export function CallProvider({ children }) {
           if (latestSess?.status === 'connected' && latestSess.answer && callStateRef.current?.type === 'outgoing') {
             clearInterval(pollTimerRef.current);
             await handleConnectedFromAnswer(latestSess);
-          } else if (latestSess?.status === 'declined' || latestSess?.status === 'ended') {
+          } else if (latestSess?.status === 'declined' || latestSess?.status === 'ended' || latestSess?.status === 'missed') {
             clearInterval(pollTimerRef.current);
             handleCleanupCall();
             playCallEndedSound();
@@ -461,7 +560,7 @@ export function CallProvider({ children }) {
         } catch (_) {}
       }, 1000);
 
-      return { success: true };
+      return { success: true, isRecipientOnline: isOnline };
     } catch (err) {
       console.error('Start call error:', err);
       handleCleanupCall();
@@ -469,12 +568,16 @@ export function CallProvider({ children }) {
     }
   };
 
-  // ── 4. Accept Incoming Call ───────────────────────────────────────────────
+  // ── 6. Accept Incoming Call ───────────────────────────────────────────────
   const acceptCall = async () => {
     if (!callState?.session) return;
     const sess = callState.session;
 
     stopRingtone();
+    if (ringCountdownTimerRef.current) {
+      clearInterval(ringCountdownTimerRef.current);
+      ringCountdownTimerRef.current = null;
+    }
 
     // Prime remote audio element on click
     if (remoteAudioRef.current) {
@@ -540,7 +643,7 @@ export function CallProvider({ children }) {
     }
   };
 
-  // ── 5. Decline Incoming Call ──────────────────────────────────────────────
+  // ── 7. Decline Incoming Call ──────────────────────────────────────────────
   const declineCall = async () => {
     if (callState?.session?.id) {
       await supabase
@@ -551,7 +654,7 @@ export function CallProvider({ children }) {
     handleCleanupCall();
   };
 
-  // ── 6. End Active Call / Cancel Outgoing ──────────────────────────────────
+  // ── 8. End Active Call / Cancel Outgoing ──────────────────────────────────
   const endCall = async () => {
     if (callState?.session?.id) {
       await supabase
@@ -578,6 +681,7 @@ export function CallProvider({ children }) {
     callState,
     isMuted,
     callDuration,
+    ringCountdown,
     onlineChatCodes,
     remoteAudioRef,
     startCall,

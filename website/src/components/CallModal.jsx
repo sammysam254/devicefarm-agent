@@ -7,6 +7,7 @@ export default function CallModal() {
     callState, 
     isMuted, 
     callDuration, 
+    ringCountdown,
     remoteAudioRef, 
     acceptCall, 
     declineCall, 
@@ -190,9 +191,26 @@ export default function CallModal() {
         {/* 2. OUTGOING CALL ACTIONS */}
         {isOutgoing && (
           <div style={{ width: '100%', marginTop: '10px' }}>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-              Ringing... Waiting for recipient to answer on site.
-            </p>
+            <div style={{
+              background: 'rgba(0, 0, 0, 0.35)',
+              borderRadius: '12px',
+              padding: '12px 14px',
+              marginBottom: '16px',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px'
+            }}>
+              <p style={{ fontSize: '13px', color: '#f8fafc', fontWeight: 600, margin: 0 }}>
+                {callState.isWaitingForOffline 
+                  ? "Notifying user's device (User is away from active tab)..." 
+                  : "Ringing user's active device..."}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', color: 'var(--primary)', fontFamily: 'monospace', fontWeight: 700 }}>
+                <span>Ringing:</span>
+                <span>{ringCountdown ?? 45}s remaining</span>
+              </div>
+            </div>
             <button
               onClick={endCall}
               style={{
