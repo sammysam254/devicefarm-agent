@@ -708,16 +708,45 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    engine.sendKeycode(0, code);
-    setTimeout(() => engine.sendKeycode(1, code), 30);
-    // Direct kernel keyevent for instant hardware button response
-    try { getInputShell(serial).stdin.write(`input keyevent ${code}\n`); } catch (_) {}
+    const metastate = parseInt(get(data, 'metastate'), 10) || 0;
+    const ok = engine.sendKeycode(0, code, 0, metastate);
+    setTimeout(() => engine.sendKeycode(1, code, 0, metastate), 25);
+    // Direct kernel keyevent fallback if scrcpy control is not ready
+    if (!ok) {
+      try { getInputShell(serial).stdin.write(`input keyevent ${code}\n`); } catch (_) {}
+    }
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
-    const ok = engine.sendText(text);
-    if (!ok && text) {
-      const escaped = text.replace(/([\\$`"!\s])/g, '\\$1');
-      try { getInputShell(serial).stdin.write(`input text "${escaped}"\n`); } catch (_) {}
+    if (text) {
+      let injectedAsKey = false;
+      // For single standard ASCII characters, direct hardware keycode is 100% reliable across all Android versions
+      if (text.length === 1) {
+        const cp = text.charCodeAt(0);
+        if (cp >= 97 && cp <= 122) { // a-z: keycodes 29..54
+          const kc = 29 + (cp - 97);
+          injectedAsKey = engine.sendKeycode(0, kc, 0, 0);
+          setTimeout(() => engine.sendKeycode(1, kc, 0, 0), 25);
+        } else if (cp >= 65 && cp <= 90) { // A-Z: keycodes 29..54 with shift
+          const kc = 29 + (cp - 65);
+          injectedAsKey = engine.sendKeycode(0, kc, 0, 1);
+          setTimeout(() => engine.sendKeycode(1, kc, 0, 1), 25);
+        } else if (cp === 48) { // 0: keycode 7
+          injectedAsKey = engine.sendKeycode(0, 7, 0, 0);
+          setTimeout(() => engine.sendKeycode(1, 7, 0, 0), 25);
+        } else if (cp >= 49 && cp <= 57) { // 1-9: keycodes 8..16
+          const kc = 8 + (cp - 49);
+          injectedAsKey = engine.sendKeycode(0, kc, 0, 0);
+          setTimeout(() => engine.sendKeycode(1, kc, 0, 0), 25);
+        }
+      }
+
+      if (!injectedAsKey) {
+        const ok = engine.sendText(text);
+        if (!ok) {
+          const escaped = text.replace(/ /g, '%s').replace(/([\\$`"!'&|;<>~()#*?=[\]{}])/g, '\\$1');
+          try { getInputShell(serial).stdin.write(`input text ${escaped}\n`); } catch (_) {}
+        }
+      }
     }
   } else if (type === 'reboot') {
     exec(`"${ADB_BIN}" -s ${serial} reboot`);
@@ -827,7 +856,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
 <div class="stage">
   <div class="wrap" id="wrap">
-    <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
+    <canvas id="c" width="${screenW}" height="${screenH}" tabindex="0" style="outline:none;"></canvas>
 
     <!-- In-Stream Floating Live Chat Alert (Centered directly on phone screen between borders) -->
     <div id="streamChatPopup" style="display:none;position:absolute;top:16px;left:10px;right:10px;z-index:90;background:rgba(15,23,42,0.96);backdrop-filter:blur(24px);border:1.5px solid rgba(56,189,248,0.65);box-shadow:0 14px 40px rgba(0,0,0,0.85),0 0 25px rgba(56,189,248,0.35);border-radius:14px;padding:12px 14px;animation:slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);user-select:none;pointer-events:auto;">
@@ -1054,9 +1083,11 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   function showBlockedScreen(reason) {
     isStreamBlocked = true;
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+    if (audioWsRetryTimer) { clearTimeout(audioWsRetryTimer); audioWsRetryTimer = null; }
     if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
     try { resetDecoder(); } catch(_) {}
     try { if (audioCtx) audioCtx.close(); } catch(_) {}
+    if (audioWs) { try { audioWs.close(); } catch(_) {} audioWs = null; }
     
     const blockOverlay = document.getElementById('streamBlockedOverlay');
     const blockReasonEl = document.getElementById('blockReasonText');
@@ -1267,7 +1298,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   // ── Mute toggle ──────────────────────────────────────────────────────────
   function toggleMute() {
     isMuted = !isMuted;
-    if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
+    if (gainNode) gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
+    if (!isMuted && (!audioWs || audioWs.readyState > 1)) {
+      connectAudioWS();
+    }
     if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
       try { audioDecoder.flush().catch(function(){}); } catch (_) {}
     }
@@ -1383,7 +1417,63 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   // ── Target device serial locked for this viewer session ───────────────────
   const TARGET_DEVICE_SERIAL = "${serial}";
 
-  // ── WebSocket connection ─────────────────────────────────────────────────
+  // ── Dedicated Audio WebSocket (Runs completely separate route: /ws/audio) ─
+  let audioWs = null;
+  let audioWsRetryTimer = null;
+
+  function connectAudioWS() {
+    if (audioWsRetryTimer) { clearTimeout(audioWsRetryTimer); audioWsRetryTimer = null; }
+    if (audioWs) {
+      try {
+        audioWs.onopen = null; audioWs.onmessage = null;
+        audioWs.onerror = null; audioWs.onclose = null;
+        audioWs.close();
+      } catch (_) {}
+      audioWs = null;
+    }
+    if (isStreamBlocked) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const audioParams = new URLSearchParams(window.location.search);
+    audioParams.set('udid', TARGET_DEVICE_SERIAL);
+    audioParams.set('stream', 'audio');
+    const audioUrl = proto + '//' + location.host + '/ws/audio?' + audioParams.toString();
+
+    try {
+      audioWs = new WebSocket(audioUrl);
+      audioWs.binaryType = 'arraybuffer';
+
+      audioWs.onopen = function() {
+        console.log('[Audio] Dedicated audio stream connected on /ws/audio');
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
+      };
+
+      audioWs.onmessage = function(e) {
+        if (isMuted || !userInteracted) return;
+        if (!(e.data instanceof ArrayBuffer)) return;
+        const rawU8 = new Uint8Array(e.data);
+        if (rawU8.length < 2) return;
+
+        if (rawU8[0] === 0x41) { // Tagged audio frame: [0x41, codec, ...payload]
+          const codec = rawU8[1];
+          const payload = rawU8.subarray(2);
+          if (codec === 0x4F) playOpusPacket(payload);
+          else playRawPcm(payload);
+        } else {
+          // Direct Opus payload
+          playOpusPacket(rawU8);
+        }
+      };
+
+      audioWs.onerror = function() {};
+      audioWs.onclose = function() {
+        if (isStreamBlocked) return;
+        audioWs = null;
+        audioWsRetryTimer = setTimeout(connectAudioWS, 3000);
+      };
+    } catch (_) {}
+  }
+
+  // ── WebSocket connection (Video + Control) ────────────────────────────────
   let ws = null, wsOk = false;
   let wsRetryTimer = null;
   let wsFailCount = 0;
@@ -1674,6 +1764,8 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    try { canvas.focus(); } catch (_) {}
+    try { window.focus(); } catch (_) {}
     down = true;
     downButton = e.button; // 0 = Left, 2 = Right
     hasMovedFar = false;
@@ -1782,49 +1874,110 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
   }, { passive:false });
 
-  // ── Keyboard handling (Spacebar protection & full Android keys) ────────
-  document.addEventListener('keydown', (e) => {
+  // ── Comprehensive Computer Keyboard Support & Spacebar Protection ────────
+  function handleKeyDown(e) {
     // Never intercept if typing into an input/textarea inside a modal dialog
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
 
-    // Immediately blur any active button so Space cannot trigger click events on it
+    // Immediately blur any active button so Space or Enter cannot click it
     if (document.activeElement && document.activeElement !== document.body && document.activeElement !== canvas) {
       document.activeElement.blur();
     }
 
-    if (e.key === ' ' || e.code === 'Space') {
+    const keyStr = e.key;
+
+    // Special keys
+    if (keyStr === ' ' || e.code === 'Space') {
       e.preventDefault();
       key(62); // Android KEYCODE_SPACE = 62
-    } else if (e.key === 'Backspace') {
+      return;
+    }
+    if (keyStr === 'Backspace') {
       e.preventDefault();
       key(67); // Android KEYCODE_DEL = 67
-    } else if (e.key === 'Enter') {
+      return;
+    }
+    if (keyStr === 'Enter') {
       e.preventDefault();
       key(66); // Android KEYCODE_ENTER = 66
-    } else if (e.key === 'Escape') {
+      return;
+    }
+    if (keyStr === 'Escape') {
       e.preventDefault();
       key(4);  // Android KEYCODE_BACK = 4
-    } else if (e.key === 'Tab') {
+      return;
+    }
+    if (keyStr === 'Tab') {
       e.preventDefault();
       key(61); // Android KEYCODE_TAB = 61
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      key(19);
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      key(20);
-    } else if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      key(21);
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      key(22);
-    } else if (e.key === 'Delete') {
+      return;
+    }
+    if (keyStr === 'Delete') {
       e.preventDefault();
       key(112); // Android KEYCODE_FORWARD_DEL = 112
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      return;
+    }
+    if (keyStr === 'ArrowUp') {
       e.preventDefault();
-      send({ type:'text', text:e.key });
+      key(19); // Android KEYCODE_DPAD_UP
+      return;
+    }
+    if (keyStr === 'ArrowDown') {
+      e.preventDefault();
+      key(20); // Android KEYCODE_DPAD_DOWN
+      return;
+    }
+    if (keyStr === 'ArrowLeft') {
+      e.preventDefault();
+      key(21); // Android KEYCODE_DPAD_LEFT
+      return;
+    }
+    if (keyStr === 'ArrowRight') {
+      e.preventDefault();
+      key(22); // Android KEYCODE_DPAD_RIGHT
+      return;
+    }
+
+    // Shortcuts: Ctrl / Meta
+    if (e.ctrlKey || e.metaKey) {
+      const lower = keyStr.toLowerCase();
+      if (lower === 'a') {
+        e.preventDefault();
+        send({ type:'code', code: 29, metastate: 0x1000 }); // KEYCODE_A with CTRL
+        return;
+      }
+      if (lower === 'c') {
+        e.preventDefault();
+        key(278); // KEYCODE_COPY
+        return;
+      }
+      if (lower === 'x') {
+        e.preventDefault();
+        key(277); // KEYCODE_CUT
+        return;
+      }
+      // Note: Ctrl+V is handled by the paste event listener below
+      return;
+    }
+
+    // Normal typing: any printable letter, number, or symbol
+    if (keyStr.length === 1 && !e.altKey) {
+      e.preventDefault();
+      send({ type:'text', text: keyStr });
+    }
+  }
+
+  window.addEventListener('keydown', handleKeyDown, { capture: true });
+  document.addEventListener('keydown', handleKeyDown, { capture: true });
+  canvas.addEventListener('keydown', handleKeyDown, { capture: true });
+
+  // Clipboard paste: instantly types text into device
+  window.addEventListener('paste', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    e.preventDefault();
+    const pasteText = (e.clipboardData || window.clipboardData).getData('text');
+    if (pasteText) {
+      send({ type:'text', text: pasteText });
     }
   });
 
@@ -1928,6 +2081,16 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       } catch (_) {}
       ws = null;
     }
+    if (audioWs) {
+      try {
+        audioWs.onopen = null;
+        audioWs.onmessage = null;
+        audioWs.onerror = null;
+        audioWs.onclose = null;
+        audioWs.close();
+      } catch (_) {}
+      audioWs = null;
+    }
     try { resetDecoder(); } catch (_) {}
     try { if (audioCtx) audioCtx.close(); } catch (_) {}
   });
@@ -1954,12 +2117,16 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
   try { initAudio(); } catch (_) {}
   connectWS();
+  connectAudioWS();
 
   // ── Gentle Liveness Check (Never drops healthy connections) ─────────────
   setInterval(function() {
     if (isStreamBlocked) return;
     if (!wsOk && (!ws || ws.readyState > 1)) {
       connectWS();
+    }
+    if (!isMuted && (!audioWs || audioWs.readyState > 1)) {
+      connectAudioWS();
     }
   }, 3000);
 </script>
@@ -2157,8 +2324,71 @@ async function startStreamServer(serial, port) {
     res.end(buildPlayerHtml(effectiveSerial, playerW, playerH, chatCodeParam, isCctv));
   });
 
-  // ── WebSocket — relay H264 + audio from scrcpy engine to browser ─────────
-  const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
+  // ── WebSockets: Dedicated Video/Control WS & Dedicated Audio WS ──────────
+  const wss = new WebSocket.Server({ noServer: true, perMessageDeflate: false });
+  const wssAudio = new WebSocket.Server({ noServer: true, perMessageDeflate: false });
+
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => { try { socket.destroy(); } catch (_) {} });
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      const isAudio = u.pathname === '/ws/audio' ||
+                      u.pathname.endsWith('/audio') ||
+                      u.searchParams.get('stream') === 'audio' ||
+                      u.searchParams.get('audio') === '1';
+
+      if (isAudio) {
+        wssAudio.handleUpgrade(req, socket, head, (ws) => {
+          wssAudio.emit('connection', ws, req);
+        });
+      } else {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit('connection', ws, req);
+        });
+      }
+    } catch (err) {
+      try { socket.destroy(); } catch (_) {}
+    }
+  });
+
+  wssAudio.on('connection', async (ws, req) => {
+    const wsUrl = new URL(req.url, 'http://localhost');
+    const wsUdid = (wsUrl.searchParams.get('udid') || '').trim();
+    let activeWsEntry = getActiveServerEntry(wsUdid);
+    if (wsUdid && !activeWsEntry) {
+      try { ws.send(JSON.stringify({ type: 'stream_offline', reason: 'Device is offline or disconnected from ADB hardware', serial: wsUdid })); } catch (_) {}
+      ws.close(4004, 'Device Offline');
+      return;
+    }
+    if (!activeWsEntry) activeWsEntry = getActiveServerEntry(serial) || { serial, server, wss, engine };
+    const targetSerial = activeWsEntry.serial;
+    const targetEngine = activeWsEntry.engine || engine;
+    const isAdminWs = checkIsAdminRequest(wsUrl);
+
+    const lic = await getCachedLicenseStatus();
+    if (!lic.isActive) {
+      ws.close(4003, 'License Revoked');
+      return;
+    }
+
+    const sec = await getDeviceSecurityStatus(targetSerial);
+    if (!isAdminWs && sec.isDeviceBlocked) {
+      try { ws.send(JSON.stringify({ type: 'stream_blocked', reason: sec.blockReason, serial: targetSerial })); } catch (_) {}
+      ws.close(4003, 'Stream Blocked');
+      return;
+    }
+
+    try { req.socket.setNoDelay(true); } catch (_) {}
+    logger.info(`[StreamServer] Dedicated Audio WS connected for ${targetSerial}`);
+    targetEngine.addAudioClient(ws);
+
+    const cleanup = () => {
+      targetEngine.removeAudioClient(ws);
+    };
+
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
+  });
 
   wss.on('connection', async (ws, req) => {
     const wsUrl = new URL(req.url, 'http://localhost');
@@ -2195,8 +2425,6 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    // Device block status is verified server-side via sec.isDeviceBlocked
-
     // Register active WS client with token and admin status
     if (!activeWsClients.has(targetSerial)) {
       activeWsClients.set(targetSerial, new Set());
@@ -2205,7 +2433,7 @@ async function startStreamServer(serial, port) {
     activeWsClients.get(targetSerial).add(clientEntry);
 
     try { req.socket.setNoDelay(true); } catch (_) {}
-    logger.info(`[StreamServer] WS connected for ${targetSerial}`);
+    logger.info(`[StreamServer] Video WS connected for ${targetSerial}`);
     deviceTimeService.syncDeviceTime(targetSerial).catch(() => {});
     targetEngine.addClient(ws);
 
@@ -2294,13 +2522,14 @@ async function startStreamServer(serial, port) {
     server.listen(port, '0.0.0.0', () => {
       const localUrl = `http://localhost:${port}`;
       logger.info(`[StreamServer] Listening at ${localUrl}`);
-      activeServers.set(serial, { server, wss, engine, port, localUrl });
+      activeServers.set(serial, { server, wss, wssAudio, engine, port, localUrl });
 
       const streamProcess = {
         pid: port, exitCode: null,
         kill() {
           engine.stop();
           try { wss.close(); } catch (_) {}
+          try { wssAudio.close(); } catch (_) {}
           server.close();
           activeServers.delete(serial);
         },

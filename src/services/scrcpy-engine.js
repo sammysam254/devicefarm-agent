@@ -217,8 +217,10 @@ class ScrcpyEngine extends EventEmitter {
     this.screenWidth  = 1080;
     this.screenHeight = 2340;
 
-    // Connected WS clients receiving H264 stream & audio
+    // Connected WS clients receiving H264 video stream & control
     this.wsClients = new Set();
+    // Dedicated WS clients receiving audio only
+    this.audioWsClients = new Set();
     this._configPacket = null;
     this._keyframeBuffer = null;
     this.videoWidth = 0;
@@ -255,21 +257,18 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   /**
-   * Register a WS client. We immediately flush the cached SPS/PPS + IDR keyframe
-   * so the WebCodecs decoder is initialised before any new delta frame arrives.
+   * Register a WS client for video + control.
    */
   addClient(ws) {
     this.wsClients.add(ws);
     // Send exactly one bootstrap packet: the combined SPS/PPS+IDR keyframe if available,
-    // otherwise just the SPS/PPS config. Sending both separately causes duplicate-init
-    // errors in WebCodecs VideoDecoder which can leave the decoder in a broken state.
+    // otherwise just the SPS/PPS config.
     if (ws.readyState === 1) {
       const bootstrap = this._keyframeBuffer || this._configPacket;
       if (bootstrap) {
         try { ws.send(bootstrap, { binary: true }); } catch (_) {}
       }
     }
-
 
     // Instant screen paint: send snapshot if no keyframe buffer is cached yet
     if (!this._keyframeBuffer) {
@@ -283,6 +282,21 @@ class ScrcpyEngine extends EventEmitter {
 
   removeClient(ws) {
     this.wsClients.delete(ws);
+  }
+
+  /**
+   * Register a WS client for audio only (completely isolated from video/control).
+   */
+  addAudioClient(ws) {
+    this.audioWsClients.add(ws);
+    // If separate audio worker is not running yet, initiate it on first audio client connect
+    if (!this.audioProc && this.enableSeparateAudio && this.isRunning) {
+      this._startSeparateAudio().catch(() => {});
+    }
+  }
+
+  removeAudioClient(ws) {
+    this.audioWsClients.delete(ws);
   }
 
   async _pushServerJar() {
@@ -440,6 +454,7 @@ class ScrcpyEngine extends EventEmitter {
     this.isRunning = false;
     this._cleanup();
     this.wsClients.clear();
+    this.audioWsClients.clear();
     this.emit('stopped');
   }
 
@@ -478,20 +493,21 @@ class ScrcpyEngine extends EventEmitter {
     if (!this.enableSeparateAudio || !this.isRunning) return;
     if (this.audioProc) return;
 
-    // Use a unique 8-character scid and separate port so audio is 100% isolated
-    const scid = 'a' + Math.floor(1000000 + Math.random() * 8999999).toString(16);
+    // Use a positive 31-bit random int formatted to exactly 8 lowercase hex digits
+    const scidNum = (Math.floor(Math.random() * 0x7E000000) + 0x10000000) & 0x7FFFFFFF;
+    const scidHex = scidNum.toString(16).padStart(8, '0');
     const audioPort = this.videoPort + 300;
     this._audioPort = audioPort;
 
     try {
       await this._adb(['forward', '--remove', `tcp:${audioPort}`]).catch(() => {});
-      await this._adb(['forward', `tcp:${audioPort}`, `localabstract:scrcpy_${scid}`]);
+      await this._adb(['forward', `tcp:${audioPort}`, `localabstract:scrcpy_${scidHex}`]);
 
       const audioArgs = [
         '-s', this.serial, 'shell',
         'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
         'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
-        `scid=${scid}`,
+        `scid=${scidHex}`,
         'tunnel_forward=true',
         'video=false',
         'audio=true',
@@ -759,6 +775,8 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastAudio(payload) {
+    if (!this.audioWsClients || this.audioWsClients.size === 0) return;
+
     // Frame layout: [0x41][codec_byte][...payload]
     // codec_byte: 0x4F ('O') = opus, 0x52 ('R') = raw PCM
     const codec = (this._audioCodec === 'opus') ? 0x4F : 0x52;
@@ -768,15 +786,15 @@ class ScrcpyEngine extends EventEmitter {
     payload.copy(audioFrame, 2);
 
     const BACKPRESSURE_LIMIT = 48 * 1024; // 48KB — skip non-critical audio for slow consumers
-    for (const ws of this.wsClients) {
+    for (const ws of this.audioWsClients) {
       if (ws.readyState !== 1) {
-        this.wsClients.delete(ws);
+        this.audioWsClients.delete(ws);
         continue;
       }
       // Skip audio for slow consumers — audio is less critical than keyframes
       if (ws.bufferedAmount > BACKPRESSURE_LIMIT) continue;
       try { ws.send(audioFrame, { binary: true }); } catch (_) {
-        this.wsClients.delete(ws);
+        this.audioWsClients.delete(ws);
       }
     }
   }
