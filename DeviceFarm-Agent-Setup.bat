@@ -23,18 +23,25 @@ echo   DEVICEFARM DESKTOP AGENT  ^|  One-Click Setup
 echo  ================================================================
 echo.
 
-:: ── Where to install the agent ─────────────────────────────────────────────
-set "INSTALL_DIR=C:\DeviceFarmAgent"
-set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
+:: ── Where to install / update the agent ────────────────────────────────────
 set "CURRENT_DIR=%~dp0"
 if "%CURRENT_DIR:~-1%"=="\" set "CURRENT_DIR=%CURRENT_DIR:~0,-1%"
+
+if exist "%CURRENT_DIR%\package.json" (
+    set "INSTALL_DIR=%CURRENT_DIR%"
+) else if exist "C:\cvc\devicefarm-agent\package.json" (
+    set "INSTALL_DIR=C:\cvc\devicefarm-agent"
+) else (
+    set "INSTALL_DIR=C:\DeviceFarmAgent"
+)
+set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
 
 :: ── Full path to PowerShell (never rely on PATH for this) ──────────────────
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if not exist "%PS%" set "PS=%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
 
-echo [*] Install directory : %INSTALL_DIR%
-echo [*] Source repository : %REPO_URL%
+echo [*] Target directory : %INSTALL_DIR%
+echo [*] Source repository: %REPO_URL%
 echo.
 
 :: ── Stop old agent instances and watchdog processes (strictly scoped to agent directory) ──

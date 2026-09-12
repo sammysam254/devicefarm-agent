@@ -230,6 +230,20 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
+      if (url === '/api/update-agent' || url === '/api/restart-agent') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'updating', message: 'Pulling latest updates and restarting agent...' }));
+        
+        const rootDir = path.resolve(__dirname, '..', '..');
+        exec('git fetch origin main && git reset --hard origin/main', { cwd: rootDir }, (err, stdout) => {
+          logger.info(`[AutoUpdate] Git pull result: ${stdout || ''}`);
+          setTimeout(() => {
+            process.exit(0);
+          }, 1000);
+        });
+        return;
+      }
+
       if (url === '/download/installer' || url === '/download/agent') {
         const setupBatPath = path.join(__dirname, '..', '..', 'DeviceFarm-Agent-Setup.bat');
         if (fs.existsSync(setupBatPath)) {
