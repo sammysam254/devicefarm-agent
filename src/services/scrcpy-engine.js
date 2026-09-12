@@ -842,12 +842,9 @@ class ScrcpyEngine extends EventEmitter {
       return false;
     }
 
-    // Determine target resolution. Must strictly match the scrcpy-server videoSize on device.
-    // Client width/height comes from the WebCodecs decoded frame (live truth).
-    const clientW = (width > 10) ? Math.round(width) : 0;
-    const clientH = (height > 10) ? Math.round(height) : 0;
-    const targetW = this.videoWidth || this.scrcpyServerWidth || clientW || this.screenWidth || 1080;
-    const targetH = this.videoHeight || this.scrcpyServerHeight || clientH || this.screenHeight || 2340;
+    // Target resolution must strictly match physical screen dimensions from wm size (getScreenSize in scrcpy-server)
+    const targetW = this.screenWidth || 1080;
+    const targetH = this.screenHeight || 2400;
 
     const srcW = clientW || targetW;
     const srcH = clientH || targetH;

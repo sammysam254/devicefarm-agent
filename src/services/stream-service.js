@@ -731,15 +731,14 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
   } else if (type === 'tap' || type === 'tap_fallback') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    const ok = engine.sendTouchEvent(0, x, y, W, H, 1.0);
-    if (ok) {
-      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
-    } else {
-      const devW = engine.screenWidth || W;
-      const devH = engine.screenHeight || H;
-      const realX = Math.round((x / W) * devW);
-      const realY = Math.round((y / H) * devH);
-      try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
+    const devW = engine.screenWidth || W;
+    const devH = engine.screenHeight || H;
+    const realX = Math.round((x / W) * devW);
+    const realY = Math.round((y / H) * devH);
+    try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
+    if (typeof engine.sendTouchEvent === 'function') {
+      engine.sendTouchEvent(0, x, y, W, H, 1.0);
+      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 30);
     }
   } else if (type === 'swipe' || type === 'swipe_fallback') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
@@ -1858,9 +1857,31 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       return;
     }
 
-    // LEFT CLICK: Direct 1:1 hardware touch release (zero delay, perfectly clean, no ghost taps)
+    // LEFT CLICK:
     if (e && e.stopPropagation) e.stopPropagation();
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H, pressure:0 });
+    if (hasMovedFar && dragDist > 12) {
+      // Left-click drag / swipe: smooth human-like swipe fling
+      const smoothDur = Math.max(80, Math.min(300, Math.round(dragDur * 0.8) || 150));
+      send({
+        type: 'swipe',
+        x1: downStartPos.x,
+        y1: downStartPos.y,
+        x2: c.x,
+        y2: c.y,
+        duration: smoothDur,
+        width: frozenDims.W,
+        height: frozenDims.H
+      });
+    } else {
+      // Stationary click / tap: clean, guaranteed instant 1:1 tap at click coordinates
+      send({
+        type: 'tap',
+        x: downStartPos.x,
+        y: downStartPos.y,
+        width: frozenDims.W,
+        height: frozenDims.H
+      });
+    }
   }
 
   canvas.addEventListener('pointerup', releasePointer, { passive: false });
