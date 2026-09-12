@@ -1741,26 +1741,8 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       return;
     }
 
-    // LEFT CLICK:
+    // LEFT CLICK: Direct 1:1 hardware touch release (zero delay, no ghost double-clicks)
     send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
-
-    if (!hasMovedFar && dragDur < 450) {
-      // Stationary clean tap: dual-dispatch fallback ensures 100% click hit
-      send({ type:'tap_fallback', x:c.x, y:c.y, width:nativeW, height:nativeH });
-    } else if (hasMovedFar && dragDist > 20) {
-      // Left-click drag: Also trigger smooth human-like momentum fling
-      const smoothDur = Math.max(80, Math.min(260, Math.round(dragDur * 0.7) || 130));
-      send({
-        type: 'swipe',
-        x1: downStartPos.x,
-        y1: downStartPos.y,
-        x2: c.x,
-        y2: c.y,
-        duration: smoothDur,
-        width: nativeW,
-        height: nativeH
-      });
-    }
   }
 
   canvas.addEventListener('pointerup', releasePointer, { passive: false });
