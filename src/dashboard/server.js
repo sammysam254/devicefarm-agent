@@ -37,6 +37,63 @@ function storeBindingCodeInSession(bindingCode) {
 }
 
 /**
+ * Intelligent fuzzy matcher for device serials.
+ * Handles exact case-insensitive matches, common OCR character confusions
+ * (0 vs O vs 8, 1 vs I vs L vs T, 5 vs S, 2 vs Z, Q vs C, B vs P),
+ * and Levenshtein distance <= 3.
+ */
+function findMatchingDevice(requestedSerial, devices) {
+  if (!devices || devices.length === 0) return null;
+  if (!requestedSerial) return devices[0];
+  const cleanReq = requestedSerial.trim().toLowerCase();
+
+  // 1. Exact match (case-insensitive)
+  const exact = devices.find(d => d.serial && d.serial.toLowerCase() === cleanReq);
+  if (exact) return exact;
+
+  // 2. OCR character normalization
+  function normOcr(s) {
+    return (s || '').toLowerCase()
+      .replace(/[0o8]/g, '#')
+      .replace(/[1ilt]/g, '!')
+      .replace(/[5s]/g, '$')
+      .replace(/[2z]/g, '%')
+      .replace(/[qc]/g, '@')
+      .replace(/[pb]/g, '&');
+  }
+  const normReq = normOcr(cleanReq);
+  const ocrMatch = devices.find(d => normOcr(d.serial) === normReq);
+  if (ocrMatch) return ocrMatch;
+
+  // 3. Levenshtein edit distance <= 3
+  function lev(a, b) {
+    const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+    for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        dp[i][j] = a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      }
+    }
+    return dp[a.length][b.length];
+  }
+
+  let best = null;
+  let minD = 4;
+  for (const d of devices) {
+    if (!d.serial) continue;
+    const dVal = lev(cleanReq, d.serial.toLowerCase());
+    if (dVal < minD) {
+      minD = dVal;
+      best = d;
+    }
+  }
+  return best;
+}
+
+/**
  * Start the local Dashboard HTTP Server.
  * @param {number} [port=7400]
  * @returns {Promise<{ port: number, url: string }>}
@@ -197,9 +254,7 @@ function startDashboardServer(port = 7400) {
       if (actionParam === 'proxy' || udidParam || remoteParam) {
         const serial = (udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null) || '').trim();
         const devices = processManager.getActiveDeviceSummaries();
-        let targetDev = serial 
-          ? devices.find(d => d.serial.toLowerCase() === serial.toLowerCase())
-          : devices[0];
+        let targetDev = findMatchingDevice(serial, devices);
 
         if (!targetDev && serial) {
           const activeEntry = streamService.getActiveServerEntry(serial);
@@ -296,9 +351,7 @@ function startDashboardServer(port = 7400) {
       const serial = (udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null) || '').trim();
 
       const devices = processManager.getActiveDeviceSummaries();
-      let targetDev = serial 
-        ? devices.find(d => d.serial.toLowerCase() === serial.toLowerCase()) 
-        : devices[0];
+      let targetDev = findMatchingDevice(serial, devices);
 
       if (!targetDev && serial) {
         const activeEntry = streamService.getActiveServerEntry(serial);

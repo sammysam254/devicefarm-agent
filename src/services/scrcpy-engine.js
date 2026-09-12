@@ -361,6 +361,7 @@ class ScrcpyEngine extends EventEmitter {
       'max_size=1080',            // Crisp 1080p Full HD resolution
       'video_bit_rate=4000000',   // 4.0 Mbps: Instant hardware encoding on phone CPU with zero network delay
       'max_fps=60',
+      'downscale_on_error=true',
       'video_codec_options=i-frame-interval=1',
       'send_frame_meta=true',
       'show_touches=false',
