@@ -1317,11 +1317,6 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       decoder = new VideoDecoder({
         output: function(frame) {
           lastFrameReceivedTime = Date.now();
-          // Zero-Latency Catchup: If decoder is draining a queued burst, discard stale intermediate frames
-          if (decoder && decoder.decodeQueueSize > 1) {
-            frame.close();
-            return;
-          }
           const w = frame.displayWidth  || frame.codedWidth  || frame.width;
           const h = frame.displayHeight || frame.codedHeight || frame.height;
           if (w && h && (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2)) {
@@ -1522,28 +1517,28 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
       if (!hasKeyframe) return; // Wait for initial IDR keyframe
 
-      // Anti-Lag Watchdog: Keep stream in real-time. If decoder queue exceeds 2 frames, drop delta frame
-      if (decoder && decoder.decodeQueueSize > 2) {
+      // Anti-Lag Watchdog: only intervene when the decoder backlog is very large (> 8 frames).
+      // At 60fps a queue of 2–4 is completely normal — never drop frames at those levels.
+      if (decoder && decoder.decodeQueueSize > 8) {
         if (!isKey) {
-          return; // Drop non-essential delta frames so decoder catches up instantly
-        } else {
-          // Fresh keyframe arrived: reset decoder to clear stale backlog
-          try {
-            decoder.reset();
-            decoder.configure({
-              codec: 'avc1.42E01E',
-              optimizeForLatency: true,
-              hardwareAcceleration: 'no-preference'
-            });
-            decoderReady = true;
-          } catch (_) {}
+          return; // Drop delta frames only under severe backlog
         }
-      } else if (decoder && decoder.decodeQueueSize > 5) {
-        resetDecoder();
-        initDecoder();
-        hasKeyframe = false;
-        send({ type: 'request_keyframe' });
-        return;
+        // Fresh keyframe under heavy backlog: reset decoder cleanly, then fall through to decode below
+        try {
+          decoder.reset();
+          decoder.configure({
+            codec: 'avc1.42E01E',
+            optimizeForLatency: true,
+            hardwareAcceleration: 'no-preference'
+          });
+          decoderReady = true;
+        } catch (_) {
+          resetDecoder();
+          initDecoder();
+          hasKeyframe = false;
+          send({ type: 'request_keyframe' });
+          return;
+        }
       }
 
       try {
