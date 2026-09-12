@@ -1971,15 +1971,14 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 async function startStreamServer(serial, port) {
   logger.info(`[StreamServer] Starting for ${serial} on port ${port}`);
 
-  // Start scrcpy engine
+  // Start scrcpy engine asynchronously in background so stream HTTP server and processManager register immediately
   const engine = new ScrcpyEngine(serial);
   const videoPort = port + 1000;
-  try {
-    await engine.start(videoPort);
+  engine.start(videoPort).then(() => {
     logger.info(`[StreamServer] ScrcpyEngine ready for ${serial}`);
-  } catch (err) {
-    logger.warn(`[StreamServer] ScrcpyEngine failed for ${serial}: ${err.message} — screencap fallback active`);
-  }
+  }).catch((err) => {
+    logger.warn(`[StreamServer] ScrcpyEngine startup notice for ${serial}: ${err.message}`);
+  });
 
   // ── HTTP handler ──────────────────────────────────────────────────────────
   // Cache license check to avoid hitting Supabase on every HTTP request/WS connect

@@ -434,7 +434,11 @@ class ScrcpyEngine extends EventEmitter {
       // Back off longer if it died quickly (likely a startup error).
       if (!this._restartPending) {
         this._restartPending = true;
-        const delay = uptime < 3000 ? 4000 : 1500;
+        if (uptime < 4000 && this.enableAudio) {
+          logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy exited quickly — disabling audio for hardware compatibility`);
+          this.enableAudio = false;
+        }
+        const delay = uptime < 3000 ? 3000 : 1500;
         logger.info(`[ScrcpyEngine ${this.serial}] Restarting scrcpy in ${delay}ms...`);
         setTimeout(() => {
           this._restartPending = false;

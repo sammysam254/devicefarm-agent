@@ -194,9 +194,12 @@ function startDashboardServer(port = 7400) {
       const remoteParam = fullUrl.searchParams.get('remote');
 
       if (actionParam === 'proxy' || udidParam || remoteParam) {
-        const serial = udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null);
+        const serial = (udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null) || '').trim();
         const devices = processManager.getActiveDeviceSummaries();
-        const targetDev = devices.find(d => d.serial === serial) || devices[0];
+        const targetDev = serial 
+          ? devices.find(d => d.serial.toLowerCase() === serial.toLowerCase())
+          : devices[0];
+
         if (targetDev && targetDev.port) {
           const proxyReq = http.request({
             hostname: '127.0.0.1',
@@ -223,6 +226,33 @@ function startDashboardServer(port = 7400) {
 
           req.on('error', () => { try { proxyReq.destroy(); } catch (_) {} });
           req.pipe(proxyReq);
+          return;
+        }
+
+        if (serial) {
+          // Device is provisioning or connecting — display auto-refreshing loading screen
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="2">
+  <title>Connecting Stream - ${serial}</title>
+  <style>
+    body { background:#070b14; color:#f8fafc; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center; padding:20px; }
+    .box { background:rgba(15,23,42,0.9); border:1px solid rgba(56,189,248,0.3); border-radius:18px; padding:32px; max-width:380px; width:100%; }
+    .spin { width:32px; height:32px; border:3px solid rgba(56,189,248,0.2); border-top-color:#38bdf8; border-radius:50%; animation:s 0.8s linear infinite; margin:0 auto 16px; }
+    @keyframes s { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spin"></div>
+    <div style="font-size:15px; font-weight:700; color:#fff;">Connecting ${serial}...</div>
+    <div style="font-size:12px; color:#94a3b8; margin-top:8px; line-height:1.4;">Device video pipeline is initializing. Connecting automatically in 2 seconds...</div>
+  </div>
+</body>
+</html>`);
           return;
         }
       }
@@ -255,10 +285,12 @@ function startDashboardServer(port = 7400) {
       const actionParam = fullUrl.searchParams.get('action');
       const udidParam = fullUrl.searchParams.get('udid');
       const remoteParam = fullUrl.searchParams.get('remote');
-      const serial = udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null);
+      const serial = (udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null) || '').trim();
 
       const devices = processManager.getActiveDeviceSummaries();
-      const targetDev = (serial ? devices.find(d => d.serial === serial) : null) || devices[0];
+      const targetDev = serial 
+        ? devices.find(d => d.serial.toLowerCase() === serial.toLowerCase()) 
+        : devices[0];
 
       if (targetDev && targetDev.port) {
         const proxyReq = http.request({
