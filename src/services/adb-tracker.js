@@ -88,51 +88,39 @@ async function handleDeviceAdd(device) {
   })().catch(() => {});
 
   try {
-    // 1. Read device properties
+    // 1. Read device properties with strict timeout (never block provisioning)
     let deviceModel = 'Android';
     let deviceBrand  = 'Generic';
 
     try {
       const deviceClient = client.getDevice(serial);
-      const props = await deviceClient.getProperties();
+      const props = await Promise.race([
+        deviceClient.getProperties(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Properties timeout')), 1500))
+      ]);
       deviceModel = props['ro.product.model'] || deviceModel;
       deviceBrand  = props['ro.product.brand']  || deviceBrand;
       logger.info(`Device properties: ${serial} → ${deviceBrand} ${deviceModel}`);
     } catch (err) {
-      logger.warn(`Could not read properties for ${serial}: ${err.message}`);
+      logger.warn(`Could not read properties for ${serial} (${err.message}) — using defaults`);
     }
 
-    // 2. Sync machine binding (no payment check — license managed online)
-    const bindingCode = await bindingService.syncMachineBinding();
-    const licenseStatus = await licenseService.checkLicenseStatus(bindingCode);
-
-    if (!licenseStatus.isActive) {
-      logger.warn(`[LICENSE] Binding ${bindingCode} is NOT licensed: ${licenseStatus.note}`);
-      logger.warn(`[LICENSE] Device ${serial} stream will be locked until license is restored by seed admin.`);
-    } else {
-      logger.info(`[LICENSE] Binding ${bindingCode} is active (${licenseStatus.mode})`);
-    }
-
-    // 3. Allocate port
+    // 2. Allocate port
     const port = await getFreePort(PORT_RANGE_START, PORT_RANGE_END);
     logger.info(`Allocated port ${port} for device ${serial}`);
 
-    // 4. Start stream server (always starts — license is enforced at website level)
+    // 3. Start stream server (always starts — license is enforced at website level)
     const { streamProcess, localUrl } = await startStreamServer(serial, port);
     logger.info(`Stream server started for ${serial}: ${localUrl}`);
-
-    // 5. Ensure Cloudflare named token tunnel daemon is running for the website & Supabase
-    try {
-      ensureNamedTokenTunnelRunning();
-    } catch (_) {}
 
     // Cloudflare Named Token Tunnel URL (for Supabase & website customers)
     const cfg = loadConfig();
     const rawDomain = (cfg.customDomain || cfg.domain || 'agent.dennoh.site').replace(/^https?:\/\//, '').replace(/\/+$/, '');
     const namedTokenUrl = `https://${rawDomain}/?udid=${encodeURIComponent(serial)}`;
     const streamUrl = `http://localhost:${port}/?udid=${encodeURIComponent(serial)}`;
+    const defaultBinding = bindingService.getOrGenerateBindingCode();
 
-    // 6. Register immediately with process manager so the device is online and accessible
+    // 4. Register IMMEDIATELY with process manager so the device is online and proxyable
     processManager.addDevice(serial, {
       streamProcess,
       tunnelProcess: null,
@@ -146,48 +134,72 @@ async function handleDeviceAdd(device) {
       brand: deviceBrand,
       deviceModel,
       deviceBrand,
-      bindingCode,
-      isPaid: licenseStatus.isActive,
-      paymentStatus: licenseStatus.mode,
+      bindingCode: defaultBinding,
+      isPaid: true,
+      paymentStatus: 'active',
     });
-
-    // 7. Sync Named Token URL to Supabase cloud immediately
-    await bindingService.syncDeviceUrl(serial, namedTokenUrl, {
-      model: deviceModel,
-      brand: deviceBrand,
-      localUrl,
-      port,
-    });
-
-    // 8. Register with central API (silent fail)
-    try {
-      await apiClient.registerDevice({
-        serialNumber: serial,
-        deviceModel,
-        deviceBrand,
-        streamUrl: namedTokenUrl,
-        status: 'ONLINE',
-      });
-    } catch (_) {}
 
     logger.info(`✅ Device ${serial} (${deviceBrand} ${deviceModel}) provisioned — stream ready`);
 
-    // 9. Asynchronously create dedicated Quick Tunnel in background (non-blocking)
+    // 5. Background asynchronous cloud sync & tunnels (non-blocking)
     (async () => {
       try {
-        const tunnelResult = await createTunnel(port);
-        const quickUrl = tunnelResult.publicUrl ? buildStreamUrl(tunnelResult.publicUrl, port, serial) : null;
-        if (quickUrl) {
-          const dev = processManager.getDevice(serial);
-          if (dev) {
-            dev.tunnelProcess = tunnelResult.tunnelProcess;
-            dev.publicUrl = quickUrl;
-            dev.trycloudflareUrl = quickUrl;
-          }
-          logger.info(`trycloudflare tunnel ready for ${serial}: ${quickUrl}`);
+        ensureNamedTokenTunnelRunning();
+      } catch (_) {}
+
+      try {
+        const bindingCode = await bindingService.syncMachineBinding();
+        const licenseStatus = await licenseService.checkLicenseStatus(bindingCode);
+        const dev = processManager.getDevice(serial);
+        if (dev) {
+          dev.bindingCode = bindingCode;
+          dev.isPaid = licenseStatus.isActive;
+          dev.paymentStatus = licenseStatus.mode;
         }
-      } catch (err) {
-        logger.info(`Quick tunnel skipped for ${serial} (named tunnel active): ${err.message}`);
+
+        await bindingService.syncDeviceUrl(serial, namedTokenUrl, {
+          model: deviceModel,
+          brand: deviceBrand,
+          localUrl,
+          port,
+        });
+
+        await licenseService.syncDeviceToCloud({
+          serial,
+          model: deviceModel,
+          brand: deviceBrand,
+          streamUrl: namedTokenUrl,
+          localUrl,
+          port,
+          bindingCode,
+          status: 'online',
+        });
+
+        try {
+          await apiClient.registerDevice({
+            serialNumber: serial,
+            deviceModel,
+            deviceBrand,
+            streamUrl: namedTokenUrl,
+            status: 'ONLINE',
+          });
+        } catch (_) {}
+
+        try {
+          const tunnelResult = await createTunnel(port);
+          const quickUrl = tunnelResult.publicUrl ? buildStreamUrl(tunnelResult.publicUrl, port, serial) : null;
+          if (quickUrl) {
+            const dev2 = processManager.getDevice(serial);
+            if (dev2) {
+              dev2.tunnelProcess = tunnelResult.tunnelProcess;
+              dev2.publicUrl = quickUrl;
+              dev2.trycloudflareUrl = quickUrl;
+            }
+            logger.info(`trycloudflare tunnel ready for ${serial}: ${quickUrl}`);
+          }
+        } catch (_) {}
+      } catch (bgErr) {
+        logger.warn(`Background sync notice for ${serial}: ${bgErr.message}`);
       }
     })().catch(() => {});
 
@@ -258,13 +270,11 @@ async function startTracking() {
       logger.info(`Starting staggered provisioning for ${activeList.length} device(s)...`);
       (async () => {
         for (const d of activeList) {
-          try {
-            await handleDeviceAdd(d);
-          } catch (e) {
+          handleDeviceAdd(d).catch((e) => {
             logger.warn(`Provision error for ${d.id}: ${e.message}`);
-          }
-          // 600ms stagger between device launches to ensure scrcpy ports & ADB tunnels bind cleanly
-          await new Promise(r => setTimeout(r, 600));
+          });
+          // 300ms stagger between device launches to ensure scrcpy ports & ADB tunnels bind cleanly
+          await new Promise(r => setTimeout(r, 300));
         }
       })();
     }

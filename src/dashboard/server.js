@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { exec } = require('child_process');
 const logger = require('../utils/logger');
 const processManager = require('../main/process-manager');
+const streamService = require('../services/stream-service');
 const bindingService = require('../services/binding-service');
 const licenseService = require('../services/license-service');
 
@@ -196,9 +197,16 @@ function startDashboardServer(port = 7400) {
       if (actionParam === 'proxy' || udidParam || remoteParam) {
         const serial = (udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null) || '').trim();
         const devices = processManager.getActiveDeviceSummaries();
-        const targetDev = serial 
+        let targetDev = serial 
           ? devices.find(d => d.serial.toLowerCase() === serial.toLowerCase())
           : devices[0];
+
+        if (!targetDev && serial) {
+          const activeEntry = streamService.getActiveServerEntry(serial);
+          if (activeEntry && activeEntry.port) {
+            targetDev = { serial: activeEntry.serial, port: activeEntry.port };
+          }
+        }
 
         if (targetDev && targetDev.port) {
           const proxyReq = http.request({
@@ -288,9 +296,16 @@ function startDashboardServer(port = 7400) {
       const serial = (udidParam || (remoteParam ? decodeURIComponent(remoteParam).split(':').pop() : null) || '').trim();
 
       const devices = processManager.getActiveDeviceSummaries();
-      const targetDev = serial 
+      let targetDev = serial 
         ? devices.find(d => d.serial.toLowerCase() === serial.toLowerCase()) 
         : devices[0];
+
+      if (!targetDev && serial) {
+        const activeEntry = streamService.getActiveServerEntry(serial);
+        if (activeEntry && activeEntry.port) {
+          targetDev = { serial: activeEntry.serial, port: activeEntry.port };
+        }
+      }
 
       if (targetDev && targetDev.port) {
         const proxyReq = http.request({

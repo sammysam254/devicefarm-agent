@@ -2273,7 +2273,7 @@ async function startStreamServer(serial, port) {
     server.listen(port, '0.0.0.0', () => {
       const localUrl = `http://localhost:${port}`;
       logger.info(`[StreamServer] Listening at ${localUrl}`);
-      activeServers.set(serial, { server, wss, engine });
+      activeServers.set(serial, { server, wss, engine, port, localUrl });
 
       const streamProcess = {
         pid: port, exitCode: null,
@@ -2309,4 +2309,5 @@ module.exports = {
   killStreamServer,
   disconnectBlockedStream,
   getDeviceStreamBlockedHtml,
+  getActiveServerEntry,
 };

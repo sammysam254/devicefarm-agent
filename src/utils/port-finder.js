@@ -36,12 +36,15 @@ function isPortFree(port) {
  */
 async function getFreePort(start, end) {
   for (let port = start; port <= end; port++) {
-    if (allocatedPorts.has(port)) {
+    const videoPort = port + 1000;
+    if (allocatedPorts.has(port) || allocatedPorts.has(videoPort)) {
       continue;
     }
-    const free = await isPortFree(port);
-    if (free) {
+    const free1 = await isPortFree(port);
+    const free2 = await isPortFree(videoPort);
+    if (free1 && free2) {
       allocatedPorts.add(port);
+      allocatedPorts.add(videoPort);
       return port;
     }
   }
@@ -54,6 +57,7 @@ async function getFreePort(start, end) {
  */
 function releasePort(port) {
   allocatedPorts.delete(port);
+  allocatedPorts.delete(port + 1000);
 }
 
 /**
