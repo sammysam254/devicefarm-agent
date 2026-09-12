@@ -735,10 +735,11 @@ function handleControl(type, data, serial, engine, ws = null) {
     const devH = engine.screenHeight || H;
     const realX = Math.round((x / W) * devW);
     const realY = Math.round((y / H) * devH);
-    try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
-    if (typeof engine.sendTouchEvent === 'function') {
-      engine.sendTouchEvent(0, x, y, W, H, 1.0);
+    const ok = (typeof engine.sendTouchEvent === 'function') && engine.sendTouchEvent(0, x, y, W, H, 1.0);
+    if (ok) {
       setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 30);
+    } else {
+      try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
     }
   } else if (type === 'swipe' || type === 'swipe_fallback') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
@@ -977,6 +978,11 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       <input tabindex="-1" onfocus="this.blur()" type="range" min="0" max="100" value="100" class="volume-slider-v" id="volSlider" oninput="setVolume(this.value)"/>
     </div>
   </div>
+</div>
+
+<div id="audioEnableBanner" onclick="initAudio(); this.style.display='none';" style="display:none; position:fixed; bottom:24px; left:24px; z-index:99999; background:rgba(18,24,38,0.92); border:1px solid rgba(0,216,255,0.4); box-shadow:0 8px 32px rgba(0,0,0,0.6); color:#fff; border-radius:30px; padding:10px 18px; font-size:13px; font-weight:600; cursor:pointer; align-items:center; gap:8px; backdrop-filter:blur(10px); transition:all 0.2s ease;">
+  <span style="font-size:16px;">🔊</span>
+  <span>Tap to Enable Sound</span>
 </div>
 
 <div class="modal" id="textModal">
@@ -1227,22 +1233,35 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   let audioDecoderReady = false;
   let audioNextPlayTime = 0;
   const urlParams = new URLSearchParams(window.location.search);
-  let isMuted = urlParams.get('muted') === '1' || urlParams.get('muted') === 'true';
+  const isCctvWall = urlParams.get('cctv') === '1';
+  let isMuted = isCctvWall ? true : (urlParams.get('muted') === '1' || urlParams.get('muted') === 'true');
+  if (urlParams.get('muted') === '0' || urlParams.get('muted') === 'false') {
+    isMuted = false;
+  }
   let gainNode = null;
   let userInteracted = false;
 
   function initAudio() {
-    if (audioCtx) {
-      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
-      return;
+    userInteracted = true;
+    if (!audioCtx) {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+        gainNode = audioCtx.createGain();
+        gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
+        gainNode.connect(audioCtx.destination);
+      } catch (_) {}
     }
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
-      gainNode = audioCtx.createGain();
-      gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
-      gainNode.connect(audioCtx.destination);
-      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
-    } catch (_) {}
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().then(() => {
+        const b = document.getElementById('audioEnableBanner');
+        if (b) b.style.display = 'none';
+        syncMuteButtons();
+      }).catch(() => {});
+    } else if (audioCtx && audioCtx.state === 'running') {
+      const b = document.getElementById('audioEnableBanner');
+      if (b) b.style.display = 'none';
+      syncMuteButtons();
+    }
   }
 
   function initOpusDecoder() {
@@ -1255,6 +1274,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
           if (!audioCtx || !gainNode) { audioData.close(); return; }
+          if (isMuted) { audioData.close(); return; }
           try {
             const nCh     = audioData.numberOfChannels;
             const nFrames = audioData.numberOfFrames;
@@ -1297,7 +1317,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
             src.connect(gainNode);
 
             const now = audioCtx.currentTime;
-            if (audioNextPlayTime < now) audioNextPlayTime = now;
+            if (audioNextPlayTime < now || audioNextPlayTime > now + 0.15) {
+              audioNextPlayTime = now;
+            }
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -1326,9 +1348,13 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     if (!audioCtx) initAudio();
     if (!audioCtx) return;
     if (audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(function() {});
+      const b = document.getElementById('audioEnableBanner');
+      if (b && b.style.display !== 'flex') b.style.display = 'flex';
+      return;
     }
-    if (audioCtx.state !== 'running') return;
+    const b = document.getElementById('audioEnableBanner');
+    if (b && b.style.display !== 'none') b.style.display = 'none';
+
     if (!audioDecoderReady) {
       if (!initOpusDecoder()) return;
     }
@@ -1336,13 +1362,11 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     try {
       audioDecoder.decode(new EncodedAudioChunk({
         type: 'key',
-        timestamp: performance.now() * 1000,
+        timestamp: Math.round(audioCtx.currentTime * 1e6),
         data: bytes
       }));
     } catch (err) {
       console.warn('[Audio] Opus decode error:', err);
-      audioDecoderReady = false;
-      audioDecoder = null;
     }
   }
 
@@ -1352,9 +1376,13 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     if (!audioCtx) initAudio();
     if (!audioCtx || !gainNode) return;
     if (audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(function() {});
+      const b = document.getElementById('audioEnableBanner');
+      if (b && b.style.display !== 'flex') b.style.display = 'flex';
+      return;
     }
-    if (audioCtx.state !== 'running') return;
+    const b = document.getElementById('audioEnableBanner');
+    if (b && b.style.display !== 'none') b.style.display = 'none';
+
     try {
       const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
       const sampleCount = Math.floor(int16.length / 2);
@@ -1369,43 +1397,45 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       src.buffer = buf;
       src.connect(gainNode);
       const now = audioCtx.currentTime;
-      if (audioNextPlayTime < now) audioNextPlayTime = now;
-      if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
+      if (audioNextPlayTime < now || audioNextPlayTime > now + 0.15) audioNextPlayTime = now;
       src.start(audioNextPlayTime);
       audioNextPlayTime += buf.duration;
     } catch (_) {}
   }
 
+  function syncMuteButtons() {
+    const isActuallyMuted = isMuted || (audioCtx && audioCtx.state === 'suspended');
+    const btn = document.getElementById('muteBtn');
+    if (btn) {
+      btn.textContent = isActuallyMuted ? '🔇' : '🔊';
+      btn.title = isActuallyMuted ? 'Unmute / Enable Audio' : 'Mute audio';
+      btn.style.color = isActuallyMuted ? '#f87171' : '';
+      btn.style.borderColor = isActuallyMuted ? 'rgba(248,113,113,.5)' : '';
+    }
+    const iconM = document.getElementById('muteBtnMIcon');
+    const btnM  = document.getElementById('muteBtnM');
+    if (iconM) iconM.textContent = isActuallyMuted ? '🔇' : '🔊';
+    if (btnM)  {
+      btnM.style.color = isActuallyMuted ? '#f87171' : '';
+      btnM.style.borderColor = isActuallyMuted ? 'rgba(248,113,113,.5)' : '';
+    }
+  }
+
   // ── Mute toggle ──────────────────────────────────────────────────────────
   function toggleMute() {
     isMuted = !isMuted;
-    if (!audioCtx) initAudio();
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
+    initAudio();
     if (gainNode) gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
     if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
       try { audioDecoder.flush().catch(function(){}); } catch (_) {}
     }
-    // Sync desktop sidebar mute button
-    const btn = document.getElementById('muteBtn');
-    if (btn) {
-      btn.textContent = isMuted ? '🔇' : '🔊';
-      btn.title = isMuted ? 'Unmute audio' : 'Mute audio';
-      btn.style.color = isMuted ? '#f87171' : '';
-      btn.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
-    }
-    // Sync mobile bottom bar mute button
-    const iconM = document.getElementById('muteBtnMIcon');
-    const btnM  = document.getElementById('muteBtnM');
-    if (iconM) iconM.textContent = isMuted ? '🔇' : '🔊';
-    if (btnM)  {
-      btnM.style.color = isMuted ? '#f87171' : '';
-      btnM.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
-    }
+    syncMuteButtons();
   }
 
-  // Resume AudioContext on first user gesture
-  ['click', 'mousedown', 'pointerdown', 'touchstart', 'keydown'].forEach(function(evt) {
-    window.addEventListener(evt, initAudio, { passive: true });
+  // Resume AudioContext on any user interaction with capture
+  ['click', 'mousedown', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'keydown'].forEach(function(evt) {
+    window.addEventListener(evt, initAudio, { capture: true, passive: true });
+    document.addEventListener(evt, initAudio, { capture: true, passive: true });
   });
 
   // ── WebCodecs H264 Decoder ───────────────────────────────────────────────
@@ -1872,15 +1902,13 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
         width: frozenDims.W,
         height: frozenDims.H
       });
+      send({ type:'touch', action:1, x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H, pressure:0 });
     } else {
-      // Stationary click / tap: clean, guaranteed instant 1:1 tap at click coordinates
-      send({
-        type: 'tap',
-        x: downStartPos.x,
-        y: downStartPos.y,
-        width: frozenDims.W,
-        height: frozenDims.H
-      });
+      // Stationary click / tap: release touch action 1 to cleanly conclude the ACTION_DOWN
+      const delay = Math.max(0, 40 - dragDur);
+      setTimeout(() => {
+        send({ type:'touch', action:1, x:downStartPos.x, y:downStartPos.y, width:frozenDims.W, height:frozenDims.H, pressure:0 });
+      }, delay);
     }
   }
 

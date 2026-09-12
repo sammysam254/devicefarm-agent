@@ -339,6 +339,7 @@ class ScrcpyEngine extends EventEmitter {
     }
 
     const useAudio = this.enableAudio && !this._audioDisabled;
+    this._serverUsedAudio = useAudio;
     const args = [
       '-s', this.serial, 'shell',
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
@@ -482,8 +483,8 @@ class ScrcpyEngine extends EventEmitter {
 
     await new Promise(r => setTimeout(r, 60));
 
-    // tunnel_forward socket 2 = audio stream (when audio is active and not disabled by scrcpy)
-    if (this.enableAudio && !this._audioDisabled) {
+    // tunnel_forward socket 2 = audio stream (when server was spawned with audio=true)
+    if (this._serverUsedAudio) {
       logger.info(`[ScrcpyEngine ${this.serial}] Connecting audio socket...`);
       try {
         this.audioSocket = await this._connectOne(this.videoPort, 35);
@@ -842,9 +843,10 @@ class ScrcpyEngine extends EventEmitter {
       return false;
     }
 
-    // Target resolution must strictly match physical screen dimensions from wm size (getScreenSize in scrcpy-server)
-    const targetW = this.screenWidth || 1080;
-    const targetH = this.screenHeight || 2400;
+    const clientW = (width > 10) ? Math.round(width) : 0;
+    const clientH = (height > 10) ? Math.round(height) : 0;
+    const targetW = this.videoWidth || this.scrcpyServerWidth || this.screenWidth || clientW || 1080;
+    const targetH = this.videoHeight || this.scrcpyServerHeight || this.screenHeight || clientH || 2400;
 
     const srcW = clientW || targetW;
     const srcH = clientH || targetH;

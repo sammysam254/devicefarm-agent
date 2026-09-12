@@ -431,13 +431,22 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             <div style={{ flex: 1, background: '#000', position: 'relative' }}>
               <iframe 
                 src={(() => {
-                  const base = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                  return base.includes('?') ? `${base}&admin=1&k=flexpulse_admin_cctv_9487` : `${base}?admin=1&k=flexpulse_admin_cctv_9487`;
+                  const raw = focusDevice.stream_url || `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
+                  try {
+                    const u = new URL(raw, window.location.href);
+                    u.searchParams.set('admin', '1');
+                    u.searchParams.set('muted', '0');
+                    u.searchParams.set('cctv', '0');
+                    u.searchParams.set('k', 'flexpulse_admin_cctv_9487');
+                    return u.toString();
+                  } catch (_) {
+                    return raw.includes('?') ? `${raw}&admin=1&muted=0&cctv=0&k=flexpulse_admin_cctv_9487` : `${raw}?admin=1&muted=0&cctv=0&k=flexpulse_admin_cctv_9487`;
+                  }
                 })()} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
                 referrerPolicy="no-referrer"
-                allow="autoplay; fullscreen"
+                allow="autoplay *; fullscreen *; microphone *; camera *; clipboard-read; clipboard-write"
               />
             </div>
           </div>
