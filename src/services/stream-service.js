@@ -600,6 +600,80 @@ const activeSwipeTimers = new Map();
 const lastKeyEvents = new Map();  // serial -> { code, time }
 const lastTextEvents = new Map(); // serial -> { text, time }
 
+// ── Complete Hardware Keycode Map for 1:1 Computer Keyboard Typing ─────────
+// Bypasses Android WebView / Gboard double-entry bug with scrcpy INJECT_TEXT
+const ASCII_KEYCODES = {
+  // Lowercase a-z (Keycodes 29..54)
+  'a': { code: 29, meta: 0 }, 'b': { code: 30, meta: 0 }, 'c': { code: 31, meta: 0 },
+  'd': { code: 32, meta: 0 }, 'e': { code: 33, meta: 0 }, 'f': { code: 34, meta: 0 },
+  'g': { code: 35, meta: 0 }, 'h': { code: 36, meta: 0 }, 'i': { code: 37, meta: 0 },
+  'j': { code: 38, meta: 0 }, 'k': { code: 39, meta: 0 }, 'l': { code: 40, meta: 0 },
+  'm': { code: 41, meta: 0 }, 'n': { code: 42, meta: 0 }, 'o': { code: 43, meta: 0 },
+  'p': { code: 44, meta: 0 }, 'q': { code: 45, meta: 0 }, 'r': { code: 46, meta: 0 },
+  's': { code: 47, meta: 0 }, 't': { code: 48, meta: 0 }, 'u': { code: 49, meta: 0 },
+  'v': { code: 50, meta: 0 }, 'w': { code: 51, meta: 0 }, 'x': { code: 52, meta: 0 },
+  'y': { code: 53, meta: 0 }, 'z': { code: 54, meta: 0 },
+
+  // Uppercase A-Z (Keycodes 29..54 with Shift meta 1)
+  'A': { code: 29, meta: 1 }, 'B': { code: 30, meta: 1 }, 'C': { code: 31, meta: 1 },
+  'D': { code: 32, meta: 1 }, 'E': { code: 33, meta: 1 }, 'F': { code: 34, meta: 1 },
+  'G': { code: 35, meta: 1 }, 'H': { code: 36, meta: 1 }, 'I': { code: 37, meta: 1 },
+  'J': { code: 38, meta: 1 }, 'K': { code: 39, meta: 1 }, 'L': { code: 40, meta: 1 },
+  'M': { code: 41, meta: 1 }, 'N': { code: 42, meta: 1 }, 'O': { code: 43, meta: 1 },
+  'P': { code: 44, meta: 1 }, 'Q': { code: 45, meta: 1 }, 'R': { code: 46, meta: 1 },
+  'S': { code: 47, meta: 1 }, 'T': { code: 48, meta: 1 }, 'U': { code: 49, meta: 1 },
+  'V': { code: 50, meta: 1 }, 'W': { code: 51, meta: 1 }, 'X': { code: 52, meta: 1 },
+  'Y': { code: 53, meta: 1 }, 'Z': { code: 54, meta: 1 },
+
+  // Digits 0-9 (Keycodes 7..16)
+  '0': { code: 7,  meta: 0 }, '1': { code: 8,  meta: 0 }, '2': { code: 9,  meta: 0 },
+  '3': { code: 10, meta: 0 }, '4': { code: 11, meta: 0 }, '5': { code: 12, meta: 0 },
+  '6': { code: 13, meta: 0 }, '7': { code: 14, meta: 0 }, '8': { code: 15, meta: 0 },
+  '9': { code: 16, meta: 0 },
+
+  // Space & control characters
+  ' ':  { code: 62, meta: 0 }, // KEYCODE_SPACE
+  '\n': { code: 66, meta: 0 }, // KEYCODE_ENTER
+  '\r': { code: 66, meta: 0 }, // KEYCODE_ENTER
+  '\t': { code: 61, meta: 0 }, // KEYCODE_TAB
+
+  // Punctuation & common symbols
+  '.': { code: 56, meta: 0 }, // KEYCODE_PERIOD
+  ',': { code: 55, meta: 0 }, // KEYCODE_COMMA
+  '/': { code: 76, meta: 0 }, // KEYCODE_SLASH
+  '-': { code: 69, meta: 0 }, // KEYCODE_MINUS
+  '=': { code: 70, meta: 0 }, // KEYCODE_EQUALS
+  ';': { code: 74, meta: 0 }, // KEYCODE_SEMICOLON
+  '\'':{ code: 75, meta: 0 }, // KEYCODE_APOSTROPHE
+  '[': { code: 71, meta: 0 }, // KEYCODE_LEFT_BRACKET
+  ']': { code: 72, meta: 0 }, // KEYCODE_RIGHT_BRACKET
+  '\\':{ code: 73, meta: 0 }, // KEYCODE_BACKSLASH
+  '`': { code: 68, meta: 0 }, // KEYCODE_GRAVE
+
+  // Shifted punctuation & symbols
+  '!': { code: 8,  meta: 1 }, // 1 + Shift
+  '@': { code: 77, meta: 0 }, // KEYCODE_AT
+  '#': { code: 10, meta: 1 }, // 3 + Shift
+  '$': { code: 11, meta: 1 }, // 4 + Shift
+  '%': { code: 12, meta: 1 }, // 5 + Shift
+  '^': { code: 13, meta: 1 }, // 6 + Shift
+  '&': { code: 14, meta: 1 }, // 7 + Shift
+  '*': { code: 17, meta: 0 }, // KEYCODE_STAR
+  '(': { code: 16, meta: 1 }, // 9 + Shift
+  ')': { code: 7,  meta: 1 }, // 0 + Shift
+  '_': { code: 69, meta: 1 }, // Minus + Shift
+  '+': { code: 70, meta: 1 }, // Equals + Shift
+  ':': { code: 74, meta: 1 }, // Semicolon + Shift
+  '"': { code: 75, meta: 1 }, // Apostrophe + Shift
+  '<': { code: 55, meta: 1 }, // Comma + Shift
+  '>': { code: 56, meta: 1 }, // Period + Shift
+  '?': { code: 76, meta: 1 }, // Slash + Shift
+  '{': { code: 71, meta: 1 }, // Left Bracket + Shift
+  '}': { code: 72, meta: 1 }, // Right Bracket + Shift
+  '|': { code: 73, meta: 1 }, // Backslash + Shift
+  '~': { code: 68, meta: 1 }, // Grave + Shift
+};
+
 function getActiveServerEntry(requestedUdid) {
   if (!requestedUdid) return null;
   const clean = String(requestedUdid).trim();
@@ -713,8 +787,8 @@ function handleControl(type, data, serial, engine, ws = null) {
     const metastate = parseInt(get(data, 'metastate'), 10) || 0;
     const now = Date.now();
     const last = lastKeyEvents.get(serial);
-    if (last && last.code === code && (now - last.time) < 45) {
-      return; // Discard duplicate rapid keyevent
+    if (last && last.code === code && (now - last.time) < 100) {
+      return; // Discard duplicate rapid keyevent (< 100ms)
     }
     lastKeyEvents.set(serial, { code, time: now });
 
@@ -729,15 +803,26 @@ function handleControl(type, data, serial, engine, ws = null) {
     if (text) {
       const now = Date.now();
       const last = lastTextEvents.get(serial);
-      if (last && last.text === text && (now - last.time) < 45) {
-        return; // Discard duplicate rapid text event
+      if (last && last.text === text && (now - last.time) < 100) {
+        return; // Discard duplicate rapid text event (< 100ms)
       }
       lastTextEvents.set(serial, { text, time: now });
 
-      const ok = engine.sendText(text);
-      if (!ok) {
-        const escaped = text.replace(/ /g, '%s').replace(/([\\$`"!'&|;<>~()#*?=[\]{}])/g, '\\$1');
-        try { getInputShell(serial).stdin.write(`input text ${escaped}\n`); } catch (_) {}
+      const mapped = (text.length === 1) ? ASCII_KEYCODES[text] : null;
+      if (mapped) {
+        // Hardware keycode injection: 1:1 single-character typing, prevents WebView/Gboard double-entry
+        const ok = engine.sendKeycode(0, mapped.code, 0, mapped.meta);
+        setTimeout(() => engine.sendKeycode(1, mapped.code, 0, mapped.meta), 25);
+        if (!ok) {
+          try { getInputShell(serial).stdin.write(`input keyevent ${mapped.code}\n`); } catch (_) {}
+        }
+      } else {
+        // Multi-character string or exotic Unicode: use scrcpy sendText
+        const ok = engine.sendText(text);
+        if (!ok) {
+          const escaped = text.replace(/ /g, '%s').replace(/([\\$`"!'&|;<>~()#*?=[\]{}])/g, '\\$1');
+          try { getInputShell(serial).stdin.write(`input text ${escaped}\n`); } catch (_) {}
+        }
       }
     }
   } else if (type === 'reboot') {
@@ -1817,8 +1902,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   let lastKeyStr = '';
 
   function handleKeyDown(e) {
+    if (e.isComposing) return;
     if (e.repeat) {
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
     // Never intercept if typing into an input/textarea inside a modal dialog
@@ -1832,9 +1919,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     const keyStr = e.key;
     const now = performance.now();
 
-    // Guard against duplicate event firing (e.g. multiple DOM listeners, bubbling, or synthetic duplicates)
-    if (keyStr === lastKeyStr && (now - lastKeyTime) < 50) {
+    // Guard against duplicate event firing (IME, multiple DOM listeners, bubbling, or synthetic duplicates)
+    if (keyStr === lastKeyStr && (now - lastKeyTime) < 110) {
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
     lastKeyTime = now;
@@ -1843,51 +1931,61 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     // Special keys
     if (keyStr === ' ' || e.code === 'Space') {
       e.preventDefault();
+      e.stopPropagation();
       key(62); // Android KEYCODE_SPACE = 62
       return;
     }
     if (keyStr === 'Backspace') {
       e.preventDefault();
+      e.stopPropagation();
       key(67); // Android KEYCODE_DEL = 67
       return;
     }
     if (keyStr === 'Enter') {
       e.preventDefault();
+      e.stopPropagation();
       key(66); // Android KEYCODE_ENTER = 66
       return;
     }
     if (keyStr === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
       key(4);  // Android KEYCODE_BACK = 4
       return;
     }
     if (keyStr === 'Tab') {
       e.preventDefault();
+      e.stopPropagation();
       key(61); // Android KEYCODE_TAB = 61
       return;
     }
     if (keyStr === 'Delete') {
       e.preventDefault();
+      e.stopPropagation();
       key(112); // Android KEYCODE_FORWARD_DEL = 112
       return;
     }
     if (keyStr === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       key(19); // Android KEYCODE_DPAD_UP
       return;
     }
     if (keyStr === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       key(20); // Android KEYCODE_DPAD_DOWN
       return;
     }
     if (keyStr === 'ArrowLeft') {
       e.preventDefault();
+      e.stopPropagation();
       key(21); // Android KEYCODE_DPAD_LEFT
       return;
     }
     if (keyStr === 'ArrowRight') {
       e.preventDefault();
+      e.stopPropagation();
       key(22); // Android KEYCODE_DPAD_RIGHT
       return;
     }
@@ -1897,16 +1995,19 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       const lower = keyStr.toLowerCase();
       if (lower === 'a') {
         e.preventDefault();
+        e.stopPropagation();
         send({ type:'code', code: 29, metastate: 0x1000 }); // KEYCODE_A with CTRL
         return;
       }
       if (lower === 'c') {
         e.preventDefault();
+        e.stopPropagation();
         key(278); // KEYCODE_COPY
         return;
       }
       if (lower === 'x') {
         e.preventDefault();
+        e.stopPropagation();
         key(277); // KEYCODE_CUT
         return;
       }
@@ -1917,10 +2018,12 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     // Normal typing: any printable letter, number, or symbol
     if (keyStr.length === 1 && !e.altKey) {
       e.preventDefault();
+      e.stopPropagation();
       send({ type:'text', text: keyStr });
     }
   }
 
+  window.removeEventListener('keydown', handleKeyDown);
   window.addEventListener('keydown', handleKeyDown);
 
   // Clipboard paste: instantly types text into device
