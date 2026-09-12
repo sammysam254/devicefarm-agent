@@ -35,11 +35,11 @@ function loadConfig() {
 }
 
 function resolveAdb() {
+  if (fs.existsSync('C:\\platform-tools\\adb.exe')) return 'C:\\platform-tools\\adb.exe';
   const cfg = loadConfig();
   if (cfg.adbPath && fs.existsSync(cfg.adbPath)) return cfg.adbPath;
   const bundled = path.join(__dirname, '../../assets/bin/adb.exe');
   if (fs.existsSync(bundled)) return bundled;
-  if (fs.existsSync('C:\\platform-tools\\adb.exe')) return 'C:\\platform-tools\\adb.exe';
   return 'adb';
 }
 
@@ -51,15 +51,19 @@ function listAdbDevices(adbBin) {
       if (err) { resolve([]); return; }
       const lines = stdout.split('\n').slice(1);
       const serials = [];
+      let hadOffline = false;
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
         if (parts.length >= 2) {
           if (parts[1] === 'device') {
             serials.push(parts[0]);
           } else if (parts[1] === 'offline') {
-            exec(`"${adbBin}" reconnect offline`, () => {});
+            hadOffline = true;
           }
         }
+      }
+      if (hadOffline) {
+        exec(`"${adbBin}" reconnect offline`, () => {});
       }
       resolve(serials);
     });
@@ -77,9 +81,9 @@ const _inProgress = new Set();
  * Start the recovery polling loop.
  * @param {Function} onDeviceAdd    – same handler as adb-tracker's handleDeviceAdd
  * @param {Function} onDeviceRemove – same handler as adb-tracker's handleDeviceRemove
- * @param {number} intervalMs      – polling interval, default 12000ms
+ * @param {number} intervalMs      – polling interval, default 10000ms
  */
-function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 15000) {
+function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 10000) {
   _addDeviceCallback = onDeviceAdd;
   _removeDeviceCallback = onDeviceRemove;
 
@@ -104,8 +108,8 @@ async function runRecoveryCheck() {
   // ── 1. Re-enroll devices seen by ADB but not actively streaming ─────────────
   const toEnroll = adbSerials.filter(serial => !activeSerials.has(serial) && !_inProgress.has(serial));
   if (toEnroll.length > 0) {
-    await Promise.allSettled(toEnroll.map(async (serial) => {
-      logger.info(`[EnrollmentGuard] Re-enrolling rebooted/reconnected device: ${serial}`);
+    for (const serial of toEnroll) {
+      logger.info(`[EnrollmentGuard] Re-enrolling device: ${serial}`);
       _inProgress.add(serial);
       try {
         await _addDeviceCallback({ id: serial, type: 'device' });
@@ -114,7 +118,9 @@ async function runRecoveryCheck() {
       } finally {
         _inProgress.delete(serial);
       }
-    }));
+      // 500ms stagger between re-enrollments
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   // ── 2. Clean up stale processManager entries for vanished devices ───────────

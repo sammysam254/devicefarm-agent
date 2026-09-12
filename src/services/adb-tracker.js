@@ -253,9 +253,20 @@ async function startTracking() {
       }
     }
 
-    // Provision all connected devices concurrently in parallel
+    // Provision all connected devices with a slight stagger to prevent ADB daemon contention
     if (activeList.length > 0) {
-      await Promise.allSettled(activeList.map(d => handleDeviceAdd(d)));
+      logger.info(`Starting staggered provisioning for ${activeList.length} device(s)...`);
+      (async () => {
+        for (const d of activeList) {
+          try {
+            await handleDeviceAdd(d);
+          } catch (e) {
+            logger.warn(`Provision error for ${d.id}: ${e.message}`);
+          }
+          // 600ms stagger between device launches to ensure scrcpy ports & ADB tunnels bind cleanly
+          await new Promise(r => setTimeout(r, 600));
+        }
+      })();
     }
   } catch (err) {
     logger.error(`Initial ADB scan failed: ${err.message}`);
@@ -270,7 +281,11 @@ async function startTracking() {
       } else if (d.type === 'unauthorized') {
         logger.warn(`Device ${d.id} is UNAUTHORIZED — check the phone screen and tap "Allow USB Debugging".`);
       } else if (d.type === 'offline') {
-        logger.warn(`Device ${d.id} is OFFLINE — try unplugging and replugging the USB cable.`);
+        logger.warn(`Device ${d.id} is OFFLINE — attempting ADB reconnect.`);
+        try {
+          const { exec } = require('child_process');
+          exec(`"${adbPath}" reconnect offline`, () => {});
+        } catch (_) {}
       }
     });
     tracker.on('remove', (d) => handleDeviceRemove(d));
@@ -283,7 +298,7 @@ async function startTracking() {
     logger.info('✅ ADB device tracker started');
 
     // Start background enrollment guard (catches rebooted/silently-reconnected devices)
-    enrollmentGuard.startEnrollmentGuard(handleDeviceAdd, handleDeviceRemove, 12000);
+    enrollmentGuard.startEnrollmentGuard(handleDeviceAdd, handleDeviceRemove, 10000);
 
     // Start periodic cloud heartbeat for all active connected devices
     startCloudHeartbeat();
@@ -305,29 +320,34 @@ function startCloudHeartbeat() {
 
       const defaultBinding = bindingService.getOrGenerateBindingCode();
 
-      for (const dev of activeDevices) {
-        // Keep device hardware and system clock perfectly synchronized to prevent app timeouts/blocks
-        deviceTimeService.syncDeviceTime(dev.serial).catch(() => {});
+      // Parallelize cloud heartbeat across all active devices with individual error isolation
+      await Promise.allSettled(activeDevices.map(async (dev) => {
+        try {
+          // Keep device hardware and system clock perfectly synchronized
+          deviceTimeService.syncDeviceTime(dev.serial).catch(() => {});
 
-        await licenseService.syncDeviceToCloud({
-          serial: dev.serial,
-          model: dev.deviceModel || dev.model,
-          brand: dev.deviceBrand || dev.brand,
-          streamUrl: dev.streamUrl,
-          localUrl: dev.localUrl,
-          port: dev.port,
-          bindingCode: dev.bindingCode || defaultBinding,
-          status: 'online',
-        });
-      }
+          await licenseService.syncDeviceToCloud({
+            serial: dev.serial,
+            model: dev.deviceModel || dev.model,
+            brand: dev.deviceBrand || dev.brand,
+            streamUrl: dev.streamUrl,
+            localUrl: dev.localUrl,
+            port: dev.port,
+            bindingCode: dev.bindingCode || defaultBinding,
+            status: 'online',
+          });
+        } catch (devSyncErr) {
+          logger.warn(`[CloudHeartbeat] Sync failed for ${dev.serial}: ${devSyncErr.message}`);
+        }
+      }));
     } catch (_) {}
   };
 
   // Immediate sync on start
   performSync();
 
-  // Periodic heartbeat every 60 seconds (event-driven syncs handle plug/unplug)
-  cloudHeartbeatTimer = setInterval(performSync, 60000);
+  // Periodic heartbeat every 20 seconds so cloud dashboard & CCTV wall are always live
+  cloudHeartbeatTimer = setInterval(performSync, 20000);
 }
 
 function stopCloudHeartbeat() {

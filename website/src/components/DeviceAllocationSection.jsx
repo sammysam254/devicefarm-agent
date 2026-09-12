@@ -20,6 +20,9 @@ export default function DeviceAllocationSection({ currentUser }) {
   const isDeviceOnline = (d) => {
     if (!d || d.is_deleted_from_view) return false;
     if (d.status === 'offline' || !d.status) return false;
+    const now = Date.now();
+    const lastSeenTime = d.last_seen || d.updated_at ? new Date(d.last_seen || d.updated_at).getTime() : 0;
+    if (lastSeenTime > 0 && (now - lastSeenTime > 300000)) return false;
     return true;
   };
 
