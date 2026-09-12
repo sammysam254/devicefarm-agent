@@ -1083,11 +1083,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   function showBlockedScreen(reason) {
     isStreamBlocked = true;
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
-    if (audioWsRetryTimer) { clearTimeout(audioWsRetryTimer); audioWsRetryTimer = null; }
     if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
     try { resetDecoder(); } catch(_) {}
     try { if (audioCtx) audioCtx.close(); } catch(_) {}
-    if (audioWs) { try { audioWs.close(); } catch(_) {} audioWs = null; }
     
     const blockOverlay = document.getElementById('streamBlockedOverlay');
     const blockReasonEl = document.getElementById('blockReasonText');
@@ -1157,7 +1155,6 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   let userInteracted = false;
 
   function initAudio() {
-    userInteracted = true;
     if (audioCtx) {
       if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
       return;
@@ -1165,7 +1162,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
       gainNode = audioCtx.createGain();
-      gainNode.gain.value = isMuted ? 0 : 1;
+      gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
       gainNode.connect(audioCtx.destination);
       if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
     } catch (_) {}
@@ -1248,9 +1245,13 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   }
 
   function playOpusPacket(bytes) {
-    if (isMuted || !userInteracted) return;
+    if (isMuted) return;
     if (!audioCtx) initAudio();
-    if (!audioCtx || audioCtx.state !== 'running') return;
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function() {});
+    }
+    if (audioCtx.state !== 'running') return;
     if (!audioDecoderReady) {
       if (!initOpusDecoder()) return;
     }
@@ -1270,9 +1271,12 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
   function playRawPcm(bytes) {
     // Fallback: raw signed 16-bit LE stereo 48kHz PCM
-    if (isMuted || !userInteracted) return;
-    initAudio();
-    if (!audioCtx || !gainNode || isMuted) return;
+    if (isMuted) return;
+    if (!audioCtx) initAudio();
+    if (!audioCtx || !gainNode) return;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function() {});
+    }
     if (audioCtx.state !== 'running') return;
     try {
       const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
@@ -1298,10 +1302,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   // ── Mute toggle ──────────────────────────────────────────────────────────
   function toggleMute() {
     isMuted = !isMuted;
+    if (!audioCtx) initAudio();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
     if (gainNode) gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
-    if (!isMuted && (!audioWs || audioWs.readyState > 1)) {
-      connectAudioWS();
-    }
     if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
       try { audioDecoder.flush().catch(function(){}); } catch (_) {}
     }
@@ -1417,61 +1420,6 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   // ── Target device serial locked for this viewer session ───────────────────
   const TARGET_DEVICE_SERIAL = "${serial}";
 
-  // ── Dedicated Audio WebSocket (Runs completely separate route: /ws/audio) ─
-  let audioWs = null;
-  let audioWsRetryTimer = null;
-
-  function connectAudioWS() {
-    if (audioWsRetryTimer) { clearTimeout(audioWsRetryTimer); audioWsRetryTimer = null; }
-    if (audioWs) {
-      try {
-        audioWs.onopen = null; audioWs.onmessage = null;
-        audioWs.onerror = null; audioWs.onclose = null;
-        audioWs.close();
-      } catch (_) {}
-      audioWs = null;
-    }
-    if (isStreamBlocked) return;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const audioParams = new URLSearchParams(window.location.search);
-    audioParams.set('udid', TARGET_DEVICE_SERIAL);
-    audioParams.set('stream', 'audio');
-    const audioUrl = proto + '//' + location.host + '/ws?' + audioParams.toString();
-
-    try {
-      audioWs = new WebSocket(audioUrl);
-      audioWs.binaryType = 'arraybuffer';
-
-      audioWs.onopen = function() {
-        console.log('[Audio] Dedicated audio stream connected on /ws/audio');
-        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
-      };
-
-      audioWs.onmessage = function(e) {
-        if (isMuted || !userInteracted) return;
-        if (!(e.data instanceof ArrayBuffer)) return;
-        const rawU8 = new Uint8Array(e.data);
-        if (rawU8.length < 2) return;
-
-        if (rawU8[0] === 0x41) { // Tagged audio frame: [0x41, codec, ...payload]
-          const codec = rawU8[1];
-          const payload = rawU8.subarray(2);
-          if (codec === 0x4F) playOpusPacket(payload);
-          else playRawPcm(payload);
-        } else {
-          // Direct Opus payload
-          playOpusPacket(rawU8);
-        }
-      };
-
-      audioWs.onerror = function() {};
-      audioWs.onclose = function() {
-        if (isStreamBlocked) return;
-        audioWs = null;
-        audioWsRetryTimer = setTimeout(connectAudioWS, 3000);
-      };
-    } catch (_) {}
-  }
 
   // ── WebSocket connection (Video + Control) ────────────────────────────────
   let ws = null, wsOk = false;
@@ -2077,16 +2025,6 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       } catch (_) {}
       ws = null;
     }
-    if (audioWs) {
-      try {
-        audioWs.onopen = null;
-        audioWs.onmessage = null;
-        audioWs.onerror = null;
-        audioWs.onclose = null;
-        audioWs.close();
-      } catch (_) {}
-      audioWs = null;
-    }
     try { resetDecoder(); } catch (_) {}
     try { if (audioCtx) audioCtx.close(); } catch (_) {}
   });
@@ -2113,16 +2051,12 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
   try { initAudio(); } catch (_) {}
   connectWS();
-  connectAudioWS();
 
   // ── Gentle Liveness Check (Never drops healthy connections) ─────────────
   setInterval(function() {
     if (isStreamBlocked) return;
     if (!wsOk && (!ws || ws.readyState > 1)) {
       connectWS();
-    }
-    if (!isMuted && (!audioWs || audioWs.readyState > 1)) {
-      connectAudioWS();
     }
   }, 3000);
 </script>
@@ -2358,23 +2292,6 @@ async function startStreamServer(serial, port) {
       return;
     }
 
-    // ── Dedicated Audio Stream Client (stream=audio) ──
-    const isAudioClient = wsUrl.searchParams.get('stream') === 'audio';
-    if (isAudioClient) {
-      try { req.socket.setNoDelay(true); } catch (_) {}
-      logger.info(`[StreamServer] Dedicated Audio WS connected for ${targetSerial}`);
-      targetEngine.addAudioClient(ws);
-
-      const cleanupAudio = () => {
-        targetEngine.removeAudioClient(ws);
-      };
-
-      ws.on('close', cleanupAudio);
-      ws.on('error', cleanupAudio);
-      return;
-    }
-
-    // ── Video + Control Client Handler ──
     // Register active WS client with token and admin status
     if (!activeWsClients.has(targetSerial)) {
       activeWsClients.set(targetSerial, new Set());
@@ -2383,7 +2300,7 @@ async function startStreamServer(serial, port) {
     activeWsClients.get(targetSerial).add(clientEntry);
 
     try { req.socket.setNoDelay(true); } catch (_) {}
-    logger.info(`[StreamServer] Video WS connected for ${targetSerial}`);
+    logger.info(`[StreamServer] Stream WS connected for ${targetSerial}`);
     deviceTimeService.syncDeviceTime(targetSerial).catch(() => {});
     targetEngine.addClient(ws);
 
