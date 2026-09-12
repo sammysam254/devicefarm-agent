@@ -655,17 +655,15 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
   } else if (type === 'tap' || type === 'tap_fallback') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    const realX = Math.round((x / W) * (engine.screenWidth || W));
-    const realY = Math.round((y / H) * (engine.screenHeight || H));
-    if (type === 'tap') {
-      const ok = engine.sendTouchEvent(0, x, y, W, H, 1.0);
-      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
-      if (!ok) {
-        try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
-      }
-    } else {
-      try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
-    }
+    const devW = engine.screenWidth || W;
+    const devH = engine.screenHeight || H;
+    const realX = Math.round((x / W) * devW);
+    const realY = Math.round((y / H) * devH);
+    // 1. Guaranteed kernel tap
+    try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
+    // 2. Also inject via scrcpy control socket if connected
+    engine.sendTouchEvent(0, x, y, W, H, 1.0);
+    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
   } else if (type === 'swipe' || type === 'swipe_fallback') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
     if (activeSwipeTimers.has(serial)) {
@@ -710,12 +708,10 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
-    const ok = engine.sendKeycode(0, code);
+    engine.sendKeycode(0, code);
     setTimeout(() => engine.sendKeycode(1, code), 30);
-    // Direct kernel keyevent fallback if controlSocket was dropped or unresponsive
-    if (!ok) {
-      try { getInputShell(serial).stdin.write(`input keyevent ${code}\n`); } catch (_) {}
-    }
+    // Direct kernel keyevent for instant hardware button response
+    try { getInputShell(serial).stdin.write(`input keyevent ${code}\n`); } catch (_) {}
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
     const ok = engine.sendText(text);
@@ -1748,6 +1744,11 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
     // LEFT CLICK: Direct 1:1 hardware touch release (zero delay, no ghost double-clicks)
     send({ type:'touch', action:1, x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H, pressure:0 });
+
+    // For stationary clicks (< 12px drag, < 450ms duration), dispatch guaranteed tap
+    if (!hasMovedFar && dragDist < 12 && dragDur < 450) {
+      send({ type:'tap', x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H });
+    }
   }
 
   canvas.addEventListener('pointerup', releasePointer, { passive: false });

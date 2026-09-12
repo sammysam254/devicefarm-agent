@@ -358,7 +358,6 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'max_size=1080',            // Crisp 1080p Full HD resolution
       'video_bit_rate=4000000',   // 4.0 Mbps: Instant hardware encoding on phone CPU with zero network delay
       'max_fps=60',
       'downscale_on_error=true',
@@ -919,15 +918,9 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
 
-    // In scrcpy 2.x, SC_POINTER_ID_GENERIC_FINGER = -2n (0xFFFFFFFFFFFFFFFEn).
-    // Controller.java maps pointerId !== POINTER_ID_MOUSE directly to:
-    //   source   = InputDevice.SOURCE_TOUCHSCREEN
-    //   toolType = MotionEvent.TOOL_TYPE_FINGER
-    //   buttons  = 0, action_button = 0
-    // This allows Android's gesture recognizers (swiping, scrolling, flinging)
-    // to track touch dragging across all mobile apps and home screen without rejection.
-    const pId = (pointerId === 0 || pointerId === undefined || pointerId === -1 || pointerId === -1n)
-      ? BigInt('-2')
+    // Use pointerId 0 (primary finger) for touchscreen events
+    const pId = (pointerId === undefined || pointerId === null || pointerId < 0)
+      ? BigInt(0)
       : (typeof pointerId === 'bigint' ? pointerId : BigInt(pointerId));
     buf.writeBigInt64BE(pId, 2);          // pointerId
     buf.writeInt32BE(finalX, 10);
