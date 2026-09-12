@@ -731,15 +731,16 @@ function handleControl(type, data, serial, engine, ws = null) {
     }
   } else if (type === 'tap' || type === 'tap_fallback') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    const devW = engine.screenWidth || W;
-    const devH = engine.screenHeight || H;
-    const realX = Math.round((x / W) * devW);
-    const realY = Math.round((y / H) * devH);
-    // 1. Guaranteed kernel tap
-    try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
-    // 2. Also inject via scrcpy control socket if connected
-    engine.sendTouchEvent(0, x, y, W, H, 1.0);
-    setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
+    const ok = engine.sendTouchEvent(0, x, y, W, H, 1.0);
+    if (ok) {
+      setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
+    } else {
+      const devW = engine.screenWidth || W;
+      const devH = engine.screenHeight || H;
+      const realX = Math.round((x / W) * devW);
+      const realY = Math.round((y / H) * devH);
+      try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
+    }
   } else if (type === 'swipe' || type === 'swipe_fallback') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
     if (activeSwipeTimers.has(serial)) {
@@ -1857,13 +1858,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       return;
     }
 
-    // LEFT CLICK: Direct 1:1 hardware touch release (zero delay, no ghost double-clicks)
+    // LEFT CLICK: Direct 1:1 hardware touch release (zero delay, perfectly clean, no ghost taps)
+    if (e && e.stopPropagation) e.stopPropagation();
     send({ type:'touch', action:1, x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H, pressure:0 });
-
-    // For stationary clicks (< 12px drag, < 450ms duration), dispatch guaranteed tap
-    if (!hasMovedFar && dragDist < 12 && dragDur < 450) {
-      send({ type:'tap', x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H });
-    }
   }
 
   canvas.addEventListener('pointerup', releasePointer, { passive: false });
@@ -2050,7 +2047,15 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
   });
 
-  function key(code) { send({ type:'code', code }); }
+  let lastNavKeyTime = 0;
+  let lastNavKeyCode = 0;
+  function key(code) {
+    const now = performance.now();
+    if (code === lastNavKeyCode && (now - lastNavKeyTime) < 250) return;
+    lastNavKeyTime = now;
+    lastNavKeyCode = code;
+    send({ type:'code', code });
+  }
   function expandNotifications() { send({ type:'expand_notifications' }); }
 
   function screenshot() {
