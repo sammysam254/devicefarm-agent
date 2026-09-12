@@ -227,11 +227,11 @@ class ScrcpyEngine extends EventEmitter {
     this.scrcpyServerHeight = 0;
     this._jarPushed = false;
     this._screencapActive = false;
-    this.enableAudio = true;
-    this._audioDisabled = false;
-    this._audioReady = false;
-    this._audioCodec = 'opus';
+    this.enableSeparateAudio = true;
+    this.audioProc = null;
+    this._audioPort = null;
     this.audioSocket = null;
+    this._audioCodec = 'opus';
   }
 
   get isReady() {
@@ -269,10 +269,7 @@ class ScrcpyEngine extends EventEmitter {
         try { ws.send(bootstrap, { binary: true }); } catch (_) {}
       }
     }
-    // Nudge Android window compositor to immediately produce a fresh IDR keyframe
-    try {
-      this._adb(['shell', 'input', 'keyevent', '0']).catch(() => {});
-    } catch (_) {}
+
 
     // Instant screen paint: send snapshot if no keyframe buffer is cached yet
     if (!this._keyframeBuffer) {
@@ -327,10 +324,15 @@ class ScrcpyEngine extends EventEmitter {
       // 4. Spawn scrcpy-server process on device
       this._spawnServer();
 
-      // 5. Connect video and control sockets
+      // 5. Connect video and control sockets (guaranteed strictly 2 sockets: video & control)
       await this._connectSockets();
 
       logger.info(`[ScrcpyEngine ${this.serial}] High-speed 60FPS Scrcpy H264 engine active`);
+
+      // 6. Spawn separate audio worker (isolated process — will never crash video or control)
+      if (this.enableSeparateAudio) {
+        this._startSeparateAudio().catch(() => {});
+      }
 
     } catch (err) {
       logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — will retry in 3s`);
@@ -350,10 +352,8 @@ class ScrcpyEngine extends EventEmitter {
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
-      'audio=' + (this.enableAudio ? 'true' : 'false'),
-      'require_audio=false',       // Critical: audio failure or focus switch must NEVER crash video streaming
-      'audio_codec=opus',
-      'audio_bit_rate=128000',
+      'video=true',
+      'audio=false',              // Audio strictly isolated in separate worker to guarantee zero crashes & rock-solid mouse control
       'control=true',
       'cleanup=false',
       'send_dummy_byte=true',
@@ -375,31 +375,15 @@ class ScrcpyEngine extends EventEmitter {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    // Return a Promise that resolves when scrcpy prints its ready line and audio state is known.
     this._serverReady = new Promise((resolve) => {
       let resolved = false;
       const done = () => { if (!resolved) { resolved = true; resolve(); } };
-      let audioWaitTimer = null;
 
       const onOutput = (chunk, isErr) => {
         const msg = chunk.toString().trim();
         if (!msg) return;
         if (isErr) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
         else logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
-        
-        if (msg.includes('Audio disabled') || msg.includes('Audio: error') || msg.includes('Audio capture error') || msg.includes('continue without audio')) {
-          this._audioDisabled = true;
-          this._audioReady = false;
-          logger.warn(`[ScrcpyEngine ${this.serial}] Audio capture not supported on this phone model — streaming 60FPS video & controls`);
-          if (audioWaitTimer) { clearTimeout(audioWaitTimer); audioWaitTimer = null; }
-          done();
-        } else if (msg.includes('Audio:') || msg.includes('Audio encoder')) {
-          this._audioReady = true;
-          this._audioDisabled = false;
-          logger.info(`[ScrcpyEngine ${this.serial}] Audio encoder confirmed active`);
-          if (audioWaitTimer) { clearTimeout(audioWaitTimer); audioWaitTimer = null; }
-          done();
-        }
 
         const dimMatch = msg.match(/\((\d+)x(\d+)\)/);
         if (dimMatch) {
@@ -413,29 +397,15 @@ class ScrcpyEngine extends EventEmitter {
         }
 
         if (msg.includes('Device:') || msg.includes('device:')) {
-          if (!this.enableAudio) {
-            done();
-          } else if (!audioWaitTimer && !this._audioReady && !this._audioDisabled) {
-            // Give scrcpy up to 1.2s after "Device:" to see if it announces audio encoder
-            audioWaitTimer = setTimeout(() => {
-              audioWaitTimer = null;
-              if (!this._audioReady) {
-                this._audioDisabled = true;
-              }
-              done();
-            }, 1200);
-          }
+          done();
         }
       };
 
       this.serverProc.stdout.on('data', d => onOutput(d, false));
       this.serverProc.stderr.on('data', d => onOutput(d, true));
 
-      // Global safety timeout
-      setTimeout(() => {
-        if (audioWaitTimer) { clearTimeout(audioWaitTimer); audioWaitTimer = null; }
-        done();
-      }, 5000);
+      // Safety timeout: resolve ready after 3.5s maximum
+      setTimeout(done, 3500);
     });
 
     this.serverProc.on('error', (e) => {
@@ -446,9 +416,7 @@ class ScrcpyEngine extends EventEmitter {
     this._restartPending = false;
 
     this.serverProc.on('close', (code) => {
-      // Ignore close events triggered by our own stop() call
       if (!this.isRunning) return;
-      // Ignore if a restart is already queued
       if (this._restartPending) return;
 
       const uptime = Date.now() - this._procStartTime;
@@ -456,16 +424,8 @@ class ScrcpyEngine extends EventEmitter {
 
       this._cleanup();
 
-      // Always restart scrcpy — no screenrecord fallback.
-      // Back off longer if it died quickly (likely an audio startup error).
       if (!this._restartPending) {
         this._restartPending = true;
-        if (uptime < 4000 && this.enableAudio) {
-          logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy exited quickly — permanently disabling audio for hardware stability`);
-          this.enableAudio = false;
-          this._audioDisabled = true;
-          this._audioReady = false;
-        }
         const delay = uptime < 3000 ? 3000 : 1500;
         logger.info(`[ScrcpyEngine ${this.serial}] Restarting scrcpy in ${delay}ms...`);
         setTimeout(() => {
@@ -489,10 +449,6 @@ class ScrcpyEngine extends EventEmitter {
       try { this.videoSocket.destroy(); } catch (_) {}
       this.videoSocket = null;
     }
-    if (this.audioSocket) {
-      try { this.audioSocket.destroy(); } catch (_) {}
-      this.audioSocket = null;
-    }
     if (this.controlSocket) {
       try { this.controlSocket.destroy(); } catch (_) {}
       this.controlSocket = null;
@@ -500,6 +456,85 @@ class ScrcpyEngine extends EventEmitter {
     if (this.serverProc) {
       try { this.serverProc.kill(); } catch (_) {}
       this.serverProc = null;
+    }
+    this._stopSeparateAudio();
+  }
+
+  _stopSeparateAudio() {
+    if (this.audioSocket) {
+      try { this.audioSocket.destroy(); } catch (_) {}
+      this.audioSocket = null;
+    }
+    if (this.audioProc) {
+      try { this.audioProc.kill(); } catch (_) {}
+      this.audioProc = null;
+    }
+    if (this._audioPort) {
+      this._adb(['forward', '--remove', `tcp:${this._audioPort}`]).catch(() => {});
+      this._audioPort = null;
+    }
+  }
+
+  async _startSeparateAudio() {
+    if (!this.enableSeparateAudio || !this.isRunning) return;
+    if (this.audioProc) return;
+
+    // Use a unique 8-character scid and separate port so audio is 100% isolated
+    const scid = 'a' + Math.floor(1000000 + Math.random() * 8999999).toString(16);
+    const audioPort = this.videoPort + 300;
+    this._audioPort = audioPort;
+
+    try {
+      await this._adb(['forward', '--remove', `tcp:${audioPort}`]).catch(() => {});
+      await this._adb(['forward', `tcp:${audioPort}`, `localabstract:scrcpy_${scid}`]);
+
+      const audioArgs = [
+        '-s', this.serial, 'shell',
+        'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
+        'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
+        `scid=${scid}`,
+        'tunnel_forward=true',
+        'video=false',
+        'audio=true',
+        'control=false',
+        'audio_codec=opus',
+        'audio_bit_rate=128000',
+        'cleanup=false',
+        'send_dummy_byte=true',
+      ];
+
+      logger.info(`[ScrcpyEngine ${this.serial}] Spawning separate audio worker (port ${audioPort}, scid ${scid})...`);
+      this.audioProc = spawn(ADB_BIN, audioArgs, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let audioProcDied = false;
+      this.audioProc.on('error', (err) => {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Audio worker error: ${err.message}`);
+      });
+
+      this.audioProc.on('close', (code) => {
+        audioProcDied = true;
+        if (this.audioSocket) {
+          try { this.audioSocket.destroy(); } catch (_) {}
+          this.audioSocket = null;
+        }
+        this.audioProc = null;
+        logger.info(`[ScrcpyEngine ${this.serial}] Audio worker exited (code=${code}) — video and touch controls completely unaffected`);
+      });
+
+      // Wait briefly for server to bind
+      await new Promise(r => setTimeout(r, 800));
+      if (audioProcDied || !this.isRunning) return;
+
+      this.audioSocket = await this._connectOne(audioPort, 20);
+      this.audioSocket.setNoDelay(true);
+      this._pipeAudioToClients(this.audioSocket);
+      logger.info(`[ScrcpyEngine ${this.serial}] Separate audio worker connected & streaming`);
+    } catch (err) {
+      logger.warn(`[ScrcpyEngine ${this.serial}] Separate audio streaming not supported on this phone model: ${err.message}`);
+      this._stopSeparateAudio();
     }
   }
 
@@ -509,34 +544,19 @@ class ScrcpyEngine extends EventEmitter {
     logger.info(`[ScrcpyEngine ${this.serial}] Waiting for scrcpy server ready signal...`);
     if (this._serverReady) await this._serverReady;
 
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 60));
 
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting video socket...`);
     // tunnel_forward socket 1 = video stream
-    this.videoSocket = await this._connectOne(this.videoPort);
+    this.videoSocket = await this._connectOne(this.videoPort, 35);
     this.videoSocket.setNoDelay(true);
     this._pipeVideoToClients(this.videoSocket);
 
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 60));
 
-    // tunnel_forward socket 2 = audio stream (ONLY when confirmed ready by scrcpy)
-    if (this.enableAudio && this._audioReady && !this._audioDisabled) {
-      try {
-        logger.info(`[ScrcpyEngine ${this.serial}] Connecting audio socket...`);
-        this.audioSocket = await this._connectOne(this.videoPort, 15);
-        this.audioSocket.setNoDelay(true);
-        this._pipeAudioToClients(this.audioSocket);
-        await new Promise(r => setTimeout(r, 100));
-      } catch (err) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Audio socket notice: ${err.message}`);
-        this.audioSocket = null;
-        this._audioDisabled = true;
-      }
-    }
-
-    // tunnel_forward socket (last) = control socket
+    // tunnel_forward socket 2 = control socket (deterministic with audio=false)
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting control socket...`);
-    this.controlSocket = await this._connectOne(this.videoPort, 25);
+    this.controlSocket = await this._connectOne(this.videoPort, 35);
     this.controlSocket.setNoDelay(true);
     this.controlSocket.setKeepAlive(true, 1000);
 
@@ -784,14 +804,16 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  // Task #7 & #10: request a fresh IDR keyframe from Android without a full reconnect
   _requestIdrKeyframe() {
-    // scrcpy control message type 8 = SET_SCREEN_POWER_MODE — not ideal.
-    // Best available no-side-effect approach: send an adb shell keyevent 0 (WAKE)
-    // which nudges the compositor to emit a new IDR without interrupting the stream.
-    try {
-      this._adb(['shell', 'input', 'keyevent', '0']).catch(() => {});
-    } catch (_) {}
+    // Push cached bootstrap SPS/PPS or keyframe packet directly to clients without typing ghost keys
+    const bootstrap = this._keyframeBuffer || this._configPacket;
+    if (bootstrap) {
+      for (const ws of this.wsClients) {
+        if (ws.readyState === 1) {
+          try { ws.send(bootstrap, { binary: true }); } catch (_) {}
+        }
+      }
+    }
   }
 
   /**
@@ -1060,6 +1082,9 @@ class ScrcpyEngine extends EventEmitter {
       await this._adb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
       this._spawnServer();
       await this._connectSockets();
+      if (this.enableSeparateAudio) {
+        this._startSeparateAudio().catch(() => {});
+      }
       logger.info(`[ScrcpyEngine ${this.serial}] Restarted successfully`);
     } catch (err) {
       logger.warn(`[ScrcpyEngine ${this.serial}] Restart failed: ${err.message} — retry in 3s`);

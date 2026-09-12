@@ -658,11 +658,14 @@ function handleControl(type, data, serial, engine, ws = null) {
     const realX = Math.round((x / W) * (engine.screenWidth || W));
     const realY = Math.round((y / H) * (engine.screenHeight || H));
     if (type === 'tap') {
-      engine.sendTouchEvent(0, x, y, W, H, 1.0);
+      const ok = engine.sendTouchEvent(0, x, y, W, H, 1.0);
       setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 40);
+      if (!ok) {
+        try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
+      }
+    } else {
+      try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
     }
-    // Guaranteed direct kernel tap via persistent adb shell
-    try { getInputShell(serial).stdin.write(`input tap ${realX} ${realY}\n`); } catch (_) {}
   } else if (type === 'swipe' || type === 'swipe_fallback') {
     // Cancel any active swipe timeouts on this serial to prevent coordinate fighting and shaking
     if (activeSwipeTimers.has(serial)) {
@@ -1124,8 +1127,10 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   const urlParams = new URLSearchParams(window.location.search);
   let isMuted = urlParams.get('muted') === '1' || urlParams.get('muted') === 'true';
   let gainNode = null;
+  let userInteracted = false;
 
   function initAudio() {
+    userInteracted = true;
     if (audioCtx) {
       if (audioCtx.state === 'suspended') audioCtx.resume().catch(function() {});
       return;
@@ -1216,7 +1221,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   }
 
   function playOpusPacket(bytes) {
-    if (isMuted) return;
+    if (isMuted || !userInteracted) return;
     if (!audioCtx) initAudio();
     if (!audioCtx || audioCtx.state !== 'running') return;
     if (!audioDecoderReady) {
@@ -1238,6 +1243,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
   function playRawPcm(bytes) {
     // Fallback: raw signed 16-bit LE stereo 48kHz PCM
+    if (isMuted || !userInteracted) return;
     initAudio();
     if (!audioCtx || !gainNode || isMuted) return;
     if (audioCtx.state !== 'running') return;
