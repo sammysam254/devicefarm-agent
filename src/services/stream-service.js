@@ -597,6 +597,8 @@ function get(data, key) {
 }
 
 const activeSwipeTimers = new Map();
+const lastKeyEvents = new Map();  // serial -> { code, time }
+const lastTextEvents = new Map(); // serial -> { text, time }
 
 function getActiveServerEntry(requestedUdid) {
   if (!requestedUdid) return null;
@@ -709,6 +711,13 @@ function handleControl(type, data, serial, engine, ws = null) {
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
     const metastate = parseInt(get(data, 'metastate'), 10) || 0;
+    const now = Date.now();
+    const last = lastKeyEvents.get(serial);
+    if (last && last.code === code && (now - last.time) < 45) {
+      return; // Discard duplicate rapid keyevent
+    }
+    lastKeyEvents.set(serial, { code, time: now });
+
     const ok = engine.sendKeycode(0, code, 0, metastate);
     setTimeout(() => engine.sendKeycode(1, code, 0, metastate), 25);
     // Direct kernel keyevent fallback if scrcpy control is not ready
@@ -718,34 +727,17 @@ function handleControl(type, data, serial, engine, ws = null) {
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
     if (text) {
-      let injectedAsKey = false;
-      // For single standard ASCII characters, direct hardware keycode is 100% reliable across all Android versions
-      if (text.length === 1) {
-        const cp = text.charCodeAt(0);
-        if (cp >= 97 && cp <= 122) { // a-z: keycodes 29..54
-          const kc = 29 + (cp - 97);
-          injectedAsKey = engine.sendKeycode(0, kc, 0, 0);
-          setTimeout(() => engine.sendKeycode(1, kc, 0, 0), 25);
-        } else if (cp >= 65 && cp <= 90) { // A-Z: keycodes 29..54 with shift
-          const kc = 29 + (cp - 65);
-          injectedAsKey = engine.sendKeycode(0, kc, 0, 1);
-          setTimeout(() => engine.sendKeycode(1, kc, 0, 1), 25);
-        } else if (cp === 48) { // 0: keycode 7
-          injectedAsKey = engine.sendKeycode(0, 7, 0, 0);
-          setTimeout(() => engine.sendKeycode(1, 7, 0, 0), 25);
-        } else if (cp >= 49 && cp <= 57) { // 1-9: keycodes 8..16
-          const kc = 8 + (cp - 49);
-          injectedAsKey = engine.sendKeycode(0, kc, 0, 0);
-          setTimeout(() => engine.sendKeycode(1, kc, 0, 0), 25);
-        }
+      const now = Date.now();
+      const last = lastTextEvents.get(serial);
+      if (last && last.text === text && (now - last.time) < 45) {
+        return; // Discard duplicate rapid text event
       }
+      lastTextEvents.set(serial, { text, time: now });
 
-      if (!injectedAsKey) {
-        const ok = engine.sendText(text);
-        if (!ok) {
-          const escaped = text.replace(/ /g, '%s').replace(/([\\$`"!'&|;<>~()#*?=[\]{}])/g, '\\$1');
-          try { getInputShell(serial).stdin.write(`input text ${escaped}\n`); } catch (_) {}
-        }
+      const ok = engine.sendText(text);
+      if (!ok) {
+        const escaped = text.replace(/ /g, '%s').replace(/([\\$`"!'&|;<>~()#*?=[\]{}])/g, '\\$1');
+        try { getInputShell(serial).stdin.write(`input text ${escaped}\n`); } catch (_) {}
       }
     }
   } else if (type === 'reboot') {
@@ -1821,7 +1813,14 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   }, { passive:false });
 
   // ── Comprehensive Computer Keyboard Support & Spacebar Protection ────────
+  let lastKeyTime = 0;
+  let lastKeyStr = '';
+
   function handleKeyDown(e) {
+    if (e.repeat) {
+      e.preventDefault();
+      return;
+    }
     // Never intercept if typing into an input/textarea inside a modal dialog
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
 
@@ -1831,6 +1830,15 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
 
     const keyStr = e.key;
+    const now = performance.now();
+
+    // Guard against duplicate event firing (e.g. multiple DOM listeners, bubbling, or synthetic duplicates)
+    if (keyStr === lastKeyStr && (now - lastKeyTime) < 50) {
+      e.preventDefault();
+      return;
+    }
+    lastKeyTime = now;
+    lastKeyStr = keyStr;
 
     // Special keys
     if (keyStr === ' ' || e.code === 'Space') {
@@ -2246,7 +2254,12 @@ async function startStreamServer(serial, port) {
       } catch (_) {}
     }
 
-    res.writeHead(200, {'Content-Type':'text/html'});
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
     // Prefer the negotiated stream resolution; fall back to physical screen size.
     const playerW = effectiveEngine.videoWidth  > 0 ? effectiveEngine.videoWidth  : effectiveEngine.screenWidth;
     const playerH = effectiveEngine.videoHeight > 0 ? effectiveEngine.videoHeight : effectiveEngine.screenHeight;
