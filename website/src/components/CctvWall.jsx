@@ -72,14 +72,9 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       // Filter active and non-deleted devices, deduplicating strictly by device serial
       const seenSerials = new Set();
       const activeOnlineDevices = [];
-      const now = Date.now();
       for (const d of (dData || [])) {
         if (d.is_deleted_from_view) continue;
         if (d.status === 'offline') continue;
-
-        // Skip ghost/stale devices that have not checked in within the last 5 minutes
-        const lastSeenTime = d.last_seen || d.updated_at ? new Date(d.last_seen || d.updated_at).getTime() : 0;
-        if (lastSeenTime > 0 && (now - lastSeenTime > 300000)) continue;
 
         const s = (d.serial || '').trim();
         if (!s || seenSerials.has(s)) continue;
