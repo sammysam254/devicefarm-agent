@@ -856,7 +856,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
 <div class="stage">
   <div class="wrap" id="wrap">
-    <canvas id="c" width="${screenW}" height="${screenH}" tabindex="0" style="outline:none;"></canvas>
+    <canvas id="c" width="${screenW}" height="${screenH}"></canvas>
 
     <!-- In-Stream Floating Live Chat Alert (Centered directly on phone screen between borders) -->
     <div id="streamChatPopup" style="display:none;position:absolute;top:16px;left:10px;right:10px;z-index:90;background:rgba(15,23,42,0.96);backdrop-filter:blur(24px);border:1.5px solid rgba(56,189,248,0.65);box-shadow:0 14px 40px rgba(0,0,0,0.85),0 0 25px rgba(56,189,248,0.35);border-radius:14px;padding:12px 14px;animation:slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);user-select:none;pointer-events:auto;">
@@ -1436,7 +1436,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     const audioParams = new URLSearchParams(window.location.search);
     audioParams.set('udid', TARGET_DEVICE_SERIAL);
     audioParams.set('stream', 'audio');
-    const audioUrl = proto + '//' + location.host + '/ws/audio?' + audioParams.toString();
+    const audioUrl = proto + '//' + location.host + '/ws?' + audioParams.toString();
 
     try {
       audioWs = new WebSocket(audioUrl);
@@ -1764,8 +1764,6 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    try { canvas.focus(); } catch (_) {}
-    try { window.focus(); } catch (_) {}
     down = true;
     downButton = e.button; // 0 = Left, 2 = Right
     hasMovedFar = false;
@@ -1967,9 +1965,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
   }
 
-  window.addEventListener('keydown', handleKeyDown, { capture: true });
-  document.addEventListener('keydown', handleKeyDown, { capture: true });
-  canvas.addEventListener('keydown', handleKeyDown, { capture: true });
+  window.addEventListener('keydown', handleKeyDown);
 
   // Clipboard paste: instantly types text into device
   window.addEventListener('paste', (e) => {
@@ -2324,71 +2320,8 @@ async function startStreamServer(serial, port) {
     res.end(buildPlayerHtml(effectiveSerial, playerW, playerH, chatCodeParam, isCctv));
   });
 
-  // ── WebSockets: Dedicated Video/Control WS & Dedicated Audio WS ──────────
-  const wss = new WebSocket.Server({ noServer: true, perMessageDeflate: false });
-  const wssAudio = new WebSocket.Server({ noServer: true, perMessageDeflate: false });
-
-  server.on('upgrade', (req, socket, head) => {
-    socket.on('error', () => { try { socket.destroy(); } catch (_) {} });
-    try {
-      const u = new URL(req.url, 'http://localhost');
-      const isAudio = u.pathname === '/ws/audio' ||
-                      u.pathname.endsWith('/audio') ||
-                      u.searchParams.get('stream') === 'audio' ||
-                      u.searchParams.get('audio') === '1';
-
-      if (isAudio) {
-        wssAudio.handleUpgrade(req, socket, head, (ws) => {
-          wssAudio.emit('connection', ws, req);
-        });
-      } else {
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          wss.emit('connection', ws, req);
-        });
-      }
-    } catch (err) {
-      try { socket.destroy(); } catch (_) {}
-    }
-  });
-
-  wssAudio.on('connection', async (ws, req) => {
-    const wsUrl = new URL(req.url, 'http://localhost');
-    const wsUdid = (wsUrl.searchParams.get('udid') || '').trim();
-    let activeWsEntry = getActiveServerEntry(wsUdid);
-    if (wsUdid && !activeWsEntry) {
-      try { ws.send(JSON.stringify({ type: 'stream_offline', reason: 'Device is offline or disconnected from ADB hardware', serial: wsUdid })); } catch (_) {}
-      ws.close(4004, 'Device Offline');
-      return;
-    }
-    if (!activeWsEntry) activeWsEntry = getActiveServerEntry(serial) || { serial, server, wss, engine };
-    const targetSerial = activeWsEntry.serial;
-    const targetEngine = activeWsEntry.engine || engine;
-    const isAdminWs = checkIsAdminRequest(wsUrl);
-
-    const lic = await getCachedLicenseStatus();
-    if (!lic.isActive) {
-      ws.close(4003, 'License Revoked');
-      return;
-    }
-
-    const sec = await getDeviceSecurityStatus(targetSerial);
-    if (!isAdminWs && sec.isDeviceBlocked) {
-      try { ws.send(JSON.stringify({ type: 'stream_blocked', reason: sec.blockReason, serial: targetSerial })); } catch (_) {}
-      ws.close(4003, 'Stream Blocked');
-      return;
-    }
-
-    try { req.socket.setNoDelay(true); } catch (_) {}
-    logger.info(`[StreamServer] Dedicated Audio WS connected for ${targetSerial}`);
-    targetEngine.addAudioClient(ws);
-
-    const cleanup = () => {
-      targetEngine.removeAudioClient(ws);
-    };
-
-    ws.on('close', cleanup);
-    ws.on('error', cleanup);
-  });
+  // ── WebSocket — relay H264 + dedicated audio from scrcpy engine to browser ─
+  const wss = new WebSocket.Server({ server, path: '/ws', perMessageDeflate: false });
 
   wss.on('connection', async (ws, req) => {
     const wsUrl = new URL(req.url, 'http://localhost');
@@ -2425,6 +2358,23 @@ async function startStreamServer(serial, port) {
       return;
     }
 
+    // ── Dedicated Audio Stream Client (stream=audio) ──
+    const isAudioClient = wsUrl.searchParams.get('stream') === 'audio';
+    if (isAudioClient) {
+      try { req.socket.setNoDelay(true); } catch (_) {}
+      logger.info(`[StreamServer] Dedicated Audio WS connected for ${targetSerial}`);
+      targetEngine.addAudioClient(ws);
+
+      const cleanupAudio = () => {
+        targetEngine.removeAudioClient(ws);
+      };
+
+      ws.on('close', cleanupAudio);
+      ws.on('error', cleanupAudio);
+      return;
+    }
+
+    // ── Video + Control Client Handler ──
     // Register active WS client with token and admin status
     if (!activeWsClients.has(targetSerial)) {
       activeWsClients.set(targetSerial, new Set());
@@ -2522,14 +2472,13 @@ async function startStreamServer(serial, port) {
     server.listen(port, '0.0.0.0', () => {
       const localUrl = `http://localhost:${port}`;
       logger.info(`[StreamServer] Listening at ${localUrl}`);
-      activeServers.set(serial, { server, wss, wssAudio, engine, port, localUrl });
+      activeServers.set(serial, { server, wss, engine, port, localUrl });
 
       const streamProcess = {
         pid: port, exitCode: null,
         kill() {
           engine.stop();
           try { wss.close(); } catch (_) {}
-          try { wssAudio.close(); } catch (_) {}
           server.close();
           activeServers.delete(serial);
         },

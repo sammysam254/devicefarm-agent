@@ -518,10 +518,19 @@ class ScrcpyEngine extends EventEmitter {
         'send_dummy_byte=true',
       ];
 
-      logger.info(`[ScrcpyEngine ${this.serial}] Spawning separate audio worker (port ${audioPort}, scid ${scid})...`);
+      logger.info(`[ScrcpyEngine ${this.serial}] Spawning separate audio worker (port ${audioPort}, scid ${scidHex})...`);
       this.audioProc = spawn(ADB_BIN, audioArgs, {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      this.audioProc.stdout.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) logger.info(`[AudioWorker ${this.serial}] ${msg}`);
+      });
+      this.audioProc.stderr.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) logger.warn(`[AudioWorker ${this.serial}] stderr: ${msg}`);
       });
 
       let audioProcDied = false;
