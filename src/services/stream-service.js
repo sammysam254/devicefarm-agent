@@ -1597,7 +1597,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
   }
 
-  function coords(e) {
+  // coords() — maps a browser pointer/touch event to device canvas coordinates.
+  // gestureDims: optional frozen { W, H } to keep a whole gesture in one coordinate space.
+  function coords(e, gestureDims) {
     const r = canvas.getBoundingClientRect();
     let cx = e.clientX;
     let cy = e.clientY;
@@ -1609,42 +1611,48 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
       cx = e.changedTouches[0].clientX;
       cy = e.changedTouches[0].clientY;
     }
-    cx = cx || 0;
-    cy = cy || 0;
-    
-    // Use canvas size first (actual rendered), fall back to nativeW/H, then server defaults
-    const canvasW = canvas.width || nativeW || ${screenW};
-    const canvasH = canvas.height || nativeH || ${screenH};
-    const rectW = r.width || canvasW;
-    const rectH = r.height || canvasH;
-    if (rectW <= 0 || rectH <= 0) return { x: 0, y: 0, cx, cy };
+    cx = (cx != null) ? cx : 0;
+    cy = (cy != null) ? cy : 0;
 
-    // Precise letterboxing & pillarboxing calculation for object-fit: contain
+    // Use the frozen gesture dimensions when provided, otherwise read live canvas attrs.
+    // canvas.width / canvas.height are the decoded video pixel dimensions (e.g. 1080×2340).
+    // They are the authoritative source — nativeW/H are kept in sync but lag one frame.
+    const canvasW = (gestureDims && gestureDims.W > 0) ? gestureDims.W : (canvas.width > 0 ? canvas.width : (nativeW || ${screenW}));
+    const canvasH = (gestureDims && gestureDims.H > 0) ? gestureDims.H : (canvas.height > 0 ? canvas.height : (nativeH || ${screenH}));
+
+    // r.width / r.height = the CSS-rendered box that contains the canvas element.
+    // The canvas uses object-fit: contain so the image may not fill the full box.
+    const rectW = r.width  > 0 ? r.width  : canvasW;
+    const rectH = r.height > 0 ? r.height : canvasH;
+    if (rectW <= 0 || rectH <= 0) return { x: 0, y: 0, W: canvasW, H: canvasH };
+
+    // Precise letterbox / pillarbox offsets for object-fit: contain
     const canvasAspect = canvasW / canvasH;
-    const rectAspect = rectW / rectH;
+    const rectAspect   = rectW   / rectH;
     let renderedW = rectW, renderedH = rectH;
     let offsetX = 0, offsetY = 0;
 
     if (rectAspect > canvasAspect) {
-      // Container is wider than video aspect ratio: black bars on left and right
+      // Container wider than video: pillar-box (bars on left & right)
       renderedW = rectH * canvasAspect;
-      offsetX = (rectW - renderedW) / 2;
+      offsetX   = (rectW - renderedW) / 2;
     } else if (rectAspect < canvasAspect) {
-      // Container is taller than video aspect ratio: black bars on top and bottom
+      // Container taller than video: letter-box (bars on top & bottom)
       renderedH = rectW / canvasAspect;
-      offsetY = (rectH - renderedH) / 2;
+      offsetY   = (rectH - renderedH) / 2;
     }
 
     const relX = cx - r.left - offsetX;
-    const relY = cy - r.top - offsetY;
+    const relY = cy - r.top  - offsetY;
 
     const x = Math.round(relX * (canvasW / renderedW));
     const y = Math.round(relY * (canvasH / renderedH));
-    
+
     return {
       x: Math.max(0, Math.min(canvasW - 1, x)),
       y: Math.max(0, Math.min(canvasH - 1, y)),
-      cx, cy
+      W: canvasW,
+      H: canvasH,
     };
   }
 
@@ -1652,8 +1660,9 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   let down = false;
   let downButton = 0;
   let activePointerId = null;
-  let pendingMove = null;
-  let moveRafId = null;
+  // Frozen gesture dimensions: locked at pointerdown so all move/up events use the
+  // same coordinate space even if the video resolution updates mid-gesture.
+  let gestureDims = { W: 0, H: 0 };
   let downStartPos = { x: 0, y: 0 };
   let downStartTime = 0;
   let hasMovedFar = false;
@@ -1674,12 +1683,15 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     activePointerId = e.pointerId;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
-    const c = coords(e);
+    // Freeze gesture dims at pointerdown — prevents coordinate drift if video resolution
+    // changes (e.g. screen rotation) while a drag or tap is in progress.
+    gestureDims = { W: canvas.width > 0 ? canvas.width : (nativeW || ${screenW}), H: canvas.height > 0 ? canvas.height : (nativeH || ${screenH}) };
+    const c = coords(e, gestureDims);
     downStartPos = { x: c.x, y: c.y };
     downStartTime = Date.now();
     // Only send raw touch action 0 for primary left button so right-click drag doesn't trigger unwanted in-app clicks
     if (e.button === 0) {
-      send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+      send({ type:'touch', action:0, x:c.x, y:c.y, width:gestureDims.W, height:gestureDims.H, pressure:1.0 });
     }
   }, { passive: false });
 
@@ -1687,21 +1699,13 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     if (!down) return;
     e.preventDefault();
     if (activePointerId !== null && e.pointerId !== activePointerId) return;
-    const c = coords(e);
-    if (Math.abs(c.x - downStartPos.x) > 10 || Math.abs(c.y - downStartPos.y) > 10) {
+    const c = coords(e, gestureDims);
+    if (Math.abs(c.x - downStartPos.x) > 8 || Math.abs(c.y - downStartPos.y) > 8) {
       hasMovedFar = true;
     }
-    // Only stream real-time scrcpy move for left-click
+    // Send move immediately — no rAF batching so drag tracks the pointer 1:1 with zero added latency.
     if (downButton === 0) {
-      pendingMove = c;
-      if (!moveRafId) {
-        moveRafId = requestAnimationFrame(() => {
-          moveRafId = null;
-          if (down && pendingMove && downButton === 0) {
-            send({ type:'touch', action:2, x:pendingMove.x, y:pendingMove.y, width:nativeW, height:nativeH, pressure:1.0 });
-          }
-        });
-      }
+      send({ type:'touch', action:2, x:c.x, y:c.y, width:gestureDims.W, height:gestureDims.H, pressure:1.0 });
     }
   }, { passive: false });
 
@@ -1709,19 +1713,19 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     if (!down) return;
     if (activePointerId !== null && e && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
     const wasDownButton = downButton;
+    const frozenDims = { W: gestureDims.W, H: gestureDims.H };
     down = false;
-    if (moveRafId) { cancelAnimationFrame(moveRafId); moveRafId = null; }
     if (activePointerId !== null) {
       try { canvas.releasePointerCapture(activePointerId); } catch (_) {}
       activePointerId = null;
     }
-    const c = coords(e || {});
+    const c = coords(e || {}, frozenDims);
     const dragDist = Math.hypot(c.x - downStartPos.x, c.y - downStartPos.y);
     const dragDur = Date.now() - downStartTime;
 
     if (wasDownButton === 2) {
       // RIGHT CLICK:
-      if (hasMovedFar && dragDist > 15) {
+      if (hasMovedFar && dragDist > 12) {
         // Right-click drag: Smooth human-like swipe fling!
         const smoothDur = Math.max(80, Math.min(260, Math.round(dragDur * 0.7) || 130));
         send({
@@ -1731,8 +1735,8 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
           x2: c.x,
           y2: c.y,
           duration: smoothDur,
-          width: nativeW,
-          height: nativeH
+          width: frozenDims.W,
+          height: frozenDims.H
         });
       } else {
         // Right-click tap (stationary): Android Back button
@@ -1742,7 +1746,7 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
     }
 
     // LEFT CLICK: Direct 1:1 hardware touch release (zero delay, no ghost double-clicks)
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:frozenDims.W, height:frozenDims.H, pressure:0 });
   }
 
   canvas.addEventListener('pointerup', releasePointer, { passive: false });
@@ -1750,15 +1754,30 @@ function buildPlayerHtml(serial, screenW, screenH, ownerChatCode = '', isCctv = 
   window.addEventListener('pointerup', releasePointer, { passive: false });
 
   // ── Native smooth wheel scroll ────────────────────────────────────────────
-  let wheelTimer = null;
+  // Accumulate wheel deltas so a fast multi-tick wheel spin sends appropriately
+  // sized swipes rather than many tiny ones.  Flush at most once per animation frame.
+  let wheelAccumY = 0;
+  let wheelRafId = null;
+  let wheelLastCoords = null;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (wheelTimer) return;
-    wheelTimer = setTimeout(() => { wheelTimer = null; }, 40);
-    const c = coords(e);
-    // Vertical scroll: deltaY > 0 is scroll down (vscroll = -1 in Android MotionEvent)
-    const vscroll = e.deltaY > 0 ? -1 : 1;
-    send({ type:'scroll', x:c.x, y:c.y, width:nativeW, height:nativeH, hscroll:0, vscroll:vscroll, deltaY:e.deltaY });
+    wheelAccumY += e.deltaY;
+    wheelLastCoords = coords(e); // no frozen dims needed — scroll is stateless
+    if (!wheelRafId) {
+      wheelRafId = requestAnimationFrame(() => {
+        wheelRafId = null;
+        const dy = wheelAccumY;
+        const c  = wheelLastCoords;
+        wheelAccumY = 0;
+        wheelLastCoords = null;
+        if (!c) return;
+        const W = c.W || nativeW || ${screenW};
+        const H = c.H || nativeH || ${screenH};
+        // vscroll sign: deltaY > 0 → finger/content moves up → vscroll = -1 (Android convention)
+        const vscroll = dy > 0 ? -1 : 1;
+        send({ type:'scroll', x:c.x, y:c.y, width:W, height:H, hscroll:0, vscroll:vscroll, deltaY:dy });
+      });
+    }
   }, { passive:false });
 
   // ── Keyboard handling (Spacebar protection & full Android keys) ────────
