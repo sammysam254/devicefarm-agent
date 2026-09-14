@@ -9,7 +9,7 @@ const autoLaunch = require('./auto-launch');
 const adbTracker = require('../services/adb-tracker');
 const apiClient = require('../services/api-client');
 const autoSync = require('../services/auto-sync-service');
-const { isCloudflaredAvailable } = require('../services/tunnel-service');
+const { isCloudflaredAvailable, ensureNamedTokenTunnelRunning } = require('../services/tunnel-service');
 const bindingService = require('../services/binding-service');
 const wolService = require('../services/wol-service');
 const { startDashboardServer, openInChrome, stopDashboardServer, getDashboardUrl } = require('../dashboard/server');
@@ -321,6 +321,10 @@ app.whenReady().then(async () => {
 
   try {
     const { url } = await startDashboardServer(7400);
+    // Ensure Cloudflare named tunnel daemon runs in background for agent.dennoh.site
+    try {
+      ensureNamedTokenTunnelRunning();
+    } catch (_) {}
     // Only open Chrome window if NOT running in hidden / background service mode
     const isHidden = process.argv.includes('--hidden') || process.env.BACKGROUND_SERVICE === '1';
     if (!isHidden) {

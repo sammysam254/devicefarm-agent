@@ -427,8 +427,9 @@ if not exist "%CLOUDFLARED_EXE%" (
     if exist "%INSTALL_DIR%\assets\bin\cloudflared.exe" set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
 )
 if exist "%CLOUDFLARED_EXE%" (
-    start "" /B "%CLOUDFLARED_EXE%" tunnel run --token eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9
-    echo [OK] Cloudflare tunnel restarted.
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel run --token eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden"
+    echo [OK] Cloudflare tunnel restarted in background.
 )
 
 echo [*] Waiting for Dashboard...

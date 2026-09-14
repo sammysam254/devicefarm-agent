@@ -315,13 +315,57 @@ function killTunnel(tunnelProcess) {
   }
 }
 
-async function isCloudflaredAvailable() {
-  const binPath = await ensureCloudflaredAvailable();
-  return binPath ? fs.existsSync(binPath) : false;
+let namedTokenTunnelProcess = null;
+
+function ensureNamedTokenTunnelRunning() {
+  const token = config.cloudflareToken || config.cloudflaredToken || config.token || 'eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9';
+  if (!token) return null;
+
+  if (namedTokenTunnelProcess && namedTokenTunnelProcess.exitCode === null) {
+    return namedTokenTunnelProcess;
+  }
+
+  const binPath = resolveCloudflaredBin();
+  if (!binPath || !fs.existsSync(binPath)) return null;
+
+  logger.info('[TunnelService] Spawning background cloudflared named token tunnel for agent.dennoh.site...');
+  try {
+    namedTokenTunnelProcess = spawn(binPath, ['tunnel', 'run', '--token', token], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    });
+
+    namedTokenTunnelProcess.stdout.on('data', (d) => {
+      const s = d.toString();
+      if (s.includes('Registered tunnel connection') || s.includes('Updated to new configuration')) {
+        logger.info('[TunnelService] Cloudflare named tunnel connection registered (agent.dennoh.site)');
+      }
+    });
+
+    namedTokenTunnelProcess.stderr.on('data', () => {});
+
+    namedTokenTunnelProcess.on('exit', (code) => {
+      logger.warn(`[TunnelService] Named token tunnel exited (code=${code}) — will restart in 5s`);
+      namedTokenTunnelProcess = null;
+      setTimeout(ensureNamedTokenTunnelRunning, 5000);
+    });
+
+    namedTokenTunnelProcess.on('error', (err) => {
+      logger.warn(`[TunnelService] Named token tunnel error: ${err.message}`);
+      namedTokenTunnelProcess = null;
+    });
+
+    return namedTokenTunnelProcess;
+  } catch (err) {
+    logger.warn(`[TunnelService] Could not start named token tunnel: ${err.message}`);
+    return null;
+  }
 }
 
 module.exports = {
   createTunnel: createTunnelWithRetry,
   killTunnel,
   isCloudflaredAvailable,
+  ensureNamedTokenTunnelRunning,
 };

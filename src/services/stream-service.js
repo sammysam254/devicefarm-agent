@@ -970,7 +970,7 @@ async function startStreamServer(serial, port) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:;");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors *;");
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const bindingCode = bindingService.getOrGenerateBindingCode();
@@ -1176,7 +1176,11 @@ async function startStreamServer(serial, port) {
       res.end('{"status":"ok"}'); return;
     }
 
-    res.writeHead(200, {'Content-Type':'text/html'});
+    res.writeHead(200, {
+      'Content-Type': 'text/html',
+      'Access-Control-Allow-Origin': '*',
+      'Content-Security-Policy': 'frame-ancestors *;'
+    });
     // Prefer the negotiated stream resolution; fall back to physical screen size.
     const playerW = engine.videoWidth  > 0 ? engine.videoWidth  : engine.screenWidth;
     const playerH = engine.videoHeight > 0 ? engine.videoHeight : engine.screenHeight;

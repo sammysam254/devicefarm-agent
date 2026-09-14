@@ -174,7 +174,12 @@ function startDashboardServer(port = 7400) {
             headers: req.headers,
           }, (proxyRes) => {
             if (!res.headersSent) {
-              res.writeHead(proxyRes.statusCode, proxyRes.headers);
+              const headers = { ...proxyRes.headers };
+              delete headers['x-frame-options'];
+              delete headers['X-Frame-Options'];
+              headers['access-control-allow-origin'] = '*';
+              headers['content-security-policy'] = 'frame-ancestors *;';
+              res.writeHead(proxyRes.statusCode, headers);
             }
             proxyRes.pipe(res);
             proxyRes.on('error', () => { try { res.destroy(); } catch (_) {} });
