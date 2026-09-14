@@ -1253,7 +1253,7 @@ async function startStreamServer(serial, port) {
         socket.destroy();
       } catch (_) {}
     });
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, () => {
       const localUrl = `http://localhost:${port}`;
       logger.info(`[StreamServer] Listening at ${localUrl}`);
       activeServers.set(serial, { server, wss, engine });
