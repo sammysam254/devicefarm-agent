@@ -397,6 +397,9 @@ set "LNK_ALL=%STARTUP_ALL%\DeviceFarm-Agent-Service.lnk"
 
 echo [OK] Windows 24/7 background service registered.
 
+:: Stop any existing cloudflared tunnel processes
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command "Stop-Process -Name 'cloudflared' -Force -ErrorAction SilentlyContinue" >nul 2>nul
+
 :: Start service silently right now in the background
 echo [*] Starting DeviceFarm Agent silently in the background...
 if exist "%VBS_LAUNCHER%" (
@@ -408,6 +411,24 @@ if exist "%VBS_LAUNCHER%" (
     ) else (
         start "" "%NPM%" exec -- electron "%INSTALL_DIR%"
     )
+)
+
+:: Ensure Cloudflare named tunnel daemon is restarted for agent.dennoh.site
+echo [*] Restarting Cloudflare tunnel daemon for agent.dennoh.site...
+set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=%CURRENT_DIR%\assets\bin\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" (
+    echo [*] Cloudflared not found locally. Downloading cloudflared-windows-amd64.exe...
+    if not exist "%INSTALL_DIR%\assets\bin" mkdir "%INSTALL_DIR%\assets\bin" >nul 2>nul
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '%INSTALL_DIR%\assets\bin\cloudflared.exe' -UseBasicParsing"
+    if exist "%INSTALL_DIR%\assets\bin\cloudflared.exe" set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
+)
+if exist "%CLOUDFLARED_EXE%" (
+    start "" /B "%CLOUDFLARED_EXE%" tunnel run --token eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9
+    echo [OK] Cloudflare tunnel restarted.
 )
 
 echo [*] Waiting for Dashboard...
