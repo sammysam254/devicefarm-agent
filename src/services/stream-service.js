@@ -1075,7 +1075,7 @@ async function startStreamServer(serial, port) {
   // Start scrcpy engine asynchronously so stream server port listens immediately
   const engine = new ScrcpyEngine(serial);
   const videoPort = port + 1000;
-  engine.enableAudio = true;
+  engine.enableAudio = false;
   engine.start(videoPort)
     .then(() => logger.info(`[StreamServer] ScrcpyEngine ready for ${serial}`))
     .catch((err) => logger.warn(`[StreamServer] ScrcpyEngine failed for ${serial}: ${err.message}`));

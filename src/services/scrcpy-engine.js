@@ -335,9 +335,9 @@ class ScrcpyEngine extends EventEmitter {
       logger.error(`[ScrcpyEngine ${this.serial}] Download from: https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4`);
     }
 
-    const bitRate = _isTunnel ? '2000000' : '4000000';
-    const maxFps  = _isTunnel ? '30'      : '60';
-    const maxSize = _isTunnel ? '720'     : '1280';
+    const bitRate = _isTunnel ? '3000000' : '4000000';
+    const maxFps  = '60';
+    const maxSize = '1280';
 
     if (_isTunnel) {
       logger.info(`[ScrcpyEngine ${this.serial}] Tunnel mode active — using ${bitRate} bps / ${maxFps} fps / max_size=${maxSize}`);
@@ -764,7 +764,7 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload, isKeyframe = false) {
-    const BACKPRESSURE_LIMIT = 64 * 1024; // 64 KB
+    const BACKPRESSURE_LIMIT = 1024 * 1024; // 1 MB
     for (const ws of this.wsClients) {
       if (ws.readyState === 1) {
         if (isKeyframe || ws.bufferedAmount < BACKPRESSURE_LIMIT) {
