@@ -439,6 +439,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
             const now = audioCtx.currentTime;
             if (audioNextPlayTime < now) audioNextPlayTime = now;
+            if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -1075,7 +1076,7 @@ async function startStreamServer(serial, port) {
   // Start scrcpy engine asynchronously so stream server port listens immediately
   const engine = new ScrcpyEngine(serial);
   const videoPort = port + 1000;
-  engine.enableAudio = false;
+  engine.enableAudio = true;
   engine.start(videoPort)
     .then(() => logger.info(`[StreamServer] ScrcpyEngine ready for ${serial}`))
     .catch((err) => logger.warn(`[StreamServer] ScrcpyEngine failed for ${serial}: ${err.message}`));

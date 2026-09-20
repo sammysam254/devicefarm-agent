@@ -302,6 +302,26 @@ class ScrcpyEngine extends EventEmitter {
       } catch (_) {}
       logger.info(`[ScrcpyEngine ${this.serial}] Screen: ${this.screenWidth}x${this.screenHeight}`);
 
+      // Pre-calculate target video dimensions based on max_size=1280
+      // scrcpy scales so max(w,h) <= 1280, aligning minor dimension to multiple of 8
+      const maxDim = 1280;
+      const major = Math.max(this.screenWidth, this.screenHeight);
+      const minor = Math.min(this.screenWidth, this.screenHeight);
+      if (major > maxDim) {
+        const scaledMinor = Math.round((minor * maxDim) / major) & ~7;
+        if (this.screenWidth > this.screenHeight) {
+          this.videoWidth  = maxDim;
+          this.videoHeight = scaledMinor;
+        } else {
+          this.videoWidth  = scaledMinor;
+          this.videoHeight = maxDim;
+        }
+      } else {
+        this.videoWidth  = this.screenWidth;
+        this.videoHeight = this.screenHeight;
+      }
+      logger.info(`[ScrcpyEngine ${this.serial}] Pre-negotiated video dimensions: ${this.videoWidth}x${this.videoHeight}`);
+
       // 2. Push scrcpy-server.jar to device
       await this._pushServerJar();
 
@@ -377,9 +397,28 @@ class ScrcpyEngine extends EventEmitter {
       let resolved = false;
       const done = () => { if (!resolved) { resolved = true; resolve(); } };
 
+      this._audioDisabled = false;
+      this._audioActive = false;
+
       this.serverProc.stdout.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
+        const lower = msg.toLowerCase();
+        if (lower.includes('audio disabled')) {
+          this._audioDisabled = true;
+          this._audioActive = false;
+          logger.warn(`[ScrcpyEngine ${this.serial}] Audio capture disabled by device`);
+          done();
+        }
+        if (lower.includes('using audio encoder') || lower.includes('audio codec')) {
+          this._audioActive = true;
+          this._audioDisabled = false;
+          logger.info(`[ScrcpyEngine ${this.serial}] Audio encoder confirmed active`);
+          done();
+        }
+        if (lower.includes('using video encoder')) {
+          setTimeout(done, 250);
+        }
         // scrcpy prints "Device: <model> (<WxH>)" once the encoder is initialised.
         // Parse the negotiated resolution so touch events use the exact same dimensions.
         const dimMatch = msg.match(/\((\d+)x(\d+)\)/);
@@ -392,20 +431,29 @@ class ScrcpyEngine extends EventEmitter {
             logger.info(`[ScrcpyEngine ${this.serial}] Server-negotiated resolution: ${sw}x${sh}`);
           }
         }
-        if (msg.includes('Device:') || msg.includes('device:')) done();
+        if (!this.enableAudio && (msg.includes('Device:') || msg.includes('device:'))) done();
+        else if (msg.includes('Device:') || msg.includes('device:')) {
+          setTimeout(done, 1200); // Allow audio encoder check to run if present
+        }
       });
 
       this.serverProc.stderr.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
+        if (msg.toLowerCase().includes('audio disabled')) {
+          this._audioDisabled = true;
+          this._audioActive = false;
+          logger.warn(`[ScrcpyEngine ${this.serial}] Audio capture disabled by device (stderr)`);
+          done();
+        }
         if (msg.includes('Address already in use')) {
           logger.warn(`[ScrcpyEngine ${this.serial}] Socket conflict on device — force-killing zombie scrcpy server`);
           this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
         }
       });
 
-      // Safety timeout — if no "Device:" within 5s, proceed anyway
-      setTimeout(done, 5000);
+      // Safety timeout — if no ready signal within 3.5s, proceed anyway
+      setTimeout(done, 3500);
     });
 
     this.serverProc.on('error', (e) => {
@@ -528,37 +576,77 @@ class ScrcpyEngine extends EventEmitter {
 
     await new Promise(r => setTimeout(r, 150));
 
-    // tunnel_forward socket 2 = audio stream (when audio=true)
-    if (this.enableAudio) {
+    // tunnel_forward socket 2 = audio stream (when audio=true and not disabled by device)
+    const audioEligible = this.enableAudio && !this._audioDisabled;
+    if (audioEligible) {
       try {
         logger.info(`[ScrcpyEngine ${this.serial}] Connecting audio socket...`);
-        this.audioSocket = await this._connectOne(this.videoPort);
+        this.audioSocket = await this._connectOne(this.videoPort, 15);
         this.audioSocket.setNoDelay(true);
         this._pipeAudioToClients(this.audioSocket);
         await new Promise(r => setTimeout(r, 150));
       } catch (err) {
         logger.warn(`[ScrcpyEngine ${this.serial}] Audio socket notice: ${err.message}`);
+        this.audioSocket = null;
       }
     }
 
-    // tunnel_forward socket 3 = control socket
+    // Next socket = control socket
     logger.info(`[ScrcpyEngine ${this.serial}] Connecting control socket...`);
-    this.controlSocket = await this._connectOne(this.videoPort);
-    this.controlSocket.setNoDelay(true);
-    this.controlSocket.setKeepAlive(true, 1000);
+    try {
+      this.controlSocket = await this._connectOne(this.videoPort, 20);
+      this.controlSocket.setNoDelay(true);
+      this.controlSocket.setKeepAlive(true, 1000);
+    } catch (err) {
+      // Self-healing recovery: if control socket on connection 3 failed but socket 2 was connected,
+      // it means socket 2 was actually the control socket (server disabled audio internally).
+      if (this.audioSocket) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] Re-routing socket 2 to control socket (device disabled audio)`);
+        this.controlSocket = this.audioSocket;
+        this.audioSocket = null;
+        this.controlSocket.removeAllListeners('data');
+        this.controlSocket.setNoDelay(true);
+        this.controlSocket.setKeepAlive(true, 1000);
+      } else {
+        throw err;
+      }
+    }
 
-    this.controlSocket.on('close', () => {
-      this.controlSocket = null;
-      if (this.isRunning) setTimeout(() => this._reconnectControl(), 300);
-    });
+    this.controlSocket.on('close', () => { this.controlSocket = null; });
     this.controlSocket.on('error', () => { this.controlSocket = null; });
   }
 
   _connectOne(port, retries = 50) {
     return new Promise((resolve, reject) => {
       const attempt = (n) => {
-        const s = net.connect({ port, host: '127.0.0.1' }, () => resolve(s));
+        let settled = false;
+        const s = net.connect({ port, host: '127.0.0.1' }, () => {
+          // If socket closes within 35ms, remote forward target was closed by scrcpy
+          const onEarlyClose = () => {
+            if (settled) return;
+            settled = true;
+            s.destroy();
+            if (n <= 0) return reject(new Error(`Socket closed immediately on port ${port}`));
+            setTimeout(() => attempt(n - 1), 150);
+          };
+          s.once('close', onEarlyClose);
+          setTimeout(() => {
+            if (!settled) {
+              s.removeListener('close', onEarlyClose);
+              if (!s.destroyed) {
+                settled = true;
+                resolve(s);
+              } else {
+                settled = true;
+                if (n <= 0) reject(new Error(`Socket destroyed on port ${port}`));
+                else setTimeout(() => attempt(n - 1), 150);
+              }
+            }
+          }, 35);
+        });
         s.on('error', (e) => {
+          if (settled) return;
+          settled = true;
           s.destroy();
           if (n <= 0) return reject(new Error(`Timeout connecting to port ${port}: ${e.message}`));
           setTimeout(() => attempt(n - 1), 150);
