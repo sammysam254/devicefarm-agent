@@ -18,6 +18,23 @@ const ADB_BIN = (() => {
 
 const SCRCPY_JAR_PATH = path.join(process.cwd(), 'scrcpy-server.jar');
 
+function loadConfig() {
+  const candidates = [
+    path.join(process.cwd(), 'config.json'),
+    path.join(__dirname, '..', '..', 'config.json'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) {}
+    }
+  }
+  return {};
+}
+
+const _cfg = loadConfig();
+const _isTunnel = !!(_cfg.cloudflareToken || _cfg.cloudflaredToken || _cfg.domain);
+
+
 function hasSpsNal(buf) {
   if (!buf || buf.length < 4) return false;
   for (let i = 0; i < Math.min(buf.length - 4, 128); i++) {
@@ -318,6 +335,14 @@ class ScrcpyEngine extends EventEmitter {
       logger.error(`[ScrcpyEngine ${this.serial}] Download from: https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4`);
     }
 
+    const bitRate = _isTunnel ? '2000000' : '4000000';
+    const maxFps  = _isTunnel ? '30'      : '60';
+    const maxSize = _isTunnel ? '720'     : '1280';
+
+    if (_isTunnel) {
+      logger.info(`[ScrcpyEngine ${this.serial}] Tunnel mode active — using ${bitRate} bps / ${maxFps} fps / max_size=${maxSize}`);
+    }
+
     const args = [
       '-s', this.serial, 'shell',
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
@@ -330,9 +355,9 @@ class ScrcpyEngine extends EventEmitter {
       'cleanup=false',
       'send_dummy_byte=true',
       'video_source=display',
-      'video_bit_rate=4000000',
-      'max_size=1280',
-      'max_fps=60',
+      `video_bit_rate=${bitRate}`,
+      `max_size=${maxSize}`,
+      `max_fps=${maxFps}`,
       'video_codec_options=i-frame-interval=1',
       'send_frame_meta=true',
       'show_touches=false',
@@ -498,6 +523,7 @@ class ScrcpyEngine extends EventEmitter {
     // tunnel_forward socket 1 = video stream
     this.videoSocket = await this._connectOne(this.videoPort);
     this.videoSocket.setNoDelay(true);
+    this.videoSocket.setKeepAlive(true, 1000);
     this._pipeVideoToClients(this.videoSocket);
 
     await new Promise(r => setTimeout(r, 150));
@@ -653,7 +679,7 @@ class ScrcpyEngine extends EventEmitter {
           }
         }
 
-        this._broadcastVideo(payload);
+        this._broadcastVideo(payload, isKeyframe);
       }
 
       // Safety reset
@@ -737,10 +763,13 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  _broadcastVideo(payload) {
+  _broadcastVideo(payload, isKeyframe = false) {
+    const BACKPRESSURE_LIMIT = 64 * 1024; // 64 KB
     for (const ws of this.wsClients) {
       if (ws.readyState === 1) {
-        try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+        if (isKeyframe || ws.bufferedAmount < BACKPRESSURE_LIMIT) {
+          try { ws.send(payload, { binary: true }); } catch (_) { this.wsClients.delete(ws); }
+        }
       } else {
         this.wsClients.delete(ws);
       }

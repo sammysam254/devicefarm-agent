@@ -31,6 +31,24 @@ const ADB_BIN = resolveAdbBin();
 
 const activeServers = new Map();
 
+// ── Credential Cache (30s TTL) ──────────────────────────────────────────────
+const credCache = new Map();
+const CRED_CACHE_TTL_MS = 30000;
+
+async function cachedValidateDevicePin(serial, pin, bindingCode) {
+  const clean = (pin || '').trim();
+  if (!clean) return false;
+  const key = `${serial}:${clean}:${bindingCode}`;
+  const hit = credCache.get(key);
+  if (hit && (Date.now() - hit.timestamp < CRED_CACHE_TTL_MS)) {
+    return hit.valid;
+  }
+  const valid = await licenseService.validateDevicePin(serial, clean, bindingCode);
+  credCache.set(key, { valid, timestamp: Date.now() });
+  return valid;
+}
+
+
 // ─── Persistent ADB input shell (fallback when scrcpy not ready) ─────────────
 
 const inputShells = new Map();
@@ -264,7 +282,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="screenshot()" title="Screenshot">&#128247;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="openText()" title="Send Text / Keyboard">&#9000;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="openUpload()" title="Upload File / APK">&#128228;</button>
-    <button tabindex="-1" onfocus="this.blur()" class="btn" id="muteBtn" onclick="toggleMute()" title="Mute/Unmute Audio">&#128266;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" id="muteBtn" onclick="toggleMute()" title="Mute/Unmute Audio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg></button>
     
     <!-- Vertical Green Volume Slider -->
     <div class="vol-slider-box" title="Volume Slider">
@@ -351,6 +369,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
   const urlParams = new URLSearchParams(window.location.search);
   let isMuted = urlParams.get('muted') === '1' || urlParams.get('muted') === 'true';
   let gainNode = null;
+  const SVG_SPEAKER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+  const SVG_MUTED   = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>';
 
   function initAudio() {
     if (audioCtx) {
@@ -492,25 +512,26 @@ function buildPlayerHtml(serial, screenW, screenH) {
   // ── Mute toggle ──────────────────────────────────────────────────────────
   function toggleMute() {
     isMuted = !isMuted;
-    if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
+    if (gainNode) gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
     if (isMuted && audioDecoder && audioDecoder.state !== 'closed') {
       try { audioDecoder.flush().catch(function(){}); } catch (_) {}
     }
+    const isSilenced = isMuted || currentVolume === 0;
     // Sync desktop sidebar mute button
     const btn = document.getElementById('muteBtn');
     if (btn) {
-      btn.textContent = isMuted ? '🔇' : '🔊';
+      btn.innerHTML = isSilenced ? SVG_MUTED : SVG_SPEAKER;
       btn.title = isMuted ? 'Unmute audio' : 'Mute audio';
-      btn.style.color = isMuted ? '#f87171' : '';
-      btn.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
+      btn.style.color = isSilenced ? '#f87171' : '';
+      btn.style.borderColor = isSilenced ? 'rgba(248,113,113,.5)' : '';
     }
     // Sync mobile bottom bar mute button
     const iconM = document.getElementById('muteBtnMIcon');
     const btnM  = document.getElementById('muteBtnM');
-    if (iconM) iconM.textContent = isMuted ? '🔇' : '🔊';
+    if (iconM) iconM.innerHTML = isSilenced ? SVG_MUTED : SVG_SPEAKER;
     if (btnM)  {
-      btnM.style.color = isMuted ? '#f87171' : '';
-      btnM.style.borderColor = isMuted ? 'rgba(248,113,113,.5)' : '';
+      btnM.style.color = isSilenced ? '#f87171' : '';
+      btnM.style.borderColor = isSilenced ? 'rgba(248,113,113,.5)' : '';
     }
   }
 
@@ -635,7 +656,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       wsOk = true;
       wsFailCount = 0;
       lastFrameReceivedTime = 0;
-      modeText.textContent = 'LIVE 60FPS';
+      modeText.textContent = 'LIVE';
       resetDecoder();
       initDecoder();
       audioNextPlayTime = 0;
@@ -664,7 +685,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
       if (!(e.data instanceof ArrayBuffer)) return;
       lastFrameReceivedTime = Date.now();
-      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE 60FPS'; }
+      if (fbRunning) { fbRunning = false; modeText.textContent = 'LIVE'; }
 
       const rawU8 = new Uint8Array(e.data);
       if (rawU8.length < 4) return;
@@ -997,10 +1018,15 @@ function buildPlayerHtml(serial, screenW, screenH) {
   function setVolume(val) {
     currentVolume = parseFloat(val);
     if (gainNode) gainNode.gain.value = isMuted ? 0 : (currentVolume / 100);
+    const isSilenced = isMuted || currentVolume === 0;
     const btn = document.getElementById('muteBtn');
     if (btn) {
-      btn.textContent = (isMuted || currentVolume === 0) ? '🔇' : '🔊';
+      btn.innerHTML = isSilenced ? SVG_MUTED : SVG_SPEAKER;
+      btn.style.color = isSilenced ? '#f87171' : '';
+      btn.style.borderColor = isSilenced ? 'rgba(248,113,113,.5)' : '';
     }
+    const iconM = document.getElementById('muteBtnMIcon');
+    if (iconM) iconM.innerHTML = isSilenced ? SVG_MUTED : SVG_SPEAKER;
   }
 
   function rotateScreen() {
@@ -1049,6 +1075,7 @@ async function startStreamServer(serial, port) {
   // Start scrcpy engine asynchronously so stream server port listens immediately
   const engine = new ScrcpyEngine(serial);
   const videoPort = port + 1000;
+  engine.enableAudio = true;
   engine.start(videoPort)
     .then(() => logger.info(`[StreamServer] ScrcpyEngine ready for ${serial}`))
     .catch((err) => logger.warn(`[StreamServer] ScrcpyEngine failed for ${serial}: ${err.message}`));
@@ -1134,7 +1161,7 @@ async function startStreamServer(serial, port) {
     if (isLocalHost || isFromDashboard) {
       isPinOrKeyValid = true;
     } else if (cleanPinParam || keyParam) {
-      isPinOrKeyValid = await licenseService.validateDevicePin(serial, cleanPinParam || keyParam, bindingCode);
+      isPinOrKeyValid = await cachedValidateDevicePin(serial, cleanPinParam || keyParam, bindingCode);
     }
 
     const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
@@ -1305,7 +1332,7 @@ async function startStreamServer(serial, port) {
     if (isLocalHost || isFromDashboard) {
       isPinValid = true;
     } else if (pinParam) {
-      isPinValid = await licenseService.validateDevicePin(serial, pinParam, bindingCode);
+      isPinValid = await cachedValidateDevicePin(serial, pinParam, bindingCode);
     }
     const isTokenValid = tokenParam && dashboardServer.SESSION_TOKENS && dashboardServer.SESSION_TOKENS.has(tokenParam);
     const isValidWs = isLocalHost || isFromDashboard || isPinValid || isTokenValid;
