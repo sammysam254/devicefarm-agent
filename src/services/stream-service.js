@@ -146,8 +146,8 @@ function handleControl(type, data, serial, engine) {
       return;
     }
 
-    // Direct touch injection down immediately
-    const downOk = engine.sendTouchEvent(0, x1, y1, W, H, 0.45);
+    // Direct touch injection down
+    const downOk = engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
     if (!downOk) {
       const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
       const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
@@ -155,19 +155,19 @@ function handleControl(type, data, serial, engine) {
       return;
     }
 
-    // High-precision smooth swipe with cubic ease-out (fast initial flick, smooth glide)
-    const steps = Math.max(8, Math.floor(dur / 12));
-    const dt = dur / steps;
+    // Natural human swipe with 5 distinct steps spaced by 25ms
+    const steps = 5;
+    const intervalMs = Math.max(20, Math.floor(dur / steps));
     for (let i = 1; i <= steps; i++) {
       setTimeout(() => {
         const progress = i / steps;
-        const ease = 1 - Math.pow(1 - progress, 3);
+        // Natural human finger deceleration (ease-out quad)
+        const ease = 1 - (1 - progress) * (1 - progress);
         const currX = x1 + (x2 - x1) * ease;
         const currY = y1 + (y2 - y1) * ease;
         const action = (i === steps) ? 1 : 2; // UP on final step
-        const pVal = (action === 1) ? 0 : 0.6;
-        engine.sendTouchEvent(action, currX, currY, W, H, pVal);
-      }, Math.round(i * dt));
+        engine.sendTouchEvent(action, currX, currY, W, H, action === 1 ? 0 : 1.0);
+      }, i * intervalMs);
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
@@ -419,9 +419,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.buffer = webAudioBuf;
             src.connect(gainNode);
 
-            // Jitter buffer (50ms) absorbs network packet arrival variation
+            // Jitter buffer (80ms) absorbs tunnel network packet arrival variation
             // preventing buffer underflows (scratches/clicks) and overlaps
-            const JITTER_BUFFER = 0.05;
+            const JITTER_BUFFER = 0.08;
             const now = audioCtx.currentTime;
 
             if (audioNextPlayTime < now) {
@@ -493,7 +493,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const src = audioCtx.createBufferSource();
       src.buffer = buf;
       src.connect(gainNode);
-      const JITTER_BUFFER = 0.05;
+      const JITTER_BUFFER = 0.08;
       const now = audioCtx.currentTime;
       if (audioNextPlayTime < now) {
         audioNextPlayTime = now + JITTER_BUFFER;
@@ -811,12 +811,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
   }
 
-  // ── Natural Human Pointer & Fling Mechanics ──────────────────────────
+  // ── Pure Direct Human Touch & Motion Interaction ──────────────────────────
   let down = false;
   let activePointerId = null;
-  let moveRaf = null;
-  let pendingMove = null;
-  let pointerHistory = [];
+  let lastMoveTime = 0;
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -825,70 +823,31 @@ function buildPlayerHtml(serial, screenW, screenH) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
     const c = coords(e);
-    pointerHistory = [{ x: c.x, y: c.y, t: performance.now() }];
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.45 });
+    lastMoveTime = performance.now();
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
-    const c = coords(e);
     const now = performance.now();
-    pointerHistory.push({ x: c.x, y: c.y, t: now });
-    while (pointerHistory.length > 1 && now - pointerHistory[0].t > 120) {
-      pointerHistory.shift();
-    }
-    pendingMove = c;
-
-    if (!moveRaf) {
-      moveRaf = requestAnimationFrame(() => {
-        moveRaf = null;
-        if (down && pendingMove) {
-          send({ type:'touch', action:2, x:pendingMove.x, y:pendingMove.y, width:nativeW, height:nativeH, pressure:0.65 });
-        }
-      });
-    }
+    // 120Hz smooth human drag sampling without delay or artificial lag
+    if (now - lastMoveTime < 8) return;
+    lastMoveTime = now;
+    const c = coords(e);
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
   });
 
   function releasePointer(e) {
     if (!down) return;
     down = false;
-    if (moveRaf) {
-      cancelAnimationFrame(moveRaf);
-      moveRaf = null;
-    }
     if (activePointerId !== null) {
       try { canvas.releasePointerCapture(activePointerId); } catch (_) {}
       activePointerId = null;
     }
-
     const c = coords(e);
-    const now = performance.now();
-    pointerHistory.push({ x: c.x, y: c.y, t: now });
-
-    // Ensure device receives the exact coordinate of pointer release
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0.5 });
-
-    // Calculate fling velocity for natural coasting physics
-    if (pointerHistory.length >= 2) {
-      const oldest = pointerHistory[0];
-      const dt = now - oldest.t;
-      const dx = c.x - oldest.x;
-      const dy = c.y - oldest.y;
-      const speed = Math.hypot(dx, dy) / Math.max(1, dt); // px/ms
-
-      // If swift swipe/flick (> 0.35 px/ms), project an extra momentum step
-      // so Android's native VelocityTracker produces a silky smooth momentum scroll
-      if (speed > 0.35 && dt < 150) {
-        const momentumDist = Math.min(220, speed * 35);
-        const angle = Math.atan2(dy, dx);
-        const flingX = Math.round(c.x + Math.cos(angle) * momentumDist);
-        const flingY = Math.round(c.y + Math.sin(angle) * momentumDist);
-        send({ type:'touch', action:2, x:flingX, y:flingY, width:nativeW, height:nativeH, pressure:0.3 });
-      }
-    }
-
-    // Complete gesture with ACTION_UP
+    // Send final MOVE then clean UP — Android VelocityTracker naturally flings and coasts with true physics
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
     send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
   }
 

@@ -845,7 +845,7 @@ class ScrcpyEngine extends EventEmitter {
     payload.copy(audioFrame, 2);
 
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1 && ws.bufferedAmount < 128 * 1024) {
+      if (ws.readyState === 1) {
         try { ws.send(audioFrame, { binary: true }); } catch (_) {}
       }
     }
@@ -973,7 +973,7 @@ class ScrcpyEngine extends EventEmitter {
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(0, 24);              // action_button = 0
+    buf.writeInt32BE(action === 0 ? 1 : 0, 24); // action_button = 1 (PRIMARY) on DOWN, 0 on UP/MOVE
     buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
     try {
       this.controlSocket.cork();
