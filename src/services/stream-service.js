@@ -390,44 +390,26 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (audioDecoderReady) return true;
     if (typeof AudioDecoder === 'undefined') return false;
     try {
-      let layoutDetected = false;
-      let isPlanar = false;
-
       audioDecoder = new AudioDecoder({
         output: function(audioData) {
-          if (!audioCtx || !gainNode) { audioData.close(); return; }
+          if (!audioCtx || !gainNode || isMuted) { audioData.close(); return; }
           try {
             const nCh     = audioData.numberOfChannels;
             const nFrames = audioData.numberOfFrames;
             const sr      = audioData.sampleRate;
 
-            // Detect planar vs interleaved once and cache it
-            if (!layoutDetected) {
-              if (nCh > 1) {
-                try { audioData.allocationSize({ planeIndex: 1, format: 'f32-planar' }); isPlanar = true; }
-                catch (_) { isPlanar = false; }
-              } else {
-                isPlanar = true;
-              }
-              layoutDetected = true;
-            }
-
             const webAudioBuf = audioCtx.createBuffer(nCh, nFrames, sr);
 
-            if (isPlanar) {
-              for (let ch = 0; ch < nCh; ch++) {
-                const byteLen = audioData.allocationSize({ planeIndex: ch, format: 'f32-planar' });
-                const plane   = new Float32Array(byteLen / 4);
-                audioData.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
-                webAudioBuf.copyToChannel(plane, ch);
-              }
-            } else {
-              const byteLen    = audioData.allocationSize({ planeIndex: 0, format: 'f32' });
-              const interleaved = new Float32Array(byteLen / 4);
-              audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
-              for (let ch = 0; ch < nCh; ch++) {
-                const chData = webAudioBuf.getChannelData(ch);
+            for (let ch = 0; ch < nCh; ch++) {
+              const chData = webAudioBuf.getChannelData(ch);
+              try {
+                audioData.copyTo(chData, { planeIndex: ch, format: 'f32-planar' });
+              } catch (_) {
+                const byteLen = audioData.allocationSize({ planeIndex: 0, format: 'f32' });
+                const interleaved = new Float32Array(byteLen / 4);
+                audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
                 for (let i = 0; i < nFrames; i++) chData[i] = interleaved[i * nCh + ch];
+                break;
               }
             }
 
@@ -437,9 +419,17 @@ function buildPlayerHtml(serial, screenW, screenH) {
             src.buffer = webAudioBuf;
             src.connect(gainNode);
 
+            // Jitter buffer (50ms) absorbs network packet arrival variation
+            // preventing buffer underflows (scratches/clicks) and overlaps
+            const JITTER_BUFFER = 0.05;
             const now = audioCtx.currentTime;
-            if (audioNextPlayTime < now) audioNextPlayTime = now;
-            if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
+
+            if (audioNextPlayTime < now) {
+              audioNextPlayTime = now + JITTER_BUFFER;
+            } else if (audioNextPlayTime > now + 0.35) {
+              audioNextPlayTime = now + JITTER_BUFFER;
+            }
+
             src.start(audioNextPlayTime);
             audioNextPlayTime += webAudioBuf.duration;
           } catch (err) {
@@ -451,7 +441,6 @@ function buildPlayerHtml(serial, screenW, screenH) {
           console.warn('[Audio] AudioDecoder error:', err);
           audioDecoderReady = false;
           audioDecoder = null;
-          layoutDetected = false;
         }
       });
       audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
@@ -463,6 +452,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
+  let opusChunkTimestamp = 0;
   function playOpusPacket(bytes) {
     if (isMuted) return;
     if (!audioCtx) initAudio();
@@ -472,9 +462,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
     if (!audioDecoder || audioDecoder.state === 'closed') { audioDecoderReady = false; return; }
     try {
+      opusChunkTimestamp += 20000; // Exact 20ms per Opus frame
       audioDecoder.decode(new EncodedAudioChunk({
         type: 'key',
-        timestamp: performance.now() * 1000,
+        timestamp: opusChunkTimestamp,
         data: bytes
       }));
     } catch (err) {
@@ -502,9 +493,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
       const src = audioCtx.createBufferSource();
       src.buffer = buf;
       src.connect(gainNode);
+      const JITTER_BUFFER = 0.05;
       const now = audioCtx.currentTime;
-      if (audioNextPlayTime < now) audioNextPlayTime = now;
-      if (audioNextPlayTime > now + 0.12) audioNextPlayTime = now;
+      if (audioNextPlayTime < now) {
+        audioNextPlayTime = now + JITTER_BUFFER;
+      } else if (audioNextPlayTime > now + 0.35) {
+        audioNextPlayTime = now + JITTER_BUFFER;
+      }
       src.start(audioNextPlayTime);
       audioNextPlayTime += buf.duration;
     } catch (_) {}
