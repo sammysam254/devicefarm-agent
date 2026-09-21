@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Shield, Server, Users, Smartphone, X, Key } from 'lucide-react';
+import { Shield, Server, Users, Smartphone, X, Key, Lock } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
   const { profile } = useAuth();
@@ -80,6 +80,12 @@ export default function Sidebar({ isOpen, onClose }) {
         {isAdmin && (
           <NavLink to="/admin" onClick={onClose} style={linkStyle}>
             <Users size={18} /> Admin Allocations
+          </NavLink>
+        )}
+
+        {isAdmin && (
+          <NavLink to="/dashboard/kiosk" onClick={onClose} style={linkStyle}>
+            <Lock size={18} /> FlexPulse Kiosk
           </NavLink>
         )}
 

@@ -8,6 +8,7 @@ import SeedAdminDashboard from './pages/SeedAdminDashboard';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import WorkerDashboard from './pages/WorkerDashboard';
+import KioskDashboard from './pages/KioskDashboard';
 import BlockedScreen from './pages/BlockedScreen';
 
 function ProtectedRoute({ children, allowedRoles }) {
@@ -89,6 +90,16 @@ export default function App() {
               </ProtectedRoute>
             } 
           />
+
+          <Route 
+            path="/dashboard/kiosk" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'super_admin', 'seed_admin']}>
+                <KioskDashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route path="/kiosk" element={<Navigate to="/dashboard/kiosk" replace />} />
 
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

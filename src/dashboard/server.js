@@ -9,9 +9,117 @@ const logger = require('../utils/logger');
 const processManager = require('../main/process-manager');
 const bindingService = require('../services/binding-service');
 const licenseService = require('../services/license-service');
+const { ensureFlexPulseWallpaper } = require('../utils/wallpaper-generator');
 
 let server = null;
 let serverPort = 7400;
+
+let agentConfig = null;
+function getAgentConfig() {
+  if (agentConfig) return agentConfig;
+  for (const p of [
+    path.join(process.cwd(), 'config.json'),
+    path.join(__dirname, '..', '..', 'config.json'),
+  ]) {
+    if (fs.existsSync(p)) {
+      try {
+        agentConfig = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        return agentConfig;
+      } catch (_) {}
+    }
+  }
+  return {};
+}
+
+function resolveAdb() {
+  const cfg = getAgentConfig();
+  if (cfg.adbPath && fs.existsSync(cfg.adbPath)) return cfg.adbPath;
+  const bundled = path.join(__dirname, '../../assets/bin/adb.exe');
+  if (fs.existsSync(bundled)) return bundled;
+  if (fs.existsSync('C:\\platform-tools\\adb.exe')) return 'C:\\platform-tools\\adb.exe';
+  return 'adb';
+}
+
+function resolveSerialForAdb(rawSerial) {
+  if (!rawSerial) return rawSerial;
+  const target = findTargetDevice(rawSerial);
+  if (target && (target.hardwareSerial || target.adbSerial || target.serial)) {
+    return target.hardwareSerial || target.adbSerial || target.serial;
+  }
+  return rawSerial;
+}
+
+function execAdb(serial, adbArgs, timeoutMs = 15000) {
+  const adbBin = resolveAdb();
+  const realSerial = resolveSerialForAdb(serial);
+  const args = realSerial ? ['-s', realSerial, ...adbArgs] : adbArgs;
+  return new Promise((resolve) => {
+    const fullCmd = `"${adbBin}" ${args.map(a => `"${String(a).replace(/"/g, '\\"')}"`).join(' ')}`;
+    exec(fullCmd, { windowsHide: true, timeout: timeoutMs }, (err, stdout, stderr) => {
+      if (err) {
+        resolve({ success: false, error: err.message, stderr: (stderr || '').trim(), stdout: (stdout || '').trim() });
+      } else {
+        resolve({ success: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
+      }
+    });
+  });
+}
+
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 2 * 1024 * 1024) {
+        reject(new Error('Payload too large'));
+      }
+    });
+    req.on('end', () => {
+      if (!body) return resolve({});
+      try {
+        resolve(JSON.parse(body));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+const ESSENTIAL_PACKAGES = new Set([
+  'com.android.settings',
+  'com.google.android.gms',
+  'com.android.vending',
+  'com.google.android.gsf',
+  'com.android.systemui',
+  'com.android.launcher3',
+  'com.google.android.apps.nexuslauncher',
+  'com.sec.android.app.launcher',
+  'com.miui.home',
+  'com.huawei.android.launcher',
+  'com.oppo.launcher',
+  'com.vivo.upslide',
+  'com.devicefarm.agent',
+  'com.google.android.inputmethod.latin',
+  'com.android.inputmethod.latin',
+  'com.samsung.android.honeyboard',
+  'com.android.shell',
+  'android',
+]);
+
+function isAuthorizedRequest(req) {
+  const remoteIp = req.socket.remoteAddress || '';
+  const hostHeader = req.headers.host || '';
+  const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
+  const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
+  if (isLocalHost) return true;
+
+  const authHeader = req.headers['x-farm-auth-key'];
+  const cfg = getAgentConfig();
+  const expectedKey = process.env.FARM_SECRET_KEY || cfg.agentSecretKey || null;
+  if (!expectedKey) return true;
+  return authHeader === expectedKey;
+}
 
 // Session token cache to avoid exposing binding code in HTTP responses
 const SESSION_TOKENS = new Map();
@@ -129,9 +237,10 @@ function startDashboardServer(port = 7400) {
 
     server = http.createServer(async (req, res) => {
       try {
-        // Enable CORS & Security headers (permitting frame embedding on dennoh.site)
+      // Enable CORS & Security headers (permitting frame embedding on dennoh.site)
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-farm-auth-key');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-XSS-Protection', '1; mode=block');
       res.setHeader('Referrer-Policy', 'no-referrer');
@@ -171,8 +280,10 @@ function startDashboardServer(port = 7400) {
         const hostHeader = req.headers.host || '';
         const isCloudflareOrRemote = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || (hostHeader && !hostHeader.includes('localhost') && !hostHeader.includes('127.0.0.1')));
         const isLocalHost = !isCloudflareOrRemote && (remoteIp.includes('127.0.0.1') || remoteIp.includes('::1') || remoteIp.includes('localhost') || hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1'));
+        const isAuthorized = isAuthorizedRequest(req);
+        const canAccess = isLocalHost || isAuthorized;
 
-        const devices = isLocalHost ? rawDevices.map(d => ({
+        const devices = canAccess ? rawDevices.map(d => ({
           ...d,
           streamUrl: d.streamUrl ? `${d.streamUrl}&token=${sessionToken}` : d.streamUrl,
         })) : [];
@@ -184,7 +295,7 @@ function startDashboardServer(port = 7400) {
           sessionToken,
           isLicensed: lic.isActive,
           licenseMode: lic.mode,
-          count: isLocalHost ? rawDevices.length : 0,
+          count: canAccess ? rawDevices.length : 0,
           devices: devices,
           isRemote: !isLocalHost,
           timestamp: new Date().toISOString()
@@ -257,6 +368,220 @@ function startDashboardServer(port = 7400) {
           res.writeHead(404, { 'Content-Type': 'text/plain' });
           res.end('Installer not found');
         }
+        return;
+      }
+
+      // ── Kiosk & System Branding Endpoints ───────────────────────────────
+      // GET /api/devices/:serial/apps
+      const appsMatch = url.match(/^\/api\/devices\/([^/]+)\/apps$/);
+      if (appsMatch && req.method === 'GET') {
+        if (!isAuthorizedRequest(req)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Unauthorized' }));
+          return;
+        }
+
+        const rawSerial = decodeURIComponent(appsMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+
+        const [allRes, disabledRes] = await Promise.all([
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d', '-3']),
+        ]);
+
+        if (!allRes.success && !allRes.stdout) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: allRes.error || 'Failed to query device packages' }));
+          return;
+        }
+
+        const disabledLines = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const disabledSet = new Set(disabledLines);
+
+        const allLines = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const packages = allLines.map(pkg => ({
+          packageName: pkg,
+          isEnabled: !disabledSet.has(pkg),
+          isEssential: ESSENTIAL_PACKAGES.has(pkg),
+        }));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          success: true,
+          serial: realSerial,
+          count: packages.length,
+          packages,
+        }));
+        return;
+      }
+
+      // POST /api/devices/:serial/lockdown
+      const lockdownMatch = url.match(/^\/api\/devices\/([^/]+)\/lockdown$/);
+      if (lockdownMatch && req.method === 'POST') {
+        if (!isAuthorizedRequest(req)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Unauthorized' }));
+          return;
+        }
+
+        const rawSerial = decodeURIComponent(lockdownMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+
+        let payload = {};
+        try {
+          payload = await parseJsonBody(req);
+        } catch (_) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON body' }));
+          return;
+        }
+
+        const allowedPackages = Array.isArray(payload.allowedPackages) ? payload.allowedPackages : [];
+        const allowedSet = new Set(allowedPackages);
+
+        // 1. Query all third-party packages: pm list packages -3
+        const allRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']);
+        const allPackages = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+
+        let enabledCount = 0;
+        let lockedCount = 0;
+
+        for (const pkg of allPackages) {
+          if (allowedSet.has(pkg)) {
+            // Packages inside allowedPackages run: pm enable <pkg>
+            await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
+            enabledCount++;
+          } else {
+            // Packages NOT in allowedPackages run: pm disable-user --user 0 <pkg>
+            if (!ESSENTIAL_PACKAGES.has(pkg)) {
+              await execAdb(realSerial, ['shell', 'pm', 'disable-user', '--user', '0', pkg]);
+              lockedCount++;
+            }
+          }
+        }
+
+        // 2. Branded Wallpaper Injection ("FlexPulse System")
+        let wallpaperPushed = false;
+        try {
+          const wallpaperPath = ensureFlexPulseWallpaper();
+          if (fs.existsSync(wallpaperPath)) {
+            const pushRes = await execAdb(realSerial, ['push', wallpaperPath, '/sdcard/flexpulse_wallpaper.png']);
+            if (pushRes.success) {
+              wallpaperPushed = true;
+              // Broadcast / launch wallpaper manager intent
+              await execAdb(realSerial, [
+                'shell', 'am', 'start',
+                '-a', 'android.intent.action.ATTACH_DATA',
+                '-c', 'android.intent.category.DEFAULT',
+                '-d', 'file:///sdcard/flexpulse_wallpaper.png',
+                '-t', 'image/png',
+                '-e', 'mimeType', 'image/png'
+              ]);
+              await execAdb(realSerial, [
+                'shell', 'am', 'broadcast',
+                '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
+                '-d', 'file:///sdcard/flexpulse_wallpaper.png'
+              ]);
+              await execAdb(realSerial, [
+                'shell', 'am', 'broadcast',
+                '-a', 'com.flexpulse.SET_WALLPAPER',
+                '-e', 'path', '/sdcard/flexpulse_wallpaper.png'
+              ]);
+            }
+          }
+        } catch (wpErr) {
+          logger.warn(`[Lockdown] Wallpaper trigger error: ${wpErr.message}`);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          success: true,
+          message: `FlexPulse Multi-App Mode applied: ${enabledCount} allowed, ${lockedCount} frozen/hidden.`,
+          lockedCount,
+          enabledCount,
+          wallpaperSet: wallpaperPushed,
+        }));
+        return;
+      }
+
+      // POST /api/devices/:serial/unlock
+      const unlockMatch = url.match(/^\/api\/devices\/([^/]+)\/unlock$/);
+      if (unlockMatch && req.method === 'POST') {
+        if (!isAuthorizedRequest(req)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Unauthorized' }));
+          return;
+        }
+
+        const rawSerial = decodeURIComponent(unlockMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+
+        // Re-enables all currently disabled third-party packages: pm list packages -d -3 -> pm enable <pkg>
+        const disabledRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d', '-3']);
+        const disabledPackages = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+
+        let unlockedCount = 0;
+        for (const pkg of disabledPackages) {
+          await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
+          unlockedCount++;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          success: true,
+          message: `Restored normal mode. ${unlockedCount} third-party apps re-enabled.`,
+          unlockedCount,
+        }));
+        return;
+      }
+
+      // POST /api/devices/:serial/install-playstore
+      const playstoreMatch = url.match(/^\/api\/devices\/([^/]+)\/install-playstore$/);
+      if (playstoreMatch && req.method === 'POST') {
+        if (!isAuthorizedRequest(req)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Unauthorized' }));
+          return;
+        }
+
+        const rawSerial = decodeURIComponent(playstoreMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+
+        let payload = {};
+        try {
+          payload = await parseJsonBody(req);
+        } catch (_) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON body' }));
+          return;
+        }
+
+        const packageName = (payload.packageName || '').trim();
+        if (!packageName) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Target package ID is required' }));
+          return;
+        }
+
+        // 1. Ensure Play Store is active: pm enable com.android.vending
+        await execAdb(realSerial, ['shell', 'pm', 'enable', 'com.android.vending']);
+
+        // 2. Trigger official store listing intent
+        await execAdb(realSerial, [
+          'shell', 'am', 'start',
+          '-a', 'android.intent.action.VIEW',
+          '-d', `market://details?id=${packageName}`
+        ]);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          success: true,
+          message: 'Play Store listing launched for ' + packageName,
+        }));
         return;
       }
 
