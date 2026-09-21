@@ -92,6 +92,14 @@ export default function App() {
           />
 
           <Route 
+            path="/kiosk" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'super_admin', 'seed_admin']}>
+                <KioskDashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
             path="/dashboard/kiosk" 
             element={
               <ProtectedRoute allowedRoles={['admin', 'super_admin', 'seed_admin']}>
@@ -99,7 +107,6 @@ export default function App() {
               </ProtectedRoute>
             } 
           />
-          <Route path="/kiosk" element={<Navigate to="/dashboard/kiosk" replace />} />
 
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

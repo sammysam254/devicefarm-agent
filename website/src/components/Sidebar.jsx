@@ -5,11 +5,11 @@ import { Shield, Server, Users, Smartphone, X, Key, Lock } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
   const { profile } = useAuth();
-  const role = profile?.role || 'worker';
+  const rawRole = (profile?.role || 'worker').toLowerCase().trim();
 
-  const isSeed = role === 'seed_admin';
-  const isSuper = role === 'super_admin' || isSeed;
-  const isAdmin = role === 'admin' || isSuper;
+  const isSeed = rawRole === 'seed_admin';
+  const isSuper = rawRole === 'super_admin' || isSeed;
+  const isAdmin = rawRole === 'admin' || isSuper || Boolean(profile?.is_admin) || Boolean(profile?.is_super_admin);
 
   const linkStyle = ({ isActive }) => ({
     display: 'flex',
@@ -84,8 +84,8 @@ export default function Sidebar({ isOpen, onClose }) {
         )}
 
         {isAdmin && (
-          <NavLink to="/dashboard/kiosk" onClick={onClose} style={linkStyle}>
-            <Lock size={18} /> FlexPulse Kiosk
+          <NavLink to="/kiosk" onClick={onClose} style={linkStyle}>
+            <Lock size={18} /> Kiosk
           </NavLink>
         )}
 

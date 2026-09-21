@@ -5,10 +5,10 @@ import { Sun, Moon, Menu, LogOut, Shield, Smartphone, Lock, Server, Users } from
 
 export default function Navbar({ toggleSidebar }) {
   const { user, profile, theme, toggleTheme, logout } = useAuth();
-  const role = profile?.role || 'worker';
-  const isSeed = role === 'seed_admin';
-  const isSuper = role === 'super_admin' || isSeed;
-  const isAdmin = role === 'admin' || isSuper;
+  const rawRole = (profile?.role || 'worker').toLowerCase().trim();
+  const isSeed = rawRole === 'seed_admin';
+  const isSuper = rawRole === 'super_admin' || isSeed;
+  const isAdmin = rawRole === 'admin' || isSuper || Boolean(profile?.is_admin) || Boolean(profile?.is_super_admin);
 
   const getRoleBadge = (r) => {
     switch (r) {
@@ -77,7 +77,7 @@ export default function Navbar({ toggleSidebar }) {
         >
           <Menu size={20} />
         </button>
-        <NavLink to={isAdmin ? '/dashboard/kiosk' : '/worker'} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '18px', textDecoration: 'none', color: 'inherit' }}>
+        <NavLink to={isAdmin ? (isSeed ? '/seed-admin' : isSuper ? '/super-admin' : '/admin') : '/worker'} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '18px', textDecoration: 'none', color: 'inherit' }}>
           <img src="/favicon.svg" alt="FlexPulse" style={{ width: '28px', height: '28px' }} />
           <span>FlexPulse</span>
         </NavLink>
@@ -104,8 +104,8 @@ export default function Navbar({ toggleSidebar }) {
             )}
 
             {isAdmin && (
-              <NavLink to="/dashboard/kiosk" style={kioskTabStyle}>
-                <Lock size={14} /> FlexPulse Kiosk
+              <NavLink to="/kiosk" style={kioskTabStyle}>
+                <Lock size={14} /> Kiosk
               </NavLink>
             )}
 
