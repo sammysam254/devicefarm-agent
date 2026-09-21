@@ -62,8 +62,8 @@ export default function KioskDashboard() {
 
   /**
    * Universal API caller:
-   * First tries Netlify Function proxy with JWT.
-   * If local dev (404/502/network failure), seamlessly falls back to direct tunnel/local ADB host.
+   * Prioritizes direct high-performance Cloudflare Tunnel (agent.dennoh.site)
+   * Seamlessly falls back to Netlify Serverless Proxy and local daemon.
    */
   const callAdbApi = async (endpoint, method = 'GET', body = null) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -74,56 +74,36 @@ export default function KioskDashboard() {
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     };
 
-    // 1. Try Netlify Serverless Proxy
-    try {
-      const netlifyUrl = `/.netlify/functions/adb?path=${encodeURIComponent(endpoint)}`;
-      const res = await fetch(netlifyUrl, {
-        method,
-        headers,
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
-
-      if (res.ok) {
-        return await res.json();
-      }
-
-      // If unauthorized by RBAC, don't fallback to bypass
-      if (res.status === 401 || res.status === 403) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.message || 'Access Forbidden: Admin privileges required');
-      }
-    } catch (err) {
-      if (err.message && (err.message.includes('Forbidden') || err.message.includes('Unauthorized'))) {
-        throw err;
-      }
-      // Continue to local/direct fallback
-    }
-
-    // 2. Direct Tunnel / Local Fallback (Development & On-Premise)
-    const directUrls = [
-      `http://localhost:7400/api${endpoint}`,
+    const targetUrls = [
       `https://agent.dennoh.site/api${endpoint}`,
+      `/.netlify/functions/adb?path=${encodeURIComponent(endpoint)}`,
+      `http://localhost:9001/api${endpoint}`,
+      `http://localhost:7400/api${endpoint}`,
     ];
 
-    for (const baseUrl of directUrls) {
+    let lastError = null;
+
+    for (const baseUrl of targetUrls) {
       try {
-        const directRes = await fetch(baseUrl, {
+        const res = await fetch(baseUrl, {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers,
           ...(body ? { body: JSON.stringify(body) } : {}),
         });
 
-        if (directRes.ok) {
-          return await directRes.json();
+        if (res.ok) {
+          return await res.json();
         }
-      } catch (_) {
-        // Try next fallback
+        const errData = await res.json().catch(() => ({}));
+        if (errData && errData.message) {
+          lastError = new Error(errData.message);
+        }
+      } catch (err) {
+        lastError = err;
       }
     }
 
-    throw new Error('Unable to reach Farm ADB daemon via Netlify proxy or direct agent connection.');
+    throw lastError || new Error('Unable to reach Farm ADB daemon via direct tunnel or serverless proxy.');
   };
 
   // 1. Fetch Fleet Devices

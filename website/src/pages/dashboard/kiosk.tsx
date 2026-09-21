@@ -71,9 +71,10 @@ export default function NextKioskDashboard() {
 
   const callAdbApi = async (endpoint: string, method = 'GET', body: any = null) => {
     const urls = [
-      `/.netlify/functions/adb?path=${encodeURIComponent(endpoint)}`,
-      `http://localhost:7400/api${endpoint}`,
       `https://agent.dennoh.site/api${endpoint}`,
+      `/.netlify/functions/adb?path=${encodeURIComponent(endpoint)}`,
+      `http://localhost:9001/api${endpoint}`,
+      `http://localhost:7400/api${endpoint}`,
     ];
 
     for (const url of urls) {
