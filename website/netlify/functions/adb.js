@@ -1,8 +1,6 @@
-'use strict';
-
-const https = require('https');
-const http = require('http');
-const { URL } = require('url');
+import https from 'node:https';
+import http from 'node:http';
+import { URL } from 'node:url';
 
 const DEFAULT_SUPABASE_URL = 'https://lazdyihryfvrlczczvxz.supabase.co';
 const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxhemR5aWhyeWZ2cmxjemN6dnh6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzM3NjE2OCwiZXhwIjoyMTAyOTUyMTY4fQ.6hAOEa2_nUTQh_Z3oU2e8QX2nP5EwzHmKiEZ06X7UWc';
@@ -58,57 +56,44 @@ function makeRequest(targetUrl, options, postData = null) {
 /**
  * Authenticate caller with Supabase JWT and verify administrative role.
  */
-async function verifyAdminRole(authHeader) {
-  if (!authHeader) {
-    return { ok: false, error: 'Missing Authorization header' };
+async function verifyAdminAuth(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return { authorized: false, error: 'Missing or malformed Authorization header' };
   }
 
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   if (!token) {
-    return { ok: false, error: 'Malformed Bearer token' };
+    return { authorized: false, error: 'Empty token supplied' };
   }
 
   const supabaseUrl = (process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL).replace(/\/$/, '');
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_KEY;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SUPABASE_KEY;
 
-  // 1. Get user identity from Supabase Auth
-  let userRes;
   try {
-    userRes = await makeRequest(`${supabaseUrl}/auth/v1/user`, {
+    // 1. Verify user identity against Supabase Auth
+    const userRes = await makeRequest(`${supabaseUrl}/auth/v1/user`, {
       method: 'GET',
       headers: {
-        'apikey': supabaseKey,
         'Authorization': `Bearer ${token}`,
+        'apikey': supabaseKey,
       },
     });
-  } catch (err) {
-    return { ok: false, error: `Authentication network error: ${err.message}` };
-  }
 
-  if (userRes.statusCode !== 200) {
-    return { ok: false, error: 'Invalid or expired authentication session' };
-  }
+    if (userRes.statusCode !== 200) {
+      return { authorized: false, error: 'Invalid or expired authentication session' };
+    }
 
-  let user;
-  try {
-    user = JSON.parse(userRes.data);
-  } catch (_) {
-    return { ok: false, error: 'Invalid response from auth provider' };
-  }
+    const userData = JSON.parse(userRes.data || '{}');
+    const userId = userData.id;
+    const userEmail = userData.email;
 
-  const userEmail = (user.email || '').toLowerCase().trim();
-  const userId = user.id;
+    if (!userId) {
+      return { authorized: false, error: 'Failed to extract user ID from session' };
+    }
 
-  // Super admin fallback whitelist
-  if (SUPER_ADMIN_FALLBACK_EMAILS.includes(userEmail)) {
-    return { ok: true, user, role: 'super_admin' };
-  }
-
-  // 2. Fetch role from public.profiles table
-  let profileRes;
-  try {
-    profileRes = await makeRequest(
-      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=role,is_blocked`,
+    // 2. Query user profile to verify role and ensure account is not blocked
+    const profileRes = await makeRequest(
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=role,is_blocked,email`,
       {
         method: 'GET',
         headers: {
@@ -118,65 +103,74 @@ async function verifyAdminRole(authHeader) {
         },
       }
     );
+
+    if (profileRes.statusCode === 200) {
+      const rows = JSON.parse(profileRes.data || '[]');
+      if (rows && rows.length > 0) {
+        const profile = rows[0];
+
+        if (profile.is_blocked === true) {
+          return { authorized: false, error: 'User account has been suspended or blocked' };
+        }
+
+        if (ALLOWED_ROLES.includes(profile.role)) {
+          return { authorized: true, user: userData, profile };
+        }
+      }
+    }
+
+    // Fallback check for seed/super admin email match
+    if (userEmail && SUPER_ADMIN_FALLBACK_EMAILS.includes(userEmail.toLowerCase())) {
+      return { authorized: true, user: userData, profile: { role: 'seed_admin' } };
+    }
+
+    return { authorized: false, error: 'Forbidden: Requires admin, super_admin, or seed_admin role' };
   } catch (err) {
-    return { ok: false, error: `Profile lookup error: ${err.message}` };
+    return { authorized: false, error: `Authentication validation error: ${err.message}` };
   }
-
-  let profiles = [];
-  try {
-    profiles = JSON.parse(profileRes.data);
-  } catch (_) {}
-
-  const profile = profiles[0] || {};
-  if (profile.is_blocked === true) {
-    return { ok: false, error: 'Account has been restricted or blocked' };
-  }
-
-  const role = profile.role || 'worker';
-  if (!ALLOWED_ROLES.includes(role)) {
-    return { ok: false, error: `Unauthorized: Role '${role}' lacks kiosk administration rights` };
-  }
-
-  return { ok: true, user, role };
 }
 
-exports.handler = async (event) => {
+/**
+ * Netlify Function Entry Point - ADB Proxy Guard
+ */
+export const handler = async (event, context) => {
+  // CORS Headers
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-farm-auth-key',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Content-Type': 'application/json',
   };
 
+  // Handle OPTIONS preflight
   if (event.httpMethod === 'OPTIONS') {
     return {
-      statusCode: 204,
+      statusCode: 200,
       headers: corsHeaders,
       body: '',
     };
   }
 
-  // 1. RBAC Guard: Verify JWT & Role
-  const authHeader = event.headers.authorization || event.headers.Authorization || '';
-  const authCheck = await verifyAdminRole(authHeader);
+  // 1. RBAC Authentication Check
+  const authHeader = event.headers.authorization || event.headers.Authorization;
+  const authResult = await verifyAdminAuth(authHeader);
 
-  if (!authCheck.ok) {
+  if (!authResult.authorized) {
     return {
-      statusCode: authCheck.error.includes('Unauthorized') ? 403 : 401,
-      headers: corsHeaders,
+      statusCode: authResult.error && authResult.error.includes('Forbidden') ? 403 : 401,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         status: 'error',
-        message: authCheck.error,
+        message: authResult.error || 'Unauthorized',
       }),
     };
   }
 
-  // 2. Resolve Forwarded API Path
+  // 2. Extract and sanitize target endpoint path
   let subPath = '';
   if (event.queryStringParameters && event.queryStringParameters.path) {
     subPath = event.queryStringParameters.path;
-  } else {
-    subPath = (event.path || '')
+  } else if (event.path) {
+    subPath = event.path
       .replace(/^\/\.netlify\/functions\/adb/, '')
       .replace(/^\/api\/adb/, '')
       .replace(/^\/api/, '');
