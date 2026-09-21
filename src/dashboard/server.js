@@ -449,13 +449,18 @@ function startDashboardServer(port = 7400) {
 
         for (const pkg of allPackages) {
           if (allowedSet.has(pkg)) {
-            // Packages inside allowedPackages run: pm enable <pkg>
+            // Permitted packages: unhide, unsuspend, and enable
+            await execAdb(realSerial, ['shell', 'pm', 'unhide', '--user', '0', pkg]);
+            await execAdb(realSerial, ['shell', 'pm', 'unsuspend', '--user', '0', pkg]);
             await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
             enabledCount++;
           } else {
-            // Packages NOT in allowedPackages run: pm disable-user --user 0 <pkg>
+            // Frozen packages: force-stop, disable, hide from launcher, and suspend execution
             if (!ESSENTIAL_PACKAGES.has(pkg)) {
+              await execAdb(realSerial, ['shell', 'am', 'force-stop', pkg]);
               await execAdb(realSerial, ['shell', 'pm', 'disable-user', '--user', '0', pkg]);
+              await execAdb(realSerial, ['shell', 'pm', 'hide', '--user', '0', pkg]);
+              await execAdb(realSerial, ['shell', 'pm', 'suspend', '--user', '0', pkg]);
               lockedCount++;
             }
           }
@@ -518,14 +523,23 @@ function startDashboardServer(port = 7400) {
         const rawSerial = decodeURIComponent(unlockMatch[1]);
         const realSerial = resolveSerialForAdb(rawSerial);
 
-        // Re-enables all currently disabled third-party packages: pm list packages -d -3 -> pm enable <pkg>
+        // Re-enables all currently disabled, hidden, and suspended third-party packages
         const disabledRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d', '-3']);
         const disabledPackages = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
 
+        const allRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']);
+        const allPackages = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+
+        const toUnlock = Array.from(new Set([...disabledPackages, ...allPackages]));
+
         let unlockedCount = 0;
-        for (const pkg of disabledPackages) {
-          await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
-          unlockedCount++;
+        for (const pkg of toUnlock) {
+          if (!ESSENTIAL_PACKAGES.has(pkg)) {
+            await execAdb(realSerial, ['shell', 'pm', 'unhide', '--user', '0', pkg]);
+            await execAdb(realSerial, ['shell', 'pm', 'unsuspend', '--user', '0', pkg]);
+            await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
+            unlockedCount++;
+          }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });

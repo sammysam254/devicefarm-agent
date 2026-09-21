@@ -294,3 +294,10 @@ body {
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.3);
   transform: translateY(-2px);
 }
+
+@media (max-width: 900px) {
+  .header-nav-tabs {
+    display: none !important;
+  }
+}
+

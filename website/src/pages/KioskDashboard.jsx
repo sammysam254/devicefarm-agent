@@ -134,7 +134,11 @@ export default function KioskDashboard() {
       const devList = data.devices || [];
       setDevices(devList);
 
-      if (devList.length > 0 && !selectedSerial) {
+      const params = new URLSearchParams(window.location.search);
+      const querySerial = params.get('serial');
+      if (querySerial) {
+        setSelectedSerial(querySerial);
+      } else if (devList.length > 0 && !selectedSerial) {
         setSelectedSerial(devList[0].serial);
       }
       showToast('success', 'Fleet Synced', `Found ${devList.length} farm devices online`);
@@ -146,6 +150,11 @@ export default function KioskDashboard() {
   };
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const querySerial = params.get('serial');
+    if (querySerial) {
+      setSelectedSerial(querySerial);
+    }
     fetchDevices();
   }, []);
 

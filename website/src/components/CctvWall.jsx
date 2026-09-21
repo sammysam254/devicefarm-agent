@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2 } from 'lucide-react';
+import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, Lock } from 'lucide-react';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [devices, setDevices] = useState([]);
@@ -241,13 +241,25 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
 
                 {/* Card Footer Quick Action Bar */}
                 <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
-                  <button 
-                    onClick={() => toggleStealthRoot(d.id, isStealthOn)}
-                    className="btn btn-secondary"
-                    style={{ fontSize: '11px', padding: '4px 8px', color: isStealthOn ? 'var(--primary)' : 'var(--text-muted)' }}
-                  >
-                    {isStealthOn ? '🛡️ Stealth Root: ON' : '⚪ Stealth Root: OFF'}
-                  </button>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button 
+                      onClick={() => toggleStealthRoot(d.id, isStealthOn)}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '11px', padding: '4px 8px', color: isStealthOn ? 'var(--primary)' : 'var(--text-muted)' }}
+                    >
+                      {isStealthOn ? '🛡️ Stealth: ON' : '⚪ Stealth: OFF'}
+                    </button>
+                    {(isSuperAdmin || isSeedAdmin) && (
+                      <a
+                        href={`/dashboard/kiosk?serial=${encodeURIComponent(d.serial)}`}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '11px', padding: '4px 8px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}
+                        title="Open Kiosk & Branding Controls for this device"
+                      >
+                        <Lock size={12} /> Kiosk
+                      </a>
+                    )}
+                  </div>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     {isSeedAdmin && (
                       <button 
