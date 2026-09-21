@@ -5,7 +5,8 @@ import { Shield, Server, Users, Smartphone, X, Key, Lock } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
   const { profile } = useAuth();
-  const rawRole = (profile?.role || 'worker').toLowerCase().trim();
+  const role = profile?.role || 'worker';
+  const rawRole = role.toLowerCase().trim();
 
   const isSeed = rawRole === 'seed_admin';
   const isSuper = rawRole === 'super_admin' || isSeed;
