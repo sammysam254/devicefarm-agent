@@ -27,6 +27,11 @@ const PRESET_SURVEY_APPS = [
   { name: 'Eureka Surveys', pkg: 'com.eureka.surveys', category: 'Surveys' },
   { name: 'Pawns.app', pkg: 'com.iproyal.pawns', category: 'Bandwidth & Surveys' },
   { name: 'Qmee', pkg: 'com.qmee.mobile', category: 'Surveys' },
+  { name: 'Prime Opinion', pkg: 'com.primeopinion.appname', category: 'Surveys' },
+  { name: 'TapResearch Rewards', pkg: 'com.tapresearch.taprewards', category: 'Surveys' },
+  { name: 'HeyCash', pkg: 'com.heycash.surveys.earn.money', category: 'Surveys & Cash' },
+  { name: 'TopSurveys', pkg: 'topsurveys.paid.survey.money.cash', category: 'Paid Surveys' },
+  { name: 'AirPerks', pkg: 'app.airperks', category: 'Rewards' },
 ];
 
 export default function KioskDashboard() {
@@ -139,7 +144,7 @@ export default function KioskDashboard() {
   }, []);
 
   // 2. Fetch Apps for Selected Device
-  const fetchDeviceApps = async (serial) => {
+  const fetchDeviceApps = async (serial, preserveSelection = false) => {
     if (!serial) return;
     setLoadingApps(true);
     try {
@@ -147,15 +152,25 @@ export default function KioskDashboard() {
       const pkgs = data.packages || [];
       setDeviceApps(pkgs);
 
-      // By default in Kiosk Lockdown, only pre-select detected survey/earning presets!
-      // NEVER pre-select non-essential bloatware, social media, or games by default.
-      const presetPkgSet = new Set(PRESET_SURVEY_APPS.map(p => p.pkg));
-      const detectedPresets = new Set(
-        pkgs
+      // Only recompute selection if not explicitly told to preserve the user's choices
+      if (!preserveSelection) {
+        const enabledPkgs = pkgs.filter(p => p.isEnabled).map(p => p.packageName);
+        const presetPkgSet = new Set(PRESET_SURVEY_APPS.map(p => p.pkg));
+        const detectedPresets = pkgs
           .filter(p => presetPkgSet.has(p.packageName))
-          .map(p => p.packageName)
-      );
-      setSelectedPackages(detectedPresets);
+          .map(p => p.packageName);
+
+        // If the device is currently locked down with a specific subset enabled, reflect that state
+        if (enabledPkgs.length > 0 && enabledPkgs.length < pkgs.length && enabledPkgs.length <= 15) {
+          setSelectedPackages(new Set(enabledPkgs));
+        } else if (detectedPresets.length > 0) {
+          setSelectedPackages(new Set(detectedPresets));
+        } else if (enabledPkgs.length > 0 && enabledPkgs.length <= 5) {
+          setSelectedPackages(new Set(enabledPkgs));
+        } else {
+          setSelectedPackages(new Set());
+        }
+      }
     } catch (err) {
       showToast('error', 'Package Scan Error', err.message);
     } finally {
@@ -267,8 +282,8 @@ export default function KioskDashboard() {
         'FlexPulse Lockdown Active',
         `Success: ${res.enabledCount} apps allowed, ${res.lockedCount} frozen. Branded wallpaper applied!`
       );
-      // Refresh app states
-      await fetchDeviceApps(selectedSerial);
+      // Refresh app states with preserveSelection = true so user checkmarks STAY CHECKED!
+      await fetchDeviceApps(selectedSerial, true);
     } catch (err) {
       showToast('error', 'Lockdown Failed', err.message);
     } finally {
@@ -288,7 +303,7 @@ export default function KioskDashboard() {
         'POST'
       );
       showToast('success', 'Device Unlocked', res.message || `Re-enabled ${res.unlockedCount} packages`);
-      await fetchDeviceApps(selectedSerial);
+      await fetchDeviceApps(selectedSerial, false);
     } catch (err) {
       showToast('error', 'Unlock Failed', err.message);
     } finally {

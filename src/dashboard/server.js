@@ -141,20 +141,24 @@ const ACTIVE_KIOSK_DEVICES = new Map();
 
 /**
  * Background watchdog: ensures that devices in Kiosk Mode NEVER run unpermitted apps.
- * If an unauthorized app (e.g. TikTok, Facebook) is brought to the foreground,
+ * If an unauthorized app (e.g. TikTok, Facebook, Chrome) is brought to the foreground,
  * it is immediately killed and the screen is returned to the permitted dedicated app.
  */
 async function enforceKioskForegroundWatchdog() {
   if (ACTIVE_KIOSK_DEVICES.size === 0) return;
   for (const [serial, allowedSet] of ACTIVE_KIOSK_DEVICES.entries()) {
     try {
-      const winRes = await execAdb(serial, ['shell', 'dumpsys', 'window', 'windows']);
-      const match = (winRes.stdout || '').match(/mCurrentFocus=Window\{[^\}]*\s+([a-zA-Z0-9_.]+)\//);
+      const [winRes, actRes] = await Promise.all([
+        execAdb(serial, ['shell', 'dumpsys', 'window', 'windows']),
+        execAdb(serial, ['shell', 'dumpsys', 'activity', 'activities']),
+      ]);
+      const winText = (winRes.stdout || '') + '\n' + (actRes.stdout || '');
+      const match = winText.match(/(?:mCurrentFocus=Window\{[^\}]*|mFocusedApp=ActivityRecord\{[^\}]*|topResumedActivity=ActivityRecord\{[^\}]*)\s+([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)\//);
       if (match && match[1]) {
         const currentPkg = match[1];
         if (!allowedSet.has(currentPkg) && !ESSENTIAL_PACKAGES.has(currentPkg)) {
           logger.warn(`[KioskWatchdog] Unauthorized app '${currentPkg}' detected in foreground on ${serial}. Terminating and switching back to dedicated app.`);
-          await execAdb(serial, ['shell', `am force-stop ${currentPkg}; pm disable-user --user 0 ${currentPkg} 2>/dev/null`]);
+          await execAdb(serial, ['shell', `am force-stop ${currentPkg} 2>/dev/null; pm disable-user --user 0 ${currentPkg} 2>/dev/null; pm hide --user 0 ${currentPkg} 2>/dev/null; pm suspend --user 0 ${currentPkg} 2>/dev/null`]);
           const allowedArr = Array.from(allowedSet);
           if (allowedArr.length > 0) {
             await execAdb(serial, ['shell', 'monkey', '-p', allowedArr[0], '-c', 'android.intent.category.LAUNCHER', '1']);
@@ -166,7 +170,7 @@ async function enforceKioskForegroundWatchdog() {
     } catch (_) {}
   }
 }
-setInterval(enforceKioskForegroundWatchdog, 6000);
+setInterval(enforceKioskForegroundWatchdog, 3000);
 
 function generateSessionToken() {
   return crypto.randomBytes(32).toString('hex');
@@ -425,11 +429,17 @@ function startDashboardServer(port = 7400) {
         try {
           const res = await execAdb(realSerial, [
             'shell', 'cmd', 'package', 'resolve-activity',
+            '--user', '0',
             '-a', 'android.intent.action.MAIN',
             '-c', 'android.intent.category.HOME'
           ]);
-          const match = (res.stdout || '').match(/([a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/);
-          return match ? match[1] : null;
+          const stdout = res.stdout || '';
+          // Ensure the matched package has at least one dot (rejects paths like /system_ext/priv-app)
+          const match = stdout.match(/([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/);
+          if (match) return match[1];
+          const pkgMatch = stdout.match(/packageName=([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)/);
+          if (pkgMatch) return pkgMatch[1];
+          return null;
         } catch (_) {
           return null;
         }
@@ -490,6 +500,18 @@ function startDashboardServer(port = 7400) {
           await execAdb(realSerial, ['shell', 'mkdir', '-p', '/sdcard/Pictures']);
           await execAdb(realSerial, ['shell', 'cp', '/sdcard/flexpulse_wallpaper.png', '/sdcard/Pictures/flexpulse_wallpaper.png']);
 
+          // Pre-grant storage permissions to common wallpaper packages so permission dialogs are avoided
+          const wpPermPkgs = [
+            'com.google.android.apps.wallpaper',
+            'com.android.wallpapercropper',
+            'com.sec.android.app.wallpaperchooser',
+            'com.motorola.personalize',
+            'com.android.providers.media'
+          ];
+          for (const wpPkg of wpPermPkgs) {
+            await execAdb(realSerial, ['shell', `pm grant ${wpPkg} android.permission.READ_EXTERNAL_STORAGE 2>/dev/null; pm grant ${wpPkg} android.permission.READ_MEDIA_IMAGES 2>/dev/null`]);
+          }
+
           // 2. Broadcast media scanner so the OS indexes the picture file
           await execAdb(realSerial, [
             'shell', 'am', 'broadcast',
@@ -549,6 +571,22 @@ function startDashboardServer(port = 7400) {
             let actionTaken = false;
 
             if (nodes.length > 0) {
+              // Priority 0: Android Runtime Permission Dialog ("Allow", "While using the app")
+              const permBtn = nodes.find(n =>
+                n.clickable && (
+                  /^(allow|while using the app|only this time)$/i.test(n.text) ||
+                  /^(allow|while using the app|only this time)$/i.test(n.contentDesc) ||
+                  /permission_allow_button/i.test(n.resourceId)
+                )
+              );
+              if (permBtn) {
+                logger.info(`[WallpaperAutoApprove] Auto-granting permission via '${permBtn.text || permBtn.resourceId}' at (${permBtn.cx}, ${permBtn.cy}) on ${realSerial}`);
+                await execAdb(realSerial, ['shell', 'input', 'tap', String(permBtn.cx), String(permBtn.cy)]);
+                actionTaken = true;
+                await new Promise(r => setTimeout(r, 800));
+                continue;
+              }
+
               // Priority 1: Target Destination Dialog ("Both", "Home and lock screens", "Home screen")
               const bothTarget = nodes.find(n =>
                 /(both|home.*lock|lock.*home|set both)/i.test(n.text) ||
@@ -590,8 +628,10 @@ function startDashboardServer(port = 7400) {
 
               // Priority 3: Chooser / Resolver dialog ("Wallpaper", "Photos", "Just once", "Always")
               const chooserOption = nodes.find(n =>
-                /(^wallpaper$|^wallpapers$|wallpaper.*style|^photos$|^gallery$)/i.test(n.text) ||
-                /(^wallpaper$|^wallpapers$|wallpaper.*style|^photos$|^gallery$)/i.test(n.contentDesc)
+                n.clickable && (
+                  /^(wallpaper|wallpapers|wallpaper & style|photos|gallery)$/i.test(n.text) ||
+                  /^(wallpaper|wallpapers|wallpaper & style|photos|gallery)$/i.test(n.contentDesc)
+                )
               );
               if (chooserOption) {
                 logger.info(`[WallpaperAutoApprove] Selecting chooser option '${chooserOption.text}' at (${chooserOption.cx}, ${chooserOption.cy}) on ${realSerial}`);
@@ -671,25 +711,35 @@ function startDashboardServer(port = 7400) {
         const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
         if (activeHome) protectedSet.add(activeHome);
 
-        const [allRes, launcherRes, disabledRes] = await Promise.all([
+        const [thirdPartyRes, launcherRes, disabledRes, allSysRes] = await Promise.all([
           execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
-          execAdb(realSerial, ['shell', 'pm', 'query-intent-activities', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']),
+          execAdb(realSerial, ['shell', 'pm', 'query-intent-activities', '--user', '0', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']),
           execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d']),
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages']),
         ]);
 
-        if (!allRes.success && !allRes.stdout) {
+        if (!thirdPartyRes.success && !thirdPartyRes.stdout) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'error', message: allRes.error || 'Failed to query device packages' }));
+          res.end(JSON.stringify({ status: 'error', message: thirdPartyRes.error || 'Failed to query device packages' }));
           return;
         }
 
-        const thirdPartyList = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const thirdPartyList = (thirdPartyRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
         const launcherText = launcherRes.stdout || '';
-        const launcherPackages = Array.from(launcherText.matchAll(/packageName=([a-zA-Z0-9_.]+)/g), m => m[1]);
-        const activityPackages = Array.from(launcherText.matchAll(/([a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/g), m => m[1]);
+        const launcherPackages = Array.from(launcherText.matchAll(/packageName=([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)/g), m => m[1]);
+        const activityPackages = Array.from(launcherText.matchAll(/([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/g), m => m[1]);
 
-        const allCandidatePackages = Array.from(new Set([...thirdPartyList, ...launcherPackages, ...activityPackages]))
-          .filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
+        // Also detect pre-installed carrier/OEM social, entertainment, browser, or media packages
+        const allInstalled = (allSysRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const preinstalledTargetRegex = /(facebook|katana|instagram|tiktok|musically|trill|snapchat|twitter|youtube|chrome|netflix|disney|hulu|spotify|reddit|pinterest|game|slots|casino|puzzle)/i;
+        const preinstalledConsumerApps = allInstalled.filter(pkg => preinstalledTargetRegex.test(pkg));
+
+        const allCandidatePackages = Array.from(new Set([
+          ...thirdPartyList,
+          ...launcherPackages,
+          ...activityPackages,
+          ...preinstalledConsumerApps
+        ])).filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
 
         const disabledLines = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
         const disabledSet = new Set(disabledLines);
@@ -739,19 +789,29 @@ function startDashboardServer(port = 7400) {
         const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
         if (activeHome) protectedSet.add(activeHome);
 
-        // 1. Gather all third-party and launchable packages on device
-        const [thirdPartyRes, launcherRes] = await Promise.all([
+        // 1. Gather all third-party, launchable, and consumer packages on device
+        const [thirdPartyRes, launcherRes, allSysRes] = await Promise.all([
           execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
-          execAdb(realSerial, ['shell', 'pm', 'query-intent-activities', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']),
+          execAdb(realSerial, ['shell', 'pm', 'query-intent-activities', '--user', '0', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']),
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages']),
         ]);
 
         const thirdPartyList = (thirdPartyRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
         const launcherText = launcherRes.stdout || '';
-        const launcherPackages = Array.from(launcherText.matchAll(/packageName=([a-zA-Z0-9_.]+)/g), m => m[1]);
-        const activityPackages = Array.from(launcherText.matchAll(/([a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/g), m => m[1]);
+        const launcherPackages = Array.from(launcherText.matchAll(/packageName=([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)/g), m => m[1]);
+        const activityPackages = Array.from(launcherText.matchAll(/([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/g), m => m[1]);
 
-        const allCandidatePackages = Array.from(new Set([...thirdPartyList, ...launcherPackages, ...activityPackages]))
-          .filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
+        // Also capture pre-installed carrier/OEM social, entertainment, browser, or media packages
+        const allInstalled = (allSysRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const preinstalledTargetRegex = /(facebook|katana|instagram|tiktok|musically|trill|snapchat|twitter|youtube|chrome|netflix|disney|hulu|spotify|reddit|pinterest|game|slots|casino|puzzle)/i;
+        const preinstalledConsumerApps = allInstalled.filter(pkg => preinstalledTargetRegex.test(pkg));
+
+        const allCandidatePackages = Array.from(new Set([
+          ...thirdPartyList,
+          ...launcherPackages,
+          ...activityPackages,
+          ...preinstalledConsumerApps
+        ])).filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
 
         let enabledCount = 0;
         let lockedCount = 0;
@@ -783,7 +843,10 @@ function startDashboardServer(port = 7400) {
           await new Promise(r => setTimeout(r, 400));
         }
 
-        // 5. Transition the physical screen directly to the dedicated app
+        // 5. Dismiss any open dialogs/overlays and transition screen directly to dedicated app
+        await execAdb(realSerial, ['shell', 'am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS']);
+        await execAdb(realSerial, ['shell', 'input', 'keyevent', '4']); // Dismiss any picker overlay
+
         if (allowedPackages.length > 0) {
           const primaryApp = allowedPackages[0];
           logger.info(`[Lockdown] Transitioning screen directly to primary dedicated app: ${primaryApp} on ${realSerial}`);
