@@ -769,18 +769,16 @@ function startDashboardServer(port = 7400) {
         const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
         if (activeHome) protectedSet.add(activeHome);
 
-        // Re-enables all currently disabled, hidden, and third-party packages
-        const [disabledRes, hiddenRes, thirdPartyRes] = await Promise.all([
+        // Re-enables all currently disabled and third-party packages
+        const [disabledRes, thirdPartyRes] = await Promise.all([
           execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d']),
-          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-u']),
           execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
         ]);
 
         const disabledLines = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
-        const hiddenLines = (hiddenRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
         const thirdPartyList = (thirdPartyRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
 
-        const toUnlock = Array.from(new Set([...disabledLines, ...hiddenLines, ...thirdPartyList]))
+        const toUnlock = Array.from(new Set([...disabledLines, ...thirdPartyList]))
           .filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
 
         let unlockedCount = 0;
