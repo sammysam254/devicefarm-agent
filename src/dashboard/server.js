@@ -87,11 +87,13 @@ function parseJsonBody(req) {
 }
 
 const ESSENTIAL_PACKAGES = new Set([
+  'android',
   'com.android.settings',
   'com.google.android.gms',
-  'com.android.vending',
   'com.google.android.gsf',
   'com.android.systemui',
+  'com.android.shell',
+  'com.android.vending',
   'com.android.launcher3',
   'com.google.android.apps.nexuslauncher',
   'com.sec.android.app.launcher',
@@ -99,12 +101,22 @@ const ESSENTIAL_PACKAGES = new Set([
   'com.huawei.android.launcher',
   'com.oppo.launcher',
   'com.vivo.upslide',
+  'com.motorola.launcher3',
+  'com.motorola.personalize',
+  'com.tcl.launcher',
+  'com.jrdcom.launcher',
+  'com.blu.launcher',
+  'com.transsion.launcher',
+  'com.tblenovo.launcher',
+  'com.google.android.apps.wallpaper',
+  'com.android.wallpapercropper',
+  'com.sec.android.app.wallpaperchooser',
   'com.devicefarm.agent',
+  'com.flexpulse.agent',
   'com.google.android.inputmethod.latin',
   'com.android.inputmethod.latin',
   'com.samsung.android.honeyboard',
-  'com.android.shell',
-  'android',
+  'com.touchtype.swiftkey',
 ]);
 
 function isAuthorizedRequest(req) {
@@ -372,6 +384,245 @@ function startDashboardServer(port = 7400) {
       }
 
       // ── Kiosk & System Branding Endpoints ───────────────────────────────
+
+      /**
+       * Dynamically detect the active launcher package on the target device
+       * so we never inadvertently disable or freeze the user's home launcher.
+       */
+      async function getActiveHomePackage(realSerial) {
+        try {
+          const res = await execAdb(realSerial, [
+            'shell', 'cmd', 'package', 'resolve-activity',
+            '-a', 'android.intent.action.MAIN',
+            '-c', 'android.intent.category.HOME'
+          ]);
+          const match = (res.stdout || '').match(/([a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/);
+          return match ? match[1] : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      /**
+       * Parse all UI elements from uiautomator dump XML with full coordinates and attributes.
+       */
+      function parseUiHierarchyNodes(xml) {
+        const nodes = [];
+        if (!xml) return nodes;
+        const nodeRegex = /<node\s+([^>]+)\/?>/g;
+        let match;
+        while ((match = nodeRegex.exec(xml)) !== null) {
+          const attrsStr = match[1];
+          const textMatch = attrsStr.match(/text="([^"]*)"/);
+          const descMatch = attrsStr.match(/content-desc="([^"]*)"/);
+          const idMatch = attrsStr.match(/resource-id="([^"]*)"/);
+          const boundsMatch = attrsStr.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+          const clickableMatch = attrsStr.match(/clickable="([^"]*)"/);
+          const enabledMatch = attrsStr.match(/enabled="([^"]*)"/);
+
+          if (boundsMatch) {
+            const x1 = parseInt(boundsMatch[1], 10);
+            const y1 = parseInt(boundsMatch[2], 10);
+            const x2 = parseInt(boundsMatch[3], 10);
+            const y2 = parseInt(boundsMatch[4], 10);
+            nodes.push({
+              text: textMatch ? textMatch[1].trim() : '',
+              contentDesc: descMatch ? descMatch[1].trim() : '',
+              resourceId: idMatch ? idMatch[1].trim() : '',
+              bounds: [x1, y1, x2, y2],
+              cx: Math.floor((x1 + x2) / 2),
+              cy: Math.floor((y1 + y2) / 2),
+              clickable: clickableMatch ? clickableMatch[1] === 'true' : false,
+              enabled: enabledMatch ? enabledMatch[1] === 'true' : true,
+            });
+          }
+        }
+        return nodes;
+      }
+
+      /**
+       * Automatically pushes and applies the FlexPulse branded wallpaper on the target device,
+       * inspecting the UI hierarchy adaptively to auto-approve "Apply", "Set Wallpaper",
+       * "Both/Home screen", and dismiss post-apply popups without requiring manual physical touch.
+       */
+      async function autoApplyWallpaper(realSerial) {
+        try {
+          const wallpaperPath = ensureFlexPulseWallpaper();
+          if (!wallpaperPath || !fs.existsSync(wallpaperPath)) {
+            logger.warn(`[WallpaperAutoApprove] Wallpaper file missing: ${wallpaperPath}`);
+            return false;
+          }
+
+          // 1. Push to device external storage and Pictures directory
+          await execAdb(realSerial, ['push', wallpaperPath, '/sdcard/flexpulse_wallpaper.png']);
+          await execAdb(realSerial, ['shell', 'mkdir', '-p', '/sdcard/Pictures']);
+          await execAdb(realSerial, ['shell', 'cp', '/sdcard/flexpulse_wallpaper.png', '/sdcard/Pictures/flexpulse_wallpaper.png']);
+
+          // 2. Broadcast media scanner so the OS indexes the picture file
+          await execAdb(realSerial, [
+            'shell', 'am', 'broadcast',
+            '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
+            '-d', 'file:///sdcard/Pictures/flexpulse_wallpaper.png'
+          ]);
+          await execAdb(realSerial, [
+            'shell', 'am', 'broadcast',
+            '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
+            '-d', 'file:///sdcard/flexpulse_wallpaper.png'
+          ]);
+
+          // 3. Launch the Android System Wallpaper Cropper / Setter activity
+          // Flag 0x10000001 = FLAG_ACTIVITY_NEW_TASK (0x10000000) | FLAG_GRANT_READ_URI_PERMISSION (0x00000001)
+          const startRes = await execAdb(realSerial, [
+            'shell', 'am', 'start',
+            '-a', 'android.service.wallpaper.CROP_AND_SET_WALLPAPER',
+            '-d', 'file:///sdcard/Pictures/flexpulse_wallpaper.png',
+            '-t', 'image/png',
+            '-f', '0x10000001'
+          ]);
+
+          if (!startRes.success || (startRes.stderr && /unable to resolve|error/i.test(startRes.stderr))) {
+            // Fallback: Launch ATTACH_DATA if CROP_AND_SET_WALLPAPER was rejected by OS
+            await execAdb(realSerial, [
+              'shell', 'am', 'start',
+              '-a', 'android.intent.action.ATTACH_DATA',
+              '-c', 'android.intent.category.DEFAULT',
+              '-d', 'file:///sdcard/Pictures/flexpulse_wallpaper.png',
+              '-t', 'image/png',
+              '-e', 'mimeType', 'image/png',
+              '-f', '0x10000001'
+            ]);
+          }
+
+          // 4. Adaptive Multi-Pass Auto-Approval Sequence (up to 5 passes)
+          await new Promise(r => setTimeout(r, 700));
+
+          for (let pass = 0; pass < 5; pass++) {
+            // Check current focused window to detect if we already returned to launcher
+            const winRes = await execAdb(realSerial, ['shell', 'dumpsys', 'window']);
+            const winText = winRes.stdout || '';
+            const isWallpaperActive = /(wallpaper|crop|picker|attach|chooser|resolver)/i.test(winText);
+            const isLauncherFocused = /(launcher|home)/i.test(winText);
+
+            if (pass > 0 && !isWallpaperActive && isLauncherFocused) {
+              logger.info(`[WallpaperAutoApprove] Device ${realSerial} returned to launcher; wallpaper applied.`);
+              break;
+            }
+
+            // Dump UI hierarchy
+            await execAdb(realSerial, ['shell', 'uiautomator', 'dump', '/data/local/tmp/wp_dump.xml']);
+            const catRes = await execAdb(realSerial, ['shell', 'cat', '/data/local/tmp/wp_dump.xml']);
+            const xml = catRes.stdout || '';
+            const nodes = parseUiHierarchyNodes(xml);
+
+            let actionTaken = false;
+
+            if (nodes.length > 0) {
+              // Priority 1: Target Destination Dialog ("Both", "Home and lock screens", "Home screen")
+              const bothTarget = nodes.find(n =>
+                /(both|home.*lock|lock.*home|set both)/i.test(n.text) ||
+                /(both|home.*lock|lock.*home|set both)/i.test(n.contentDesc)
+              );
+              if (bothTarget) {
+                logger.info(`[WallpaperAutoApprove] Auto-approving 'Both/Home+Lock' at (${bothTarget.cx}, ${bothTarget.cy}) on ${realSerial}`);
+                await execAdb(realSerial, ['shell', 'input', 'tap', String(bothTarget.cx), String(bothTarget.cy)]);
+                actionTaken = true;
+                await new Promise(r => setTimeout(r, 800));
+                continue;
+              }
+
+              const homeOnlyTarget = nodes.find(n =>
+                /(^home screen$|^homescreen$|^home$)/i.test(n.text) ||
+                /(^home screen$|^homescreen$|^home$)/i.test(n.contentDesc)
+              );
+              if (homeOnlyTarget) {
+                logger.info(`[WallpaperAutoApprove] Auto-approving 'Home screen' at (${homeOnlyTarget.cx}, ${homeOnlyTarget.cy}) on ${realSerial}`);
+                await execAdb(realSerial, ['shell', 'input', 'tap', String(homeOnlyTarget.cx), String(homeOnlyTarget.cy)]);
+                actionTaken = true;
+                await new Promise(r => setTimeout(r, 800));
+                continue;
+              }
+
+              // Priority 2: Primary Confirmation / Apply button
+              const primaryBtn = nodes.find(n =>
+                /(set wallpaper|set as wallpaper|^apply$|^done$|^save$|^confirm$|^ok$)/i.test(n.text) ||
+                /(set wallpaper|set as wallpaper|^apply$|^done$|^save$|^confirm$|^ok$|checkmark|check mark)/i.test(n.contentDesc) ||
+                /(set_wallpaper|apply_button|btn_done|action_done|crop_action|btn_save|save_button|confirm|check)/i.test(n.resourceId)
+              );
+              if (primaryBtn) {
+                logger.info(`[WallpaperAutoApprove] Auto-approving action '${primaryBtn.text || primaryBtn.contentDesc || primaryBtn.resourceId}' at (${primaryBtn.cx}, ${primaryBtn.cy}) on ${realSerial}`);
+                await execAdb(realSerial, ['shell', 'input', 'tap', String(primaryBtn.cx), String(primaryBtn.cy)]);
+                actionTaken = true;
+                await new Promise(r => setTimeout(r, 800));
+                continue;
+              }
+
+              // Priority 3: Chooser / Resolver dialog ("Wallpaper", "Photos", "Just once", "Always")
+              const chooserOption = nodes.find(n =>
+                /(^wallpaper$|^wallpapers$|wallpaper.*style|^photos$|^gallery$)/i.test(n.text) ||
+                /(^wallpaper$|^wallpapers$|wallpaper.*style|^photos$|^gallery$)/i.test(n.contentDesc)
+              );
+              if (chooserOption) {
+                logger.info(`[WallpaperAutoApprove] Selecting chooser option '${chooserOption.text}' at (${chooserOption.cx}, ${chooserOption.cy}) on ${realSerial}`);
+                await execAdb(realSerial, ['shell', 'input', 'tap', String(chooserOption.cx), String(chooserOption.cy)]);
+                await new Promise(r => setTimeout(r, 400));
+                const justOnce = nodes.find(n => /(just once|always)/i.test(n.text));
+                if (justOnce) {
+                  await execAdb(realSerial, ['shell', 'input', 'tap', String(justOnce.cx), String(justOnce.cy)]);
+                }
+                actionTaken = true;
+                await new Promise(r => setTimeout(r, 800));
+                continue;
+              }
+
+              // Priority 4: Samsung Color Palette or Post-Apply popups
+              const colorPalette = nodes.find(n => /color palette/i.test(n.text));
+              if (colorPalette) {
+                const applySkip = nodes.find(n => /(apply|skip)/i.test(n.text));
+                if (applySkip) {
+                  logger.info(`[WallpaperAutoApprove] Dismissing color palette via '${applySkip.text}' on ${realSerial}`);
+                  await execAdb(realSerial, ['shell', 'input', 'tap', String(applySkip.cx), String(applySkip.cy)]);
+                  actionTaken = true;
+                  await new Promise(r => setTimeout(r, 800));
+                  continue;
+                }
+              }
+            }
+
+            // Fallback ONLY when no XML button was recognized and wallpaper activity is still active
+            if (!actionTaken && isWallpaperActive) {
+              await execAdb(realSerial, ['shell', 'input', 'keyevent', '66']); // KEYCODE_ENTER
+              await execAdb(realSerial, ['shell', 'input', 'keyevent', '23']); // KEYCODE_DPAD_CENTER
+
+              const wmRes = await execAdb(realSerial, ['shell', 'wm', 'size']);
+              const sizeMatch = (wmRes.stdout || '').match(/(\d+)x(\d+)/);
+              if (sizeMatch) {
+                const w = parseInt(sizeMatch[1], 10);
+                const h = parseInt(sizeMatch[2], 10);
+                if (pass === 0 || pass === 2) {
+                  // Top-right corner (Apply / Checkmark / Done on Samsung & Motorola)
+                  await execAdb(realSerial, ['shell', 'input', 'tap', String(Math.floor(w * 0.88)), String(Math.floor(h * 0.06))]);
+                  // Bottom-center (Set Wallpaper on Google/AOSP/TCL)
+                  await execAdb(realSerial, ['shell', 'input', 'tap', String(Math.floor(w * 0.5)), String(Math.floor(h * 0.92))]);
+                } else if (pass === 1 || pass === 3) {
+                  // Middle dialog (Both / Home screen)
+                  await execAdb(realSerial, ['shell', 'input', 'tap', String(Math.floor(w * 0.5)), String(Math.floor(h * 0.55))]);
+                  await execAdb(realSerial, ['shell', 'input', 'tap', String(Math.floor(w * 0.5)), String(Math.floor(h * 0.65))]);
+                }
+              }
+              await new Promise(r => setTimeout(r, 700));
+            }
+          }
+
+          // 5. Return directly to home screen so the new wallpaper is immediately visible
+          await execAdb(realSerial, ['shell', 'input', 'keyevent', '3']); // KEYCODE_HOME
+
+          return true;
+        } catch (err) {
+          logger.warn(`[WallpaperAutoApprove] Error on ${realSerial}: ${err.message}`);
+          return false;
+        }
+      }
+
       // GET /api/devices/:serial/apps
       const appsMatch = url.match(/^\/api\/devices\/([^/]+)\/apps$/);
       if (appsMatch && req.method === 'GET') {
@@ -384,9 +635,14 @@ function startDashboardServer(port = 7400) {
         const rawSerial = decodeURIComponent(appsMatch[1]);
         const realSerial = resolveSerialForAdb(rawSerial);
 
-        const [allRes, disabledRes] = await Promise.all([
+        const activeHome = await getActiveHomePackage(realSerial);
+        const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
+        if (activeHome) protectedSet.add(activeHome);
+
+        const [allRes, launcherRes, disabledRes] = await Promise.all([
           execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
-          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d', '-3']),
+          execAdb(realSerial, ['shell', 'pm', 'query-intent-activities', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']),
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d']),
         ]);
 
         if (!allRes.success && !allRes.stdout) {
@@ -395,14 +651,21 @@ function startDashboardServer(port = 7400) {
           return;
         }
 
+        const thirdPartyList = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const launcherText = launcherRes.stdout || '';
+        const launcherPackages = Array.from(launcherText.matchAll(/packageName=([a-zA-Z0-9_.]+)/g), m => m[1]);
+        const activityPackages = Array.from(launcherText.matchAll(/([a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/g), m => m[1]);
+
+        const allCandidatePackages = Array.from(new Set([...thirdPartyList, ...launcherPackages, ...activityPackages]))
+          .filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
+
         const disabledLines = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
         const disabledSet = new Set(disabledLines);
 
-        const allLines = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
-        const packages = allLines.map(pkg => ({
+        const packages = allCandidatePackages.map(pkg => ({
           packageName: pkg,
           isEnabled: !disabledSet.has(pkg),
-          isEssential: ESSENTIAL_PACKAGES.has(pkg),
+          isEssential: false,
         }));
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -440,64 +703,43 @@ function startDashboardServer(port = 7400) {
         const allowedPackages = Array.isArray(payload.allowedPackages) ? payload.allowedPackages : [];
         const allowedSet = new Set(allowedPackages);
 
-        // 1. Query all third-party packages: pm list packages -3
-        const allRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']);
-        const allPackages = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const activeHome = await getActiveHomePackage(realSerial);
+        const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
+        if (activeHome) protectedSet.add(activeHome);
+
+        // 1. Gather all third-party and launchable packages on device
+        const [thirdPartyRes, launcherRes] = await Promise.all([
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
+          execAdb(realSerial, ['shell', 'pm', 'query-intent-activities', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']),
+        ]);
+
+        const thirdPartyList = (thirdPartyRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const launcherText = launcherRes.stdout || '';
+        const launcherPackages = Array.from(launcherText.matchAll(/packageName=([a-zA-Z0-9_.]+)/g), m => m[1]);
+        const activityPackages = Array.from(launcherText.matchAll(/([a-zA-Z0-9_.]+)\/[a-zA-Z0-9_.]+/g), m => m[1]);
+
+        const allCandidatePackages = Array.from(new Set([...thirdPartyList, ...launcherPackages, ...activityPackages]))
+          .filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
 
         let enabledCount = 0;
         let lockedCount = 0;
 
-        for (const pkg of allPackages) {
+        for (const pkg of allCandidatePackages) {
           if (allowedSet.has(pkg)) {
-            // Permitted packages: unhide, unsuspend, and enable
-            await execAdb(realSerial, ['shell', 'pm', 'unhide', '--user', '0', pkg]);
-            await execAdb(realSerial, ['shell', 'pm', 'unsuspend', '--user', '0', pkg]);
-            await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
+            // Permitted packages: unhide, unsuspend, enable, and allow background operations
+            const enableCmd = `pm unhide --user 0 ${pkg} 2>/dev/null; pm unsuspend --user 0 ${pkg} 2>/dev/null; pm enable ${pkg} 2>/dev/null; cmd appops set ${pkg} RUN_IN_BACKGROUND allow 2>/dev/null`;
+            await execAdb(realSerial, ['shell', enableCmd]);
             enabledCount++;
           } else {
-            // Frozen packages: force-stop, disable, hide from launcher, and suspend execution
-            if (!ESSENTIAL_PACKAGES.has(pkg)) {
-              await execAdb(realSerial, ['shell', 'am', 'force-stop', pkg]);
-              await execAdb(realSerial, ['shell', 'pm', 'disable-user', '--user', '0', pkg]);
-              await execAdb(realSerial, ['shell', 'pm', 'hide', '--user', '0', pkg]);
-              await execAdb(realSerial, ['shell', 'pm', 'suspend', '--user', '0', pkg]);
-              lockedCount++;
-            }
+            // Non-selected packages: force-stop, disable-user (removes from launcher & drawer), hide, suspend, block background
+            const lockCmd = `am force-stop ${pkg} 2>/dev/null; pm disable-user --user 0 ${pkg} 2>/dev/null; pm hide --user 0 ${pkg} 2>/dev/null; pm suspend --user 0 ${pkg} 2>/dev/null; cmd appops set ${pkg} RUN_IN_BACKGROUND ignore 2>/dev/null`;
+            await execAdb(realSerial, ['shell', lockCmd]);
+            lockedCount++;
           }
         }
 
-        // 2. Branded Wallpaper Injection ("FlexPulse System")
-        let wallpaperPushed = false;
-        try {
-          const wallpaperPath = ensureFlexPulseWallpaper();
-          if (fs.existsSync(wallpaperPath)) {
-            const pushRes = await execAdb(realSerial, ['push', wallpaperPath, '/sdcard/flexpulse_wallpaper.png']);
-            if (pushRes.success) {
-              wallpaperPushed = true;
-              // Broadcast / launch wallpaper manager intent
-              await execAdb(realSerial, [
-                'shell', 'am', 'start',
-                '-a', 'android.intent.action.ATTACH_DATA',
-                '-c', 'android.intent.category.DEFAULT',
-                '-d', 'file:///sdcard/flexpulse_wallpaper.png',
-                '-t', 'image/png',
-                '-e', 'mimeType', 'image/png'
-              ]);
-              await execAdb(realSerial, [
-                'shell', 'am', 'broadcast',
-                '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
-                '-d', 'file:///sdcard/flexpulse_wallpaper.png'
-              ]);
-              await execAdb(realSerial, [
-                'shell', 'am', 'broadcast',
-                '-a', 'com.flexpulse.SET_WALLPAPER',
-                '-e', 'path', '/sdcard/flexpulse_wallpaper.png'
-              ]);
-            }
-          }
-        } catch (wpErr) {
-          logger.warn(`[Lockdown] Wallpaper trigger error: ${wpErr.message}`);
-        }
+        // 2. Automatically apply and auto-approve the branded wallpaper
+        const wallpaperPushed = await autoApplyWallpaper(realSerial);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -523,30 +765,39 @@ function startDashboardServer(port = 7400) {
         const rawSerial = decodeURIComponent(unlockMatch[1]);
         const realSerial = resolveSerialForAdb(rawSerial);
 
-        // Re-enables all currently disabled, hidden, and suspended third-party packages
-        const disabledRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d', '-3']);
-        const disabledPackages = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const activeHome = await getActiveHomePackage(realSerial);
+        const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
+        if (activeHome) protectedSet.add(activeHome);
 
-        const allRes = await execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']);
-        const allPackages = (allRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        // Re-enables all currently disabled, hidden, and third-party packages
+        const [disabledRes, hiddenRes, thirdPartyRes] = await Promise.all([
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-d']),
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-u']),
+          execAdb(realSerial, ['shell', 'pm', 'list', 'packages', '-3']),
+        ]);
 
-        const toUnlock = Array.from(new Set([...disabledPackages, ...allPackages]));
+        const disabledLines = (disabledRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const hiddenLines = (hiddenRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+        const thirdPartyList = (thirdPartyRes.stdout || '').split('\n').map(l => l.trim().replace(/^package:/, '')).filter(Boolean);
+
+        const toUnlock = Array.from(new Set([...disabledLines, ...hiddenLines, ...thirdPartyList]))
+          .filter(pkg => Boolean(pkg) && !protectedSet.has(pkg));
 
         let unlockedCount = 0;
         for (const pkg of toUnlock) {
-          if (!ESSENTIAL_PACKAGES.has(pkg)) {
-            await execAdb(realSerial, ['shell', 'pm', 'unhide', '--user', '0', pkg]);
-            await execAdb(realSerial, ['shell', 'pm', 'unsuspend', '--user', '0', pkg]);
-            await execAdb(realSerial, ['shell', 'pm', 'enable', pkg]);
-            unlockedCount++;
-          }
+          const restoreCmd = `pm unhide --user 0 ${pkg} 2>/dev/null; pm unsuspend --user 0 ${pkg} 2>/dev/null; pm enable ${pkg} 2>/dev/null; cmd appops set ${pkg} RUN_IN_BACKGROUND allow 2>/dev/null`;
+          await execAdb(realSerial, ['shell', restoreCmd]);
+          unlockedCount++;
         }
+
+        // Return to clean home screen
+        await execAdb(realSerial, ['shell', 'input', 'keyevent', '3']);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
           success: true,
-          message: `Restored normal mode. ${unlockedCount} third-party apps re-enabled.`,
+          message: `Restored normal mode. ${unlockedCount} apps re-enabled.`,
           unlockedCount,
         }));
         return;
