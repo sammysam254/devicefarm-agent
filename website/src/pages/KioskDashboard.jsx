@@ -147,9 +147,15 @@ export default function KioskDashboard() {
       const pkgs = data.packages || [];
       setDeviceApps(pkgs);
 
-      // Pre-select currently enabled packages
-      const initiallyEnabled = new Set(pkgs.filter(p => p.isEnabled).map(p => p.packageName));
-      setSelectedPackages(initiallyEnabled);
+      // By default in Kiosk Lockdown, only pre-select detected survey/earning presets!
+      // NEVER pre-select non-essential bloatware, social media, or games by default.
+      const presetPkgSet = new Set(PRESET_SURVEY_APPS.map(p => p.pkg));
+      const detectedPresets = new Set(
+        pkgs
+          .filter(p => presetPkgSet.has(p.packageName))
+          .map(p => p.packageName)
+      );
+      setSelectedPackages(detectedPresets);
     } catch (err) {
       showToast('error', 'Package Scan Error', err.message);
     } finally {
@@ -732,15 +738,48 @@ export default function KioskDashboard() {
               </div>
 
               {/* Real-time selection badge */}
-              <div style={{
-                background: '#0284c7',
-                color: '#ffffff',
-                fontWeight: 700,
-                fontSize: '11px',
-                padding: '4px 10px',
-                borderRadius: '12px',
-              }}>
-                {selectedPackages.size} Selected
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  fontSize: '11px',
+                  padding: '4px 10px',
+                  borderRadius: '12px',
+                }}>
+                  {selectedPackages.size} Dedicated Allowed
+                </span>
+                <span style={{
+                  background: 'rgba(239, 68, 68, 0.2)',
+                  color: '#f87171',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  fontWeight: 700,
+                  fontSize: '11px',
+                  padding: '4px 10px',
+                  borderRadius: '12px',
+                }}>
+                  {Math.max(0, deviceApps.length - selectedPackages.size)} Frozen & Hidden
+                </span>
+              </div>
+            </div>
+
+            {/* Strict Lockdown Rule Warning Banner */}
+            <div style={{
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              borderRadius: '10px',
+              padding: '10px 14px',
+              marginBottom: '14px',
+              fontSize: '12px',
+              lineHeight: '1.5',
+              color: '#cbd5e1',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+            }}>
+              <AlertTriangle size={18} color="#f87171" style={{ flexShrink: 0 }} />
+              <div>
+                <strong style={{ color: '#f87171' }}>Strict Multi-App Isolation:</strong> Only checked apps below will be usable. All unselected apps (TikTok, Facebook, games, etc.) will be completely frozen, hidden from the launcher, and untapable. On lockdown, the screen will switch directly to your dedicated apps.
               </div>
             </div>
 
@@ -769,22 +808,23 @@ export default function KioskDashboard() {
 
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button
-                  onClick={handleSelectAll}
+                  onClick={handleSelectPresetsOnly}
                   style={{
-                    background: 'rgba(56, 189, 248, 0.1)',
-                    border: '1px solid rgba(56, 189, 248, 0.25)',
-                    color: '#38bdf8',
-                    padding: '6px 12px',
+                    background: 'linear-gradient(135deg, #0284c7, #38bdf8)',
+                    border: 'none',
+                    color: '#ffffff',
+                    padding: '7px 14px',
                     borderRadius: '8px',
                     fontSize: '12px',
-                    fontWeight: 600,
+                    fontWeight: 700,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
+                    boxShadow: '0 2px 10px rgba(2, 132, 199, 0.3)',
                   }}
                 >
-                  <CheckSquare size={13} /> Select All
+                  <Sparkles size={13} color="#ffffff" /> Select Survey Presets Only
                 </button>
                 <button
                   onClick={handleDeselectAll}
@@ -802,14 +842,14 @@ export default function KioskDashboard() {
                     gap: '6px',
                   }}
                 >
-                  <Square size={13} /> Deselect All
+                  <Square size={13} /> Deselect All (Freeze All)
                 </button>
                 <button
-                  onClick={handleSelectPresetsOnly}
+                  onClick={handleSelectAll}
                   style={{
-                    background: 'rgba(2, 132, 199, 0.15)',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
-                    color: '#e0f2fe',
+                    background: 'rgba(56, 189, 248, 0.1)',
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    color: '#38bdf8',
                     padding: '6px 12px',
                     borderRadius: '8px',
                     fontSize: '12px',
@@ -820,7 +860,7 @@ export default function KioskDashboard() {
                     gap: '6px',
                   }}
                 >
-                  <Sparkles size={13} color="#38bdf8" /> Select Survey Presets Only
+                  <CheckSquare size={13} /> Select All
                 </button>
               </div>
             </div>
@@ -847,6 +887,7 @@ export default function KioskDashboard() {
                 filteredApps.map(pkg => {
                   const isSelected = selectedPackages.has(pkg.packageName);
                   const isPreset = PRESET_SURVEY_APPS.some(p => p.pkg === pkg.packageName);
+                  const isSocialOrDistraction = /facebook|katana|musically|tiktok|instagram|whatsapp|temu|solitaire|mahjong|candycrush|game|shopping|netflix/i.test(pkg.packageName);
 
                   return (
                     <div
@@ -903,16 +944,29 @@ export default function KioskDashboard() {
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {isSocialOrDistraction && !isSelected && (
+                          <span style={{
+                            fontSize: '10px',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 700,
+                            background: 'rgba(239, 68, 68, 0.2)',
+                            color: '#fca5a5',
+                            border: '1px solid rgba(239, 68, 68, 0.4)',
+                          }}>
+                            🚫 Non-Dedicated
+                          </span>
+                        )}
                         <span style={{
                           fontSize: '11px',
                           padding: '2px 8px',
                           borderRadius: '6px',
-                          fontWeight: 600,
-                          background: pkg.isEnabled ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                          color: pkg.isEnabled ? '#34d399' : '#f87171',
-                          border: `1px solid ${pkg.isEnabled ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                          fontWeight: 700,
+                          background: isSelected ? 'rgba(56, 189, 248, 0.2)' : 'rgba(239, 68, 68, 0.15)',
+                          color: isSelected ? '#38bdf8' : '#f87171',
+                          border: `1px solid ${isSelected ? 'rgba(56, 189, 248, 0.4)' : 'rgba(239, 68, 68, 0.3)'}`,
                         }}>
-                          {pkg.isEnabled ? 'Active' : 'Frozen'}
+                          {isSelected ? 'Allowed Dedicated App' : 'Will Freeze & Hide'}
                         </span>
                       </div>
                     </div>

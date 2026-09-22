@@ -136,6 +136,38 @@ function isAuthorizedRequest(req) {
 // Session token cache to avoid exposing binding code in HTTP responses
 const SESSION_TOKENS = new Map();
 
+// Map of realSerial -> Set of allowed package names for active kiosk devices
+const ACTIVE_KIOSK_DEVICES = new Map();
+
+/**
+ * Background watchdog: ensures that devices in Kiosk Mode NEVER run unpermitted apps.
+ * If an unauthorized app (e.g. TikTok, Facebook) is brought to the foreground,
+ * it is immediately killed and the screen is returned to the permitted dedicated app.
+ */
+async function enforceKioskForegroundWatchdog() {
+  if (ACTIVE_KIOSK_DEVICES.size === 0) return;
+  for (const [serial, allowedSet] of ACTIVE_KIOSK_DEVICES.entries()) {
+    try {
+      const winRes = await execAdb(serial, ['shell', 'dumpsys', 'window', 'windows']);
+      const match = (winRes.stdout || '').match(/mCurrentFocus=Window\{[^\}]*\s+([a-zA-Z0-9_.]+)\//);
+      if (match && match[1]) {
+        const currentPkg = match[1];
+        if (!allowedSet.has(currentPkg) && !ESSENTIAL_PACKAGES.has(currentPkg)) {
+          logger.warn(`[KioskWatchdog] Unauthorized app '${currentPkg}' detected in foreground on ${serial}. Terminating and switching back to dedicated app.`);
+          await execAdb(serial, ['shell', `am force-stop ${currentPkg}; pm disable-user --user 0 ${currentPkg} 2>/dev/null`]);
+          const allowedArr = Array.from(allowedSet);
+          if (allowedArr.length > 0) {
+            await execAdb(serial, ['shell', 'monkey', '-p', allowedArr[0], '-c', 'android.intent.category.LAUNCHER', '1']);
+          } else {
+            await execAdb(serial, ['shell', 'input', 'keyevent', '3']);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+}
+setInterval(enforceKioskForegroundWatchdog, 6000);
+
 function generateSessionToken() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -741,11 +773,35 @@ function startDashboardServer(port = 7400) {
         // 2. Automatically apply and auto-approve the branded wallpaper
         const wallpaperPushed = await autoApplyWallpaper(realSerial);
 
+        // 3. Register device in active kiosk mode for ongoing foreground enforcement
+        ACTIVE_KIOSK_DEVICES.set(realSerial, new Set(allowedPackages));
+
+        // 4. Force-stop the active launcher so all in-memory cached icons are permanently purged
+        if (activeHome) {
+          logger.info(`[Lockdown] Refreshing launcher ${activeHome} on ${realSerial}`);
+          await execAdb(realSerial, ['shell', 'am', 'force-stop', activeHome]);
+          await new Promise(r => setTimeout(r, 400));
+        }
+
+        // 5. Transition the physical screen directly to the dedicated app
+        if (allowedPackages.length > 0) {
+          const primaryApp = allowedPackages[0];
+          logger.info(`[Lockdown] Transitioning screen directly to primary dedicated app: ${primaryApp} on ${realSerial}`);
+          await execAdb(realSerial, [
+            'shell', 'monkey',
+            '-p', primaryApp,
+            '-c', 'android.intent.category.LAUNCHER',
+            '1'
+          ]);
+        } else {
+          await execAdb(realSerial, ['shell', 'input', 'keyevent', '3']);
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
           success: true,
-          message: `FlexPulse Multi-App Mode applied: ${enabledCount} allowed, ${lockedCount} frozen/hidden.`,
+          message: `FlexPulse Multi-App Mode applied: ${enabledCount} allowed, ${lockedCount} frozen/hidden. Screen switched to dedicated app.`,
           lockedCount,
           enabledCount,
           wallpaperSet: wallpaperPushed,
@@ -764,6 +820,9 @@ function startDashboardServer(port = 7400) {
 
         const rawSerial = decodeURIComponent(unlockMatch[1]);
         const realSerial = resolveSerialForAdb(rawSerial);
+
+        // Remove from active kiosk watchdog
+        ACTIVE_KIOSK_DEVICES.delete(realSerial);
 
         const activeHome = await getActiveHomePackage(realSerial);
         const protectedSet = new Set([...ESSENTIAL_PACKAGES]);
@@ -786,6 +845,12 @@ function startDashboardServer(port = 7400) {
           const restoreCmd = `pm unhide --user 0 ${pkg} 2>/dev/null; pm unsuspend --user 0 ${pkg} 2>/dev/null; pm enable ${pkg} 2>/dev/null; cmd appops set ${pkg} RUN_IN_BACKGROUND allow 2>/dev/null`;
           await execAdb(realSerial, ['shell', restoreCmd]);
           unlockedCount++;
+        }
+
+        // Restart launcher so all re-enabled apps reappear on the home screen
+        if (activeHome) {
+          await execAdb(realSerial, ['shell', 'am', 'force-stop', activeHome]);
+          await new Promise(r => setTimeout(r, 300));
         }
 
         // Return to clean home screen
