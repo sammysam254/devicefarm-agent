@@ -338,6 +338,16 @@ app.whenReady().then(async () => {
     }
   } catch (e) {}
 
+  // Ensure Cloudflare Named Tunnel daemon is continuously running & supervised
+  try {
+    const { startNamedTunnelWatchdog } = require('../services/tunnel-service');
+    if (typeof startNamedTunnelWatchdog === 'function') {
+      startNamedTunnelWatchdog();
+    }
+  } catch (e) {
+    logger.warn('Named tunnel supervisor notice:', e.message);
+  }
+
   setTimeout(() => refreshTrayMenu(), 3000);
   logger.info('DeviceFarm Agent is fully operational');
 });

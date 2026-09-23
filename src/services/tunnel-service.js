@@ -320,8 +320,56 @@ async function isCloudflaredAvailable() {
   return binPath ? fs.existsSync(binPath) : false;
 }
 
+let namedTunnelProc = null;
+let namedTunnelStopping = false;
+
+function startNamedTunnelWatchdog() {
+  const token = config.cloudflareToken || 'eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9';
+  if (!token) return;
+
+  const binPath = resolveCloudflaredBin();
+  if (!binPath || !fs.existsSync(binPath)) {
+    return;
+  }
+
+  const { exec } = require('child_process');
+
+  function checkAndLaunch() {
+    if (namedTunnelStopping) return;
+    exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV /NH', (err, stdout) => {
+      if (!err && stdout && stdout.toLowerCase().includes('cloudflared.exe')) {
+        return; // Already active in background
+      }
+
+      logger.info('[TunnelWatchdog] Cloudflare named tunnel daemon not running — auto-launching for agent.dennoh.site...');
+      try {
+        namedTunnelProc = spawn(binPath, ['tunnel', 'run', '--token', token], {
+          windowsHide: true,
+          stdio: 'ignore',
+          detached: false,
+        });
+
+        namedTunnelProc.on('error', (e) => {
+          logger.warn('[TunnelWatchdog] Tunnel spawn warning:', e.message);
+        });
+
+        namedTunnelProc.on('exit', (code) => {
+          logger.warn(`[TunnelWatchdog] Tunnel exited (code=${code}) — will auto-recover on next check`);
+          namedTunnelProc = null;
+        });
+      } catch (e) {
+        logger.warn('[TunnelWatchdog] Launch error:', e.message);
+      }
+    });
+  }
+
+  checkAndLaunch();
+  setInterval(checkAndLaunch, 20000);
+}
+
 module.exports = {
   createTunnel: createTunnelWithRetry,
   killTunnel,
   isCloudflaredAvailable,
+  startNamedTunnelWatchdog,
 };
