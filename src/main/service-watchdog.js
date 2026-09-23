@@ -92,11 +92,57 @@ function scheduleRestart() {
   }, delay);
 }
 
+let cloudflaredChild = null;
+
+function resolveCloudflaredPath() {
+  const candidates = [
+    path.join(rootDir, 'assets', 'bin', 'cloudflared.exe'),
+    path.join(rootDir, 'cloudflared.exe'),
+    'C:\\DeviceFarmAgent\\assets\\bin\\cloudflared.exe',
+    'C:\\cloudflared\\cloudflared.exe',
+    'C:\\Program Files\\cloudflared\\cloudflared.exe',
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      try {
+        if (fs.statSync(c).size > 1000000) return c;
+      } catch (_) {}
+    }
+  }
+  return null;
+}
+
+function superviseCloudflared() {
+  if (isStopping) return;
+  const token = 'eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9';
+  const bin = resolveCloudflaredPath();
+  if (!bin) return;
+
+  const { exec } = require('child_process');
+  exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV /NH', (err, stdout) => {
+    if (!err && stdout && stdout.toLowerCase().includes('cloudflared.exe')) {
+      return; // Already running in background
+    }
+    try {
+      cloudflaredChild = spawn(bin, ['tunnel', 'run', '--token', token], {
+        windowsHide: true,
+        stdio: 'ignore',
+        detached: false,
+      });
+      cloudflaredChild.on('exit', () => { cloudflaredChild = null; });
+      cloudflaredChild.on('error', () => { cloudflaredChild = null; });
+    } catch (_) {}
+  });
+}
+
 // Handle termination signals cleanly
 process.on('SIGINT', () => {
   isStopping = true;
   if (activeChild) {
     try { activeChild.kill(); } catch (_) {}
+  }
+  if (cloudflaredChild) {
+    try { cloudflaredChild.kill(); } catch (_) {}
   }
   process.exit(0);
 });
@@ -106,8 +152,13 @@ process.on('SIGTERM', () => {
   if (activeChild) {
     try { activeChild.kill(); } catch (_) {}
   }
+  if (cloudflaredChild) {
+    try { cloudflaredChild.kill(); } catch (_) {}
+  }
   process.exit(0);
 });
 
-// Start the initial supervised agent process
+// Start the initial supervised agent process & cloudflared tunnel
 startAgent();
+superviseCloudflared();
+setInterval(superviseCloudflared, 15000);

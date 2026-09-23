@@ -261,6 +261,7 @@ async function syncDeviceToCloud(params) {
       binding_code: bindingCode || null,
       status: status || 'online',
       is_deleted_from_view: false, // Ensure active connected devices are visible in admin dashboards
+      is_available_for_rental: true, // Ensure active connected devices appear in cloud store & marketplace
       last_seen: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

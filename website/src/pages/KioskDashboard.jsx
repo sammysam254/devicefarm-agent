@@ -117,18 +117,51 @@ export default function KioskDashboard() {
     try {
       const data = await callAdbApi('/devices');
       const devList = data.devices || [];
-      setDevices(devList);
-
-      const params = new URLSearchParams(window.location.search);
-      const querySerial = params.get('serial');
-      if (querySerial) {
-        setSelectedSerial(querySerial);
-      } else if (devList.length > 0 && !selectedSerial) {
-        setSelectedSerial(devList[0].serial);
+      if (devList.length > 0) {
+        setDevices(devList);
+        const params = new URLSearchParams(window.location.search);
+        const querySerial = params.get('serial');
+        if (querySerial) {
+          setSelectedSerial(querySerial);
+        } else if (!selectedSerial) {
+          setSelectedSerial(devList[0].serial);
+        }
+        showToast('success', 'Fleet Synced', `Found ${devList.length} farm devices online`);
+        return;
       }
-      showToast('success', 'Fleet Synced', `Found ${devList.length} farm devices online`);
+      throw new Error('No devices returned from direct daemon');
     } catch (err) {
-      showToast('error', 'Fleet Scan Failed', err.message);
+      // Fallback: fetch active fleet directly from Supabase devices table
+      try {
+        const { data: sbDevs } = await supabase
+          .from('devices')
+          .select('*')
+          .order('created_at', { ascending: false });
+        const visible = (sbDevs || []).filter(d => !d.is_deleted_from_view && (d.status === 'online' || d.stream_url));
+        if (visible.length > 0) {
+          const mapped = visible.map(d => ({
+            serial: d.serial,
+            model: d.model,
+            brand: d.brand,
+            port: d.port,
+            streamUrl: d.stream_url,
+            bindingCode: d.binding_code,
+            isPaid: true,
+            status: d.status || 'online',
+          }));
+          setDevices(mapped);
+          const params = new URLSearchParams(window.location.search);
+          const querySerial = params.get('serial');
+          if (querySerial) {
+            setSelectedSerial(querySerial);
+          } else if (!selectedSerial) {
+            setSelectedSerial(mapped[0].serial);
+          }
+          showToast('success', 'Fleet Synced (Cloud)', `Found ${mapped.length} farm devices online`);
+          return;
+        }
+      } catch (_) {}
+      showToast('error', 'Fleet Scan Notice', err.message);
     } finally {
       setLoadingDevices(false);
     }

@@ -1358,6 +1358,15 @@ function startDashboardServer(port = 7400) {
     server.listen(port, '0.0.0.0', () => {
       const url = `http://localhost:${port}`;
       logger.info(`[DashboardServer] Listening at ${url}`);
+
+      // Ensure Cloudflare Named Tunnel daemon is continuously running & supervised for agent.dennoh.site
+      try {
+        const tunnelService = require('../services/tunnel-service');
+        if (typeof tunnelService.startNamedTunnelWatchdog === 'function') {
+          tunnelService.startNamedTunnelWatchdog();
+        }
+      } catch (_) {}
+
       resolve({ port, url });
     });
 

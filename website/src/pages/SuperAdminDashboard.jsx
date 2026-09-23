@@ -26,7 +26,7 @@ export default function SuperAdminDashboard() {
       const isSeed = profile?.role === 'seed_admin' || profile?.email?.toLowerCase() === 'sammyseth260@gmail.com';
       let bQuery = supabase.from('machine_bindings').select('*');
       if (!isSeed && profile?.id) {
-        bQuery = bQuery.eq('super_admin_id', profile.id);
+        bQuery = bQuery.or(`super_admin_id.eq.${profile.id},super_admin_id.is.null`);
       }
       const { data: bData } = await bQuery;
       setMyBindings(bData || []);
