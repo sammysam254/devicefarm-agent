@@ -279,6 +279,7 @@
     let currentBindingCode = '';
     let currentSessionToken = '';
     let activeStreamUrl = '';
+    let _lastRenderedState = '';
 
     async function fetchDevices() {
       try {
@@ -310,6 +311,9 @@
 
     function renderDevices(devices, isRemoteHost) {
       const container = document.getElementById('devicesContainer');
+      const stateKey = JSON.stringify({ isRemoteHost, devices });
+      if (stateKey === _lastRenderedState) return; // Skip re-render if unchanged
+      _lastRenderedState = stateKey;
 
       if (isRemoteHost || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
         container.innerHTML = `

@@ -128,8 +128,9 @@ async function applyDeviceStealth(serial, stealthRootEnabled = true) {
   const batteryCmds = [];  // Disabled — don't interfere with charging
 
   const allCmds = [...settingsCmds, ...remoteControlCmds, ...locationCmds, ...batteryCmds];
-  for (const cmd of allCmds) {
-    await execAdbShell(serial, cmd);
+  if (allCmds.length > 0) {
+    const combinedCmd = allCmds.join(' && ');
+    await execAdbShell(serial, combinedCmd, 12000);
   }
 
   // 6. Hide Unlocked Bootloader, Root & Emulator Build Indicators

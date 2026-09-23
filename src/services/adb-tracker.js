@@ -48,12 +48,22 @@ let tracker = null;
 
 const recentRemovals = new Map();
 const DEBOUNCE_MS = 3000;
+const pendingRemovals = new Map();
+const REMOVAL_GRACE_PERIOD_MS = 10000;
 
 // ─── Device Add ───────────────────────────────────────────────────────────────
 
 async function handleDeviceAdd(device) {
   const serial = device.id;
   const isUsb = !serial.includes(':');
+
+  // Cancel any pending removal for this device so running stream is preserved
+  if (pendingRemovals.has(serial)) {
+    logger.info(`[ADB] Device ${serial} reconnected within grace period — canceling removal, preserving running stream.`);
+    clearTimeout(pendingRemovals.get(serial));
+    pendingRemovals.delete(serial);
+    return;
+  }
 
   // Strict USB debugging only: immediately reject and disconnect any WiFi / network endpoint
   if (!isUsb) {
@@ -225,16 +235,23 @@ async function handleDeviceAdd(device) {
 
 async function handleDeviceRemove(device) {
   const serial = device.id;
-  logger.info(`Device disconnected: ${serial}`);
+  logger.info(`Device disconnected event received for ${serial} — scheduling graceful cleanup in ${REMOVAL_GRACE_PERIOD_MS / 1000}s`);
   recentRemovals.set(serial, Date.now());
 
-  processManager.killDeviceProcesses(serial);
+  if (pendingRemovals.has(serial)) {
+    clearTimeout(pendingRemovals.get(serial));
+  }
 
-  // Mark device offline in Supabase
-  licenseService.markDeviceOffline(serial).catch(() => {});
+  const timer = setTimeout(async () => {
+    pendingRemovals.delete(serial);
+    logger.info(`Grace period expired for ${serial} — terminating device processes`);
+    processManager.killDeviceProcesses(serial);
+    licenseService.markDeviceOffline(serial).catch(() => {});
+    try { await apiClient.deregisterDevice(serial); } catch (_) {}
+    logger.info(`Device ${serial} cleanup complete`);
+  }, REMOVAL_GRACE_PERIOD_MS);
 
-  try { await apiClient.deregisterDevice(serial); } catch (_) {}
-  logger.info(`Device ${serial} cleanup complete`);
+  pendingRemovals.set(serial, timer);
 }
 
 const { ensureAdbVendorKeys } = require('../utils/adb-keys');
@@ -275,22 +292,29 @@ async function startTracking() {
         } catch (_) {}
         continue;
       }
+const recentReconnects = new Map();
+function safeReconnect(serial, mode = '') {
+  if (!serial) return;
+  const last = recentReconnects.get(serial) || 0;
+  // 60-second cooldown per serial to prevent infinite reconnect loops
+  if (Date.now() - last < 60000) return;
+  recentReconnects.set(serial, Date.now());
+  try {
+    const adbBin = resolveAdb();
+    const { exec } = require('child_process');
+    const cmd = mode ? `"${adbBin}" -s ${serial} reconnect ${mode}` : `"${adbBin}" -s ${serial} reconnect`;
+    exec(cmd, { timeout: 4000 }, () => {});
+  } catch (_) {}
+}
+
       if (d.type === 'device') {
         await handleDeviceAdd(d);
       } else if (d.type === 'unauthorized') {
         logger.warn(`Device ${d.id} is UNAUTHORIZED — prompting reconnect with host authorization keys...`);
-        try {
-          const adbBin = resolveAdb();
-          const { exec } = require('child_process');
-          exec(`"${adbBin}" -s ${d.id} reconnect`, { timeout: 3000 }, () => {});
-        } catch (_) {}
+        safeReconnect(d.id);
       } else if (d.type === 'offline') {
         logger.warn(`Device ${d.id} is OFFLINE — attempting reconnect...`);
-        try {
-          const adbBin = resolveAdb();
-          const { exec } = require('child_process');
-          exec(`"${adbBin}" -s ${d.id} reconnect offline`, { timeout: 3000 }, () => {});
-        } catch (_) {}
+        safeReconnect(d.id, 'offline');
       } else {
         logger.info(`Device ${d.id} skipped (type: ${d.type})`);
       }
@@ -316,18 +340,10 @@ async function startTracking() {
         handleDeviceAdd(d);
       } else if (d.type === 'unauthorized') {
         logger.warn(`Device ${d.id} connected in UNAUTHORIZED state — sending host authorization keys...`);
-        try {
-          const adbBin = resolveAdb();
-          const { exec } = require('child_process');
-          exec(`"${adbBin}" -s ${d.id} reconnect`, { timeout: 3000 }, () => {});
-        } catch (_) {}
+        safeReconnect(d.id);
       } else if (d.type === 'offline') {
         logger.warn(`Device ${d.id} is OFFLINE — attempting reconnect...`);
-        try {
-          const adbBin = resolveAdb();
-          const { exec } = require('child_process');
-          exec(`"${adbBin}" -s ${d.id} reconnect offline`, { timeout: 3000 }, () => {});
-        } catch (_) {}
+        safeReconnect(d.id, 'offline');
       }
     });
 
@@ -336,17 +352,9 @@ async function startTracking() {
       if (d.type === 'device') {
         handleDeviceAdd(d);
       } else if (d.type === 'unauthorized') {
-        try {
-          const adbBin = resolveAdb();
-          const { exec } = require('child_process');
-          exec(`"${adbBin}" -s ${d.id} reconnect`, { timeout: 3000 }, () => {});
-        } catch (_) {}
+        safeReconnect(d.id);
       } else if (d.type === 'offline') {
-        try {
-          const adbBin = resolveAdb();
-          const { exec } = require('child_process');
-          exec(`"${adbBin}" -s ${d.id} reconnect offline`, { timeout: 3000 }, () => {});
-        } catch (_) {}
+        safeReconnect(d.id, 'offline');
       }
     });
 

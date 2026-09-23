@@ -703,10 +703,14 @@ class ScrcpyEngine extends EventEmitter {
           this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {});
         } catch (_) {}
       }
-      // 2. Only trigger fallback if video socket is destroyed or disconnected
-      if ((!this.videoSocket || this.videoSocket.destroyed) && !this._fallbackActive && this.isRunning) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] Video socket disconnected — starting screenrecord fallback`);
-        this._startScreenrecordFallback();
+      // 2. If video socket is disconnected, cleanly schedule scrcpy restart instead of falling back to broken 3-minute screenrecord
+      if ((!this.videoSocket || this.videoSocket.destroyed) && !this._restartPending && this.isRunning) {
+        this._restartPending = true;
+        logger.info(`[ScrcpyEngine ${this.serial}] Video socket disconnected — scheduling clean scrcpy reconnection`);
+        setTimeout(() => {
+          this._restartPending = false;
+          if (this.isRunning) this._restart();
+        }, 2000);
       }
     }, 2000);
 
@@ -810,8 +814,12 @@ class ScrcpyEngine extends EventEmitter {
       clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
-      if (this.isRunning && !this._fallbackActive) {
-        this._startScreenrecordFallback();
+      if (this.isRunning && !this._restartPending) {
+        this._restartPending = true;
+        setTimeout(() => {
+          this._restartPending = false;
+          if (this.isRunning) this._restart();
+        }, 1500);
       }
     });
 

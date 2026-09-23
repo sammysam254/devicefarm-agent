@@ -25,23 +25,12 @@ function preLaunchCleanup() {
       try { fs.unlinkSync(wifiCache); } catch (_) {}
     }
 
-    // 2. Terminate any orphaned electron instances or rogue adb bridges from prior crashes
+    // 2. Terminate any orphaned electron instances from prior runs
     if (process.platform === 'win32') {
       try {
         execSync('taskkill /F /IM electron.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' });
       } catch (_) {}
-      try {
-        execSync('taskkill /F /IM adb.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' });
-      } catch (_) {}
     }
-
-    // 3. Terminate any zombie scrcpy servers on connected Android devices
-    try {
-      const adbBin = fs.existsSync('C:\\platform-tools\\adb.exe') ? 'C:\\platform-tools\\adb.exe' : (fs.existsSync(path.join(rootDir, 'assets', 'bin', 'adb.exe')) ? path.join(rootDir, 'assets', 'bin', 'adb.exe') : 'adb');
-      execSync(`"${adbBin}" shell pkill -9 -f com.genymobile.scrcpy >nul 2>&1`, { timeout: 4000, stdio: 'ignore' });
-      // Disconnect all wireless ADB sessions to ensure strict USB-only operation
-      execSync(`"${adbBin}" disconnect >nul 2>&1`, { timeout: 4000, stdio: 'ignore' });
-    } catch (_) {}
   } catch (_) {}
 }
 

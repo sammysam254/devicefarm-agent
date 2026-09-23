@@ -53,22 +53,12 @@ function listAdbDevices(adbBin) {
   } catch (_) {}
 
   return new Promise((resolve) => {
-    exec(`"${adbBin}" devices`, { timeout: 7000 }, (err, stdout, stderr) => {
-      const out = ((stdout || '') + ' ' + (stderr || '')).toLowerCase();
-      // If ADB daemon cannot connect, hangs, or crashes, auto-heal immediately
-      if (err && (out.includes('cannot connect to daemon') || out.includes('could not read ok') || err.killed || out.includes('failed to start daemon'))) {
-        logger.warn('[EnrollmentGuard] ADB daemon unresponsive or in bad state. Auto-restarting ADB daemon...');
-        try {
-          if (process.platform === 'win32') {
-            const { execSync } = require('child_process');
-            try { execSync('taskkill /F /IM adb.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' }); } catch (_) {}
-            try { execSync(`"${adbBin}" start-server >nul 2>&1`, { timeout: 5000, stdio: 'ignore' }); } catch (_) {}
-          }
-        } catch (_) {}
-        resolve([]);
+    exec(`"${adbBin}" devices`, { timeout: 25000 }, (err, stdout, stderr) => {
+      if (err) {
+        logger.warn(`[EnrollmentGuard] adb devices poll warning (${err.message}) — preserving running streams`);
+        resolve(null);
         return;
       }
-      if (err) { resolve([]); return; }
       const lines = (stdout || '').split('\n').slice(1);
       const serials = [];
       let hasOffline = false;
@@ -87,15 +77,20 @@ function listAdbDevices(adbBin) {
       }
       if (hasOffline) {
         try {
-          exec(`"${adbBin}" reconnect offline`, { timeout: 3000 }, () => {});
+          exec(`"${adbBin}" reconnect offline`, { timeout: 4000 }, () => {});
         } catch (_) {}
       }
       if (unauthorizedSerials.length > 0) {
-        logger.info(`[EnrollmentGuard] Detected ${unauthorizedSerials.length} unauthorized device(s): ${unauthorizedSerials.join(', ')} — prompting reconnect with host authorization keys...`);
+        const now = Date.now();
         for (const s of unauthorizedSerials) {
-          try {
-            exec(`"${adbBin}" -s ${s} reconnect`, { timeout: 3000 }, () => {});
-          } catch (_) {}
+          const last = _lastUnauthReconnect.get(s) || 0;
+          if (now - last > 60000) {
+            _lastUnauthReconnect.set(s, now);
+            logger.info(`[EnrollmentGuard] Unauthorized device detected: ${s} — prompting reconnect with host authorization keys...`);
+            try {
+              exec(`"${adbBin}" -s ${s} reconnect`, { timeout: 4000 }, () => {});
+            } catch (_) {}
+          }
         }
       }
       resolve(serials);
@@ -109,14 +104,16 @@ let _addDeviceCallback = null;
 let _removeDeviceCallback = null;
 let _intervalTimer = null;
 const _inProgress = new Set();
+const _lastUnauthReconnect = new Map();
+const _missingCounts = new Map();
 
 /**
  * Start the recovery polling loop.
  * @param {Function} onDeviceAdd    – same handler as adb-tracker's handleDeviceAdd
  * @param {Function} onDeviceRemove – same handler as adb-tracker's handleDeviceRemove
- * @param {number} intervalMs      – polling interval, default 12000ms
+ * @param {number} intervalMs      – polling interval, default 15000ms
  */
-function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 12000) {
+function startEnrollmentGuard(onDeviceAdd, onDeviceRemove, intervalMs = 15000) {
   _addDeviceCallback = onDeviceAdd;
   _removeDeviceCallback = onDeviceRemove;
 
@@ -137,6 +134,12 @@ async function runRecoveryCheck(force = false) {
   const adbBin = resolveAdb();
   const rawSerials = await listAdbDevices(adbBin);
 
+  // If ADB poll timed out or failed, skip cycle without touching running streams
+  if (rawSerials === null) {
+    logger.info('[EnrollmentGuard] Skipping scan cycle — protecting all active device streams');
+    return;
+  }
+
   // Strict USB only: disconnect and filter out any WiFi IP endpoints
   const adbSerials = [];
   for (const s of rawSerials) {
@@ -154,8 +157,11 @@ async function runRecoveryCheck(force = false) {
 
   // ── 1. Re-enroll physical USB devices seen by ADB but not actively streaming ──
   for (const serial of adbSerials) {
-    if (activeSerials.has(serial) || processManager.getDevice(serial)) continue;      // Already streaming or tracked ✓
-    if (_inProgress.has(serial)) continue;         // Already being provisioned ✓
+    if (activeSerials.has(serial) || processManager.getDevice(serial)) {
+      _missingCounts.delete(serial);
+      continue; // Already streaming or tracked ✓
+    }
+    if (_inProgress.has(serial)) continue; // Already being provisioned ✓
 
     logger.info(`[EnrollmentGuard] Re-enrolling USB device: ${serial}`);
     _inProgress.add(serial);
@@ -185,9 +191,28 @@ async function runRecoveryCheck(force = false) {
       continue;
     }
 
-    if (adbSerials.includes(serial)) continue;    // Still directly in ADB USB ✓
+    const session = processManager.getDevice(serial);
+    const isDirectMatch = adbSerials.includes(serial);
+    const isAdbSerialMatch = session && session.adbSerial && adbSerials.includes(session.adbSerial);
+    const isHwSerialMatch = session && session.hardwareSerial && adbSerials.includes(session.hardwareSerial);
 
-    logger.info(`[EnrollmentGuard] Stale session detected for ${serial} — cleaning up`);
+    if (isDirectMatch || isAdbSerialMatch || isHwSerialMatch) {
+      // Device is present in ADB USB list — reset any missing counter
+      _missingCounts.delete(serial);
+      continue;
+    }
+
+    // Debounce removal: device must be missing across 4 consecutive scans (~60s)
+    const count = (_missingCounts.get(serial) || 0) + 1;
+    _missingCounts.set(serial, count);
+
+    if (count < 4) {
+      logger.info(`[EnrollmentGuard] Device ${serial} absent from scan (${count}/4) — holding stream alive`);
+      continue;
+    }
+
+    logger.info(`[EnrollmentGuard] Device ${serial} confirmed disconnected after ${count} scans — cleaning up`);
+    _missingCounts.delete(serial);
     try {
       if (_removeDeviceCallback) {
         await _removeDeviceCallback({ id: serial });

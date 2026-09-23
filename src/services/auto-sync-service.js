@@ -95,20 +95,7 @@ function checkAndSyncGithub() {
                   if (fs.existsSync(wifiCache)) fs.unlinkSync(wifiCache);
                 } catch (_) {}
                 invalidateModuleCache();
-                logger.info('[AutoSync] GitHub changes updated. Scheduling graceful restart in 3s so watchdog restarts clean runtime...');
-                try {
-                  const { execSync } = require('child_process');
-                  if (process.platform === 'win32') {
-                    execSync('taskkill /F /IM adb.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' });
-                  }
-                } catch (_) {}
-                setTimeout(() => {
-                  try {
-                    const { app } = require('electron');
-                    if (app && app.quit) app.quit();
-                  } catch (_) {}
-                  process.exit(0);
-                }, 3000);
+                logger.info('[AutoSync] GitHub changes updated successfully. Zero-downtime hot reload active — active streams & ADB daemon preserved without restart.');
               };
 
               if (pullErr) {
