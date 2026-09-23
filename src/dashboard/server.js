@@ -406,12 +406,21 @@ function startDashboardServer(port = 7400) {
         });
 
         const pnpPromise = new Promise(resolve => {
-          const cmd = 'powershell -NoProfile -Command "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like \'USB*\' -and ($_.Class -eq \'USB\' -or $_.Class -eq \'WPD\' -or $_.Class -eq \'Modem\' -or $_.Class -eq \'AndroidUsbDeviceClass\' -or $_.FriendlyName -like \'*Android*\' -or $_.FriendlyName -like \'*ADB*\' -or $_.FriendlyName -like \'*SAMSUNG*\' -or $_.FriendlyName -like \'*Motorola*\' -or $_.FriendlyName -like \'*TCL*\') } | Select-Object Status, Class, FriendlyName, InstanceId | ConvertTo-Json -Compress"';
-          exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
+          const psScript = `
+            Get-PnpDevice -PresentOnly | Where-Object {
+              $_.InstanceId -like 'USB*' -and (
+                $_.Class -match 'Android|USB|WPD|Modem' -or
+                $_.FriendlyName -match 'Android|ADB|SAMSUNG|Motorola|TCL|BLU|TECNO|Pixel|Phone|Composite|Device'
+              )
+            } | Select-Object Status, Class, FriendlyName, InstanceId | ConvertTo-Json -Compress
+          `;
+          const b64 = Buffer.from(psScript, 'utf16le').toString('base64');
+          exec(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${b64}`, { timeout: 10000 }, (err, stdout, stderr) => {
             try {
-              resolve(JSON.parse(stdout || '[]'));
+              const res = JSON.parse(stdout || '[]');
+              resolve(Array.isArray(res) ? res : [res]);
             } catch (_) {
-              resolve({ raw: (stdout || stderr || '').trim() });
+              resolve({ raw: (stdout || stderr || '').trim(), err: err ? err.message : null });
             }
           });
         });
