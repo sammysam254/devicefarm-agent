@@ -59,17 +59,12 @@ echo  [*] Silent Launcher  : %VBS_LAUNCHER%
 echo.
 
 :: ─── Stop and terminate any existing background agent/watchdog processes ──
-echo [*] Stopping previous DeviceFarm Agent processes (scoped to agent directory)...
-PowerShell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$dirs = @('%AGENT_DIR%') | Where-Object { $_ -and (Test-Path $_) };" ^
-  "Get-CimInstance Win32_Process | Where-Object {" ^
-  "  $p = $_; if ($p.ProcessId -eq $PID) { return $false };" ^
-  "  $matchDir = $false;" ^
-  "  foreach ($d in $dirs) { if (($p.ExecutablePath -and $p.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase)) -or ($p.CommandLine -and $p.CommandLine.IndexOf($d, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) { $matchDir = $true; break } };" ^
-  "  $isWatchdog = ($p.Name -like 'node*' -and $p.CommandLine -and ($p.CommandLine.IndexOf('service-watchdog.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $p.CommandLine.IndexOf('DeviceFarm', [System.StringComparison]::OrdinalIgnoreCase) -ge 0));" ^
-  "  return (($matchDir -or $isWatchdog) -and ($p.Name -match '^(electron|node|cloudflared|scrcpy|adb|DeviceFarm Agent)\.exe$'))" ^
-  "} | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
-timeout /t 1 /nobreak >nul
+echo [*] Stopping previous DeviceFarm Agent processes...
+taskkill /F /IM electron.exe /T >nul 2>&1
+taskkill /F /IM node.exe /T >nul 2>&1
+taskkill /F /IM scrcpy.exe /T >nul 2>&1
+taskkill /F /IM cloudflared.exe /T >nul 2>&1
+ping 127.0.0.1 -n 2 >nul 2>nul
 
 :: ─── Remove any old conflicting tasks ─────────────────────────────────────
 schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1

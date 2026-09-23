@@ -51,10 +51,8 @@ taskkill /F /IM cloudflared.exe /T >nul 2>&1
 taskkill /F /IM electron.exe /T >nul 2>&1
 taskkill /F /IM scrcpy.exe /T >nul 2>&1
 taskkill /F /IM adb.exe /T >nul 2>&1
-"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Get-NetTCPConnection -LocalPort 7400 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } catch {} };" ^
-  "Get-CimInstance Win32_Process | Where-Object { ($_.Name -like 'node*' -and $_.CommandLine -and ($_.CommandLine.IndexOf('service-watchdog.js') -ge 0 -or $_.CommandLine.IndexOf('DeviceFarm') -ge 0 -or $_.CommandLine.IndexOf('devicefarm-agent') -ge 0)) } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }" >nul 2>&1
-timeout /t 2 /nobreak >nul
+taskkill /F /IM node.exe /T >nul 2>&1
+ping 127.0.0.1 -n 2 >nul 2>&1
 
 
 
@@ -298,15 +296,10 @@ echo.
 
 :: ── Stop any existing DeviceFarm Agent processes safely ───────────────────
 echo [*] Ensuring clean process state...
-"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$dirs = @('%INSTALL_DIR%', '%CURRENT_DIR%') | Where-Object { $_ -and (Test-Path $_) };" ^
-  "Get-CimInstance Win32_Process | Where-Object {" ^
-  "  $p = $_; if ($p.ProcessId -eq $PID) { return $false };" ^
-  "  $matchDir = $false;" ^
-  "  foreach ($d in $dirs) { if (($p.ExecutablePath -and $p.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase)) -or ($p.CommandLine -and $p.CommandLine.IndexOf($d, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) { $matchDir = $true; break } };" ^
-  "  $isWatchdog = ($p.Name -like 'node*' -and $p.CommandLine -and ($p.CommandLine.IndexOf('service-watchdog.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $p.CommandLine.IndexOf('DeviceFarm', [System.StringComparison]::OrdinalIgnoreCase) -ge 0));" ^
-  "  return (($matchDir -or $isWatchdog) -and ($p.Name -match '^(electron|node|cloudflared|scrcpy|adb|DeviceFarm Agent)\.exe$'))" ^
-  "} | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
+taskkill /F /IM electron.exe /T >nul 2>&1
+taskkill /F /IM node.exe /T >nul 2>&1
+taskkill /F /IM scrcpy.exe /T >nul 2>&1
+taskkill /F /IM cloudflared.exe /T >nul 2>&1
 ping 127.0.0.1 -n 2 >nul 2>nul
 echo [OK] Process state clean.
 
