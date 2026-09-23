@@ -19,6 +19,11 @@ let isStopping = false;
 
 function preLaunchCleanup() {
   try {
+    // 0. Automatically sync latest code from GitHub if git is available
+    try {
+      execSync('git pull --ff-only origin main >nul 2>&1', { timeout: 15000, stdio: 'ignore', cwd: rootDir });
+    } catch (_) {}
+
     // 1. Permanently remove any legacy cache file if created
     const wifiCache = path.join(rootDir, 'wifi-devices-cache.json');
     if (fs.existsSync(wifiCache)) {
