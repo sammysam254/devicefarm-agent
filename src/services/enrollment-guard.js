@@ -43,9 +43,15 @@ function resolveAdb() {
   return 'adb';
 }
 
+const { ensureAdbVendorKeys } = require('../utils/adb-keys');
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function listAdbDevices(adbBin) {
+  try {
+    ensureAdbVendorKeys();
+  } catch (_) {}
+
   return new Promise((resolve) => {
     exec(`"${adbBin}" devices`, { timeout: 7000 }, (err, stdout, stderr) => {
       const out = ((stdout || '') + ' ' + (stderr || '')).toLowerCase();
@@ -66,6 +72,7 @@ function listAdbDevices(adbBin) {
       const lines = (stdout || '').split('\n').slice(1);
       const serials = [];
       let hasOffline = false;
+      const unauthorizedSerials = [];
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
         if (parts.length >= 2) {
@@ -73,6 +80,8 @@ function listAdbDevices(adbBin) {
             serials.push(parts[0]);
           } else if (parts[1] === 'offline') {
             hasOffline = true;
+          } else if (parts[1] === 'unauthorized') {
+            unauthorizedSerials.push(parts[0]);
           }
         }
       }
@@ -80,6 +89,14 @@ function listAdbDevices(adbBin) {
         try {
           exec(`"${adbBin}" reconnect offline`, { timeout: 3000 }, () => {});
         } catch (_) {}
+      }
+      if (unauthorizedSerials.length > 0) {
+        logger.info(`[EnrollmentGuard] Detected ${unauthorizedSerials.length} unauthorized device(s): ${unauthorizedSerials.join(', ')} — prompting reconnect with host authorization keys...`);
+        for (const s of unauthorizedSerials) {
+          try {
+            exec(`"${adbBin}" -s ${s} reconnect`, { timeout: 3000 }, () => {});
+          } catch (_) {}
+        }
       }
       resolve(serials);
     });

@@ -237,9 +237,15 @@ async function handleDeviceRemove(device) {
   logger.info(`Device ${serial} cleanup complete`);
 }
 
+const { ensureAdbVendorKeys } = require('../utils/adb-keys');
+
 // ─── Tracker ─────────────────────────────────────────────────────────────────
 
 async function startTracking() {
+  try {
+    ensureAdbVendorKeys();
+  } catch (_) {}
+
   const cfg = loadConfig();
   const adbHost = cfg.adbHost || '127.0.0.1';
   const adbPort = cfg.adbPort || 5037;
@@ -272,9 +278,19 @@ async function startTracking() {
       if (d.type === 'device') {
         await handleDeviceAdd(d);
       } else if (d.type === 'unauthorized') {
-        logger.warn(`Device ${d.id} is UNAUTHORIZED — check the phone screen and tap "Allow USB Debugging", then reconnect the cable.`);
+        logger.warn(`Device ${d.id} is UNAUTHORIZED — prompting reconnect with host authorization keys...`);
+        try {
+          const adbBin = resolveAdb();
+          const { exec } = require('child_process');
+          exec(`"${adbBin}" -s ${d.id} reconnect`, { timeout: 3000 }, () => {});
+        } catch (_) {}
       } else if (d.type === 'offline') {
-        logger.warn(`Device ${d.id} is OFFLINE — try unplugging and replugging the USB cable.`);
+        logger.warn(`Device ${d.id} is OFFLINE — attempting reconnect...`);
+        try {
+          const adbBin = resolveAdb();
+          const { exec } = require('child_process');
+          exec(`"${adbBin}" -s ${d.id} reconnect offline`, { timeout: 3000 }, () => {});
+        } catch (_) {}
       } else {
         logger.info(`Device ${d.id} skipped (type: ${d.type})`);
       }
@@ -299,11 +315,41 @@ async function startTracking() {
       if (d.type === 'device') {
         handleDeviceAdd(d);
       } else if (d.type === 'unauthorized') {
-        logger.warn(`Device ${d.id} is UNAUTHORIZED — check the phone screen and tap "Allow USB Debugging".`);
+        logger.warn(`Device ${d.id} connected in UNAUTHORIZED state — sending host authorization keys...`);
+        try {
+          const adbBin = resolveAdb();
+          const { exec } = require('child_process');
+          exec(`"${adbBin}" -s ${d.id} reconnect`, { timeout: 3000 }, () => {});
+        } catch (_) {}
       } else if (d.type === 'offline') {
-        logger.warn(`Device ${d.id} is OFFLINE — try unplugging and replugging the USB cable.`);
+        logger.warn(`Device ${d.id} is OFFLINE — attempting reconnect...`);
+        try {
+          const adbBin = resolveAdb();
+          const { exec } = require('child_process');
+          exec(`"${adbBin}" -s ${d.id} reconnect offline`, { timeout: 3000 }, () => {});
+        } catch (_) {}
       }
     });
+
+    tracker.on('change', (d) => {
+      logger.info(`Device state changed: ${d.id} -> ${d.type}`);
+      if (d.type === 'device') {
+        handleDeviceAdd(d);
+      } else if (d.type === 'unauthorized') {
+        try {
+          const adbBin = resolveAdb();
+          const { exec } = require('child_process');
+          exec(`"${adbBin}" -s ${d.id} reconnect`, { timeout: 3000 }, () => {});
+        } catch (_) {}
+      } else if (d.type === 'offline') {
+        try {
+          const adbBin = resolveAdb();
+          const { exec } = require('child_process');
+          exec(`"${adbBin}" -s ${d.id} reconnect offline`, { timeout: 3000 }, () => {});
+        } catch (_) {}
+      }
+    });
+
     tracker.on('remove', (d) => handleDeviceRemove(d));
     tracker.on('end',    () => {
       logger.warn('ADB tracker ended — restarting in 5s');

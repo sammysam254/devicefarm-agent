@@ -393,13 +393,132 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
-      if (url === '/api/system/reconnect') {
-        const enrollmentGuard = require('../services/enrollment-guard');
-        if (enrollmentGuard && enrollmentGuard.runRecoveryCheck) {
-          enrollmentGuard.runRecoveryCheck(true).catch(() => {});
+      if (url === '/api/system/adb-diagnostics' || url === '/api/system/devices-health') {
+        const adbBin = resolveAdb();
+        const { exec } = require('child_process');
+        const { ensureAdbVendorKeys } = require('../utils/adb-keys');
+        const discoveredKeys = ensureAdbVendorKeys();
+
+        const adbDevicesPromise = new Promise(resolve => {
+          exec(`"${adbBin}" devices -l`, { timeout: 8000 }, (err, stdout, stderr) => {
+            resolve({ stdout: stdout || '', stderr: stderr || '', err: err ? err.message : null });
+          });
+        });
+
+        const pnpPromise = new Promise(resolve => {
+          const cmd = 'powershell -NoProfile -Command "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like \'USB*\' -and ($_.Class -eq \'USB\' -or $_.Class -eq \'WPD\' -or $_.Class -eq \'Modem\' -or $_.Class -eq \'AndroidUsbDeviceClass\' -or $_.FriendlyName -like \'*Android*\' -or $_.FriendlyName -like \'*ADB*\' -or $_.FriendlyName -like \'*SAMSUNG*\' -or $_.FriendlyName -like \'*Motorola*\' -or $_.FriendlyName -like \'*TCL*\') } | Select-Object Status, Class, FriendlyName, InstanceId | ConvertTo-Json -Compress"';
+          exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
+            try {
+              resolve(JSON.parse(stdout || '[]'));
+            } catch (_) {
+              resolve({ raw: (stdout || stderr || '').trim() });
+            }
+          });
+        });
+
+        const [adbRes, pnpRes] = await Promise.all([adbDevicesPromise, pnpPromise]);
+
+        const lines = (adbRes.stdout || '').split('\n').slice(1);
+        const parsedDevices = [];
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const parts = trimmed.split(/\s+/);
+          if (parts.length >= 2) {
+            parsedDevices.push({
+              serial: parts[0],
+              status: parts[1],
+              details: parts.slice(2).join(' ')
+            });
+          }
         }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', message: 'Recovery check initiated' }));
+        res.end(JSON.stringify({
+          status: 'ok',
+          adbOutputRaw: adbRes.stdout,
+          adbDevices: parsedDevices,
+          totalAdbDevices: parsedDevices.length,
+          activeStreamCount: processManager.getActiveDeviceSummaries().length,
+          activeStreamSerials: processManager.getActiveSerials(),
+          usbHardwareDevices: pnpRes,
+          adbVendorKeys: process.env.ADB_VENDOR_KEYS,
+          discoveredKeyFiles: discoveredKeys,
+          timestamp: new Date().toISOString()
+        }, null, 2));
+        return;
+      }
+
+      if (url === '/api/system/adb-heal' || url === '/api/system/reconnect') {
+        const adbBin = resolveAdb();
+        const { exec } = require('child_process');
+        const { ensureAdbVendorKeys } = require('../utils/adb-keys');
+        const enrollmentGuard = require('../services/enrollment-guard');
+        
+        const keys = ensureAdbVendorKeys();
+        
+        // 1. Run reconnect offline and reconnect on all devices
+        await new Promise(r => exec(`"${adbBin}" reconnect offline`, { timeout: 4000 }, () => r()));
+        await new Promise(r => exec(`"${adbBin}" reconnect`, { timeout: 4000 }, () => r()));
+
+        // 2. Check for unauthorized devices and target them directly
+        const checkDevices = () => new Promise(resolve => {
+          exec(`"${adbBin}" devices`, { timeout: 5000 }, (err, stdout) => {
+            const out = stdout || '';
+            const unauth = [];
+            const off = [];
+            out.split('\n').slice(1).forEach(l => {
+              const p = l.trim().split(/\s+/);
+              if (p.length >= 2) {
+                if (p[1] === 'unauthorized') unauth.push(p[0]);
+                if (p[1] === 'offline') off.push(p[0]);
+              }
+            });
+            resolve({ unauth, off, raw: out });
+          });
+        });
+
+        let devState = await checkDevices();
+        if (devState.unauth.length > 0) {
+          logger.info(`[ADB Heal] Reconnecting ${devState.unauth.length} unauthorized devices: ${devState.unauth.join(', ')}`);
+          for (const s of devState.unauth) {
+            await new Promise(r => exec(`"${adbBin}" -s ${s} reconnect`, { timeout: 3000 }, () => r()));
+          }
+          await new Promise(r => setTimeout(r, 2000));
+          devState = await checkDevices();
+        }
+
+        // If any are still unauthorized, try restarting ADB daemon with the new vendor keys
+        let serverRestarted = false;
+        if (devState.unauth.length > 0) {
+          logger.warn(`[ADB Heal] Devices still unauthorized (${devState.unauth.join(', ')}). Restarting ADB server with full vendor keys...`);
+          try {
+            await new Promise(r => exec(`"${adbBin}" kill-server`, { timeout: 5000 }, () => r()));
+            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => exec(`"${adbBin}" start-server`, { timeout: 7000 }, () => r()));
+            serverRestarted = true;
+            await new Promise(r => setTimeout(r, 3000));
+            devState = await checkDevices();
+          } catch (_) {}
+        }
+
+        // 3. Trigger immediate enrollment recovery
+        if (enrollmentGuard && enrollmentGuard.runRecoveryCheck) {
+          await enrollmentGuard.runRecoveryCheck(true);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          message: 'ADB heal and recovery completed',
+          serverRestarted,
+          vendorKeysLoaded: keys.length,
+          remainingUnauthorized: devState.unauth,
+          remainingOffline: devState.off,
+          rawDevices: devState.raw,
+          activeStreams: processManager.getActiveSerials(),
+          timestamp: new Date().toISOString()
+        }, null, 2));
         return;
       }
 

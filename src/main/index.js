@@ -195,6 +195,13 @@ async function runStartupChecks() {
   logger.info(`Auto-launch status: ${isAuto ? 'ENABLED' : 'DISABLED'}`);
   logger.info('[OK] DeviceFarm Machine License Engine: ACTIVE (Managed Online)');
 
+  try {
+    const { ensureAdbVendorKeys } = require('../utils/adb-keys');
+    ensureAdbVendorKeys();
+  } catch (err) {
+    logger.warn('Vendor keys initialization notice:', err.message);
+  }
+
   const hasCloudflared = await isCloudflaredAvailable();
   if (hasCloudflared) {
     logger.info('[OK] cloudflared is available for public tunneling');
