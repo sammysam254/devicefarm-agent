@@ -25,10 +25,13 @@ function preLaunchCleanup() {
       try { fs.unlinkSync(wifiCache); } catch (_) {}
     }
 
-    // 2. Terminate any orphaned electron instances from prior crashes
+    // 2. Terminate any orphaned electron instances or rogue adb bridges from prior crashes
     if (process.platform === 'win32') {
       try {
         execSync('taskkill /F /IM electron.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' });
+      } catch (_) {}
+      try {
+        execSync('taskkill /F /IM adb.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' });
       } catch (_) {}
     }
 

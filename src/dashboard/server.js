@@ -458,7 +458,7 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
-      if (url === '/api/system/adb-heal' || url === '/api/system/reconnect') {
+      if (url === '/api/system/adb-heal' || url === '/api/system/reconnect' || url === '/api/system/reap-adb') {
         const adbBin = resolveAdb();
         const { exec } = require('child_process');
         const { ensureAdbVendorKeys } = require('../utils/adb-keys');
@@ -466,11 +466,24 @@ function startDashboardServer(port = 7400) {
         
         const keys = ensureAdbVendorKeys();
         
-        // 1. Run reconnect offline and reconnect on all devices
+        // 1. Terminate all lingering / duplicate adb.exe processes to enforce a single ADB server daemon
+        logger.info('[ADB Heal] Reaping all lingering adb.exe processes to enforce single clean daemon...');
+        try {
+          if (process.platform === 'win32') {
+            await new Promise(r => exec('taskkill /F /IM adb.exe >nul 2>&1', { timeout: 4000 }, () => r()));
+          }
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 1200));
+
+        // 2. Start a single fresh ADB server daemon with all vendor host keys loaded
+        await new Promise(r => exec(`"${adbBin}" start-server`, { timeout: 8000 }, () => r()));
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 3. Run reconnect offline and reconnect on all devices
         await new Promise(r => exec(`"${adbBin}" reconnect offline`, { timeout: 4000 }, () => r()));
         await new Promise(r => exec(`"${adbBin}" reconnect`, { timeout: 4000 }, () => r()));
 
-        // 2. Check for unauthorized devices and target them directly
+        // 4. Check for unauthorized devices and target them directly
         const checkDevices = () => new Promise(resolve => {
           exec(`"${adbBin}" devices`, { timeout: 5000 }, (err, stdout) => {
             const out = stdout || '';

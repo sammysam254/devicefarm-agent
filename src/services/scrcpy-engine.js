@@ -386,6 +386,19 @@ class ScrcpyEngine extends EventEmitter {
 
     logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
 
+    if (this.serverProc) {
+      const p = this.serverProc;
+      this.serverProc = null;
+      try {
+        if (process.platform === 'win32' && p.pid) {
+          const { exec } = require('child_process');
+          exec(`taskkill /F /T /PID ${p.pid}`, () => {});
+        } else if (p.pid) {
+          p.kill('SIGKILL');
+        }
+      } catch (_) {}
+    }
+
     this.serverProc = spawn(ADB_BIN, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -533,8 +546,16 @@ class ScrcpyEngine extends EventEmitter {
     this._screencapActive = false;
     this._fallbackActive = false;
     if (this._fallbackProc) {
-      try { this._fallbackProc.kill(); } catch (_) {}
+      const fp = this._fallbackProc;
       this._fallbackProc = null;
+      try {
+        if (process.platform === 'win32' && fp.pid) {
+          const { exec } = require('child_process');
+          exec(`taskkill /F /T /PID ${fp.pid}`, () => {});
+        } else if (fp.pid) {
+          fp.kill('SIGKILL');
+        }
+      } catch (_) {}
     }
     this._cleanup();
     this.wsClients.clear();
@@ -551,8 +572,16 @@ class ScrcpyEngine extends EventEmitter {
       this.controlSocket = null;
     }
     if (this.serverProc) {
-      try { this.serverProc.kill(); } catch (_) {}
+      const sp = this.serverProc;
       this.serverProc = null;
+      try {
+        if (process.platform === 'win32' && sp.pid) {
+          const { exec } = require('child_process');
+          exec(`taskkill /F /T /PID ${sp.pid}`, () => {});
+        } else if (sp.pid) {
+          sp.kill('SIGKILL');
+        }
+      } catch (_) {}
     }
   }
 

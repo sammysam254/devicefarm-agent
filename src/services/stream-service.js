@@ -49,22 +49,11 @@ async function cachedValidateDevicePin(serial, pin, bindingCode) {
 }
 
 
-// ─── Persistent ADB input shell (fallback when scrcpy not ready) ─────────────
-
-const inputShells = new Map();
-function getInputShell(serial) {
-  const ex = inputShells.get(serial);
-  if (ex && ex.stdin && !ex.stdin.destroyed) return ex;
-  const p = spawn(ADB_BIN, ['-s', serial, 'shell'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
-  if (p.stdin) try { p.stdin.setNoDelay(true); } catch (_) {}
-  p.on('error', () => inputShells.delete(serial));
-  p.on('close', () => inputShells.delete(serial));
-  inputShells.set(serial, p);
-  return p;
-}
+// ─── ADB Input Shell fallback ────────────────────────────────────────────────
 function adbInput(serial, cmd) {
-  try { getInputShell(serial).stdin.write(cmd + '\n'); }
-  catch (_) { exec(`"${ADB_BIN}" -s ${serial} shell ${cmd}`); }
+  try {
+    exec(`"${ADB_BIN}" -s ${serial} shell "${cmd.replace(/"/g, '\\"')}"`, { timeout: 3000 }, () => {});
+  } catch (_) {}
 }
 
 // ─── Payment-blocked HTML ────────────────────────────────────────────────────
