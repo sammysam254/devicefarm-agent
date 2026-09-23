@@ -1365,10 +1365,25 @@ function startDashboardServer(port = 7400) {
       logger.error(`[DashboardServer] Failed to start on port ${port}: ${err.message}`);
       reject(err);
     });
+
+    server.on('close', () => {
+      if (!isGracefulDashboardStop) {
+        logger.warn(`[DashboardServer] Port ${port} server closed unexpectedly — auto-restarting in 2s...`);
+        setTimeout(() => {
+          server = null;
+          startDashboardServer(port).catch(err => {
+            logger.error(`[DashboardServer] Auto-restart error: ${err.message}`);
+          });
+        }, 2000);
+      }
+    });
   });
 }
 
+let isGracefulDashboardStop = false;
+
 function stopDashboardServer() {
+  isGracefulDashboardStop = true;
   if (server) {
     server.close();
     server = null;

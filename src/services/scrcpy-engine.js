@@ -536,9 +536,13 @@ class ScrcpyEngine extends EventEmitter {
       }
     });
 
-    proc.on('error', (err) => {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Screenrecord process error: ${err.message}`);
-    });
+  isHealthy() {
+    if (!this.isRunning) return false;
+    if (this._restartPending) return true;
+    if (this.serverProc) {
+      if (this.serverProc.killed || this.serverProc.exitCode !== null) return false;
+    }
+    return true;
   }
 
   stop() {

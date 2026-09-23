@@ -47,6 +47,8 @@ const { ensureAdbVendorKeys } = require('../utils/adb-keys');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+let _consecutiveAdbFailures = 0;
+
 function listAdbDevices(adbBin) {
   try {
     ensureAdbVendorKeys();
@@ -55,10 +57,27 @@ function listAdbDevices(adbBin) {
   return new Promise((resolve) => {
     exec(`"${adbBin}" devices`, { timeout: 25000 }, (err, stdout, stderr) => {
       if (err) {
-        logger.warn(`[EnrollmentGuard] adb devices poll warning (${err.message}) — preserving running streams`);
+        _consecutiveAdbFailures++;
+        logger.warn(`[EnrollmentGuard] adb devices poll warning (attempt ${_consecutiveAdbFailures}): ${err.message}`);
+        // If ADB daemon has truly failed/hung across multiple checks, heal it cleanly
+        if (_consecutiveAdbFailures >= 2) {
+          logger.error(`[EnrollmentGuard] ADB daemon failure confirmed (${_consecutiveAdbFailures} consecutive failed polls) — auto-restarting ADB daemon...`);
+          _consecutiveAdbFailures = 0;
+          try {
+            if (process.platform === 'win32') {
+              const { execSync } = require('child_process');
+              try { execSync(`"${adbBin}" kill-server >nul 2>&1`, { timeout: 4000, stdio: 'ignore' }); } catch (_) {}
+              try { execSync(`"${adbBin}" start-server >nul 2>&1`, { timeout: 8000, stdio: 'ignore' }); } catch (_) {}
+              try { execSync(`"${adbBin}" reconnect >nul 2>&1`, { timeout: 4000, stdio: 'ignore' }); } catch (_) {}
+            }
+          } catch (e) {
+            logger.warn('[EnrollmentGuard] ADB daemon restart notice:', e.message);
+          }
+        }
         resolve(null);
         return;
       }
+      _consecutiveAdbFailures = 0;
       const lines = (stdout || '').split('\n').slice(1);
       const serials = [];
       let hasOffline = false;
@@ -154,16 +173,28 @@ async function runRecoveryCheck(force = false) {
   }
 
   const activeSerials = new Set(processManager.getActiveSerials());
+  const streamService = require('./stream-service');
 
-  // ── 1. Re-enroll physical USB devices seen by ADB but not actively streaming ──
+  // ── 1. Re-enroll physical USB devices seen by ADB but not actively streaming, or recover failed streams ──
   for (const serial of adbSerials) {
-    if (activeSerials.has(serial) || processManager.getDevice(serial)) {
+    const session = processManager.getDevice(serial);
+    const isHealthy = streamService.isStreamHealthy(serial);
+
+    if (session && isHealthy) {
       _missingCounts.delete(serial);
-      continue; // Already streaming or tracked ✓
+      continue; // Fully streaming and healthy ✓
     }
+
+    if (session && !isHealthy) {
+      logger.warn(`[EnrollmentGuard] Stream failure detected on device ${serial} (server/engine stopped) — auto-restarting stream...`);
+      try {
+        processManager.killDeviceProcesses(serial);
+      } catch (_) {}
+    }
+
     if (_inProgress.has(serial)) continue; // Already being provisioned ✓
 
-    logger.info(`[EnrollmentGuard] Re-enrolling USB device: ${serial}`);
+    logger.info(`[EnrollmentGuard] Enrolling/Recovering USB device: ${serial}`);
     _inProgress.add(serial);
 
     try {

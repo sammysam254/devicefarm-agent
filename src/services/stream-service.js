@@ -1321,6 +1321,10 @@ async function startStreamServer(serial, port) {
       logger.info(`[StreamServer] Listening at ${localUrl}`);
       activeServers.set(serial, { server, wss, engine });
 
+      server.on('close', () => {
+        activeServers.delete(serial);
+      });
+
       const streamProcess = {
         pid: port, exitCode: null,
         kill() {
@@ -1337,6 +1341,15 @@ async function startStreamServer(serial, port) {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
+function isStreamHealthy(serial) {
+  const entry = activeServers.get(serial);
+  if (!entry) return false;
+  if (!entry.server || !entry.server.listening) return false;
+  if (!entry.engine || !entry.engine.isRunning) return false;
+  if (typeof entry.engine.isHealthy === 'function' && !entry.engine.isHealthy()) return false;
+  return true;
+}
+
 function buildStreamUrl(tunnelDomain, port, serial) {
   const cleanDomain = tunnelDomain.replace(/\/+$/, '');
   const domain = cleanDomain.startsWith('http') ? cleanDomain : `https://${cleanDomain}`;
@@ -1350,4 +1363,4 @@ function killStreamServer(streamProcess) {
   }
 }
 
-module.exports = { startStreamServer, buildStreamUrl, killStreamServer };
+module.exports = { startStreamServer, buildStreamUrl, killStreamServer, isStreamHealthy };
