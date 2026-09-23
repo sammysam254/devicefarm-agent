@@ -531,6 +531,67 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
+      if (url === '/api/system/usb-heal') {
+        const { exec } = require('child_process');
+        
+        const psScript = `
+          $errors = Get-PnpDevice | Where-Object { $_.Status -eq 'Error' -or $_.FriendlyName -like '*Device Descriptor Request Failed*' }
+          $removed = @()
+          foreach ($dev in $errors) {
+            $id = $dev.InstanceId
+            pnputil /remove-device "$id"
+            $removed += $id
+          }
+          Start-Sleep -Seconds 2
+          pnputil /scan-devices
+          Start-Sleep -Seconds 2
+          
+          # Also restart any USB root hubs or hubs that have error status
+          $hubs = Get-PnpDevice -Class USB | Where-Object { $_.Status -ne 'OK' }
+          foreach ($h in $hubs) {
+            Disable-PnpDevice -InstanceId $h.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+            Enable-PnpDevice -InstanceId $h.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+          }
+
+          Get-PnpDevice -PresentOnly | Where-Object {
+            $_.InstanceId -like 'USB*' -and (
+              $_.Class -match 'Android|USB|WPD|Modem' -or
+              $_.FriendlyName -match 'Android|ADB|SAMSUNG|Motorola|TCL|BLU|TECNO|Pixel|Phone|Composite|Device'
+            )
+          } | Select-Object Status, Class, FriendlyName, InstanceId | ConvertTo-Json -Compress
+        `;
+        const b64 = Buffer.from(psScript, 'utf16le').toString('base64');
+        exec(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${b64}`, { timeout: 35000 }, async (err, stdout, stderr) => {
+          let updatedUsb = [];
+          try {
+            const parsed = JSON.parse(stdout || '[]');
+            updatedUsb = Array.isArray(parsed) ? parsed : [parsed];
+          } catch (_) {}
+
+          // Also trigger ADB reconnect & heal
+          const adbBin = resolveAdb();
+          try {
+            await new Promise(r => exec(`"${adbBin}" reconnect offline`, { timeout: 3000 }, () => r()));
+            await new Promise(r => exec(`"${adbBin}" reconnect`, { timeout: 3000 }, () => r()));
+          } catch (_) {}
+
+          const enrollmentGuard = require('../services/enrollment-guard');
+          if (enrollmentGuard && enrollmentGuard.runRecoveryCheck) {
+            enrollmentGuard.runRecoveryCheck(true).catch(() => {});
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok',
+            message: 'USB error devices removed and bus rescanned',
+            updatedUsb,
+            rawOut: (stdout || stderr || '').trim()
+          }, null, 2));
+        });
+        return;
+      }
+
       if (url === '/download/installer' || url === '/download/agent') {
         const setupBatPath = path.join(__dirname, '..', '..', 'DeviceFarm-Agent-Setup.bat');
         if (fs.existsSync(setupBatPath)) {
