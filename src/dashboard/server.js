@@ -425,7 +425,15 @@ function startDashboardServer(port = 7400) {
           });
         });
 
-        const [adbRes, pnpRes] = await Promise.all([adbDevicesPromise, pnpPromise]);
+        const procPromise = new Promise(resolve => {
+          exec('tasklist /FI "IMAGENAME eq adb.exe" /FO CSV /NH', { timeout: 5000 }, (err, stdout) => {
+            const lines = (stdout || '').split('\n').map(l => l.trim()).filter(Boolean);
+            const procs = lines.filter(l => l.toLowerCase().includes('adb.exe'));
+            resolve({ count: procs.length, list: procs });
+          });
+        });
+
+        const [adbRes, pnpRes, procRes] = await Promise.all([adbDevicesPromise, pnpPromise, procPromise]);
 
         const lines = (adbRes.stdout || '').split('\n').slice(1);
         const parsedDevices = [];
@@ -450,6 +458,8 @@ function startDashboardServer(port = 7400) {
           totalAdbDevices: parsedDevices.length,
           activeStreamCount: processManager.getActiveDeviceSummaries().length,
           activeStreamSerials: processManager.getActiveSerials(),
+          adbProcessCount: procRes.count,
+          adbProcessList: procRes.list,
           usbHardwareDevices: pnpRes,
           adbVendorKeys: process.env.ADB_VENDOR_KEYS,
           discoveredKeyFiles: discoveredKeys,
