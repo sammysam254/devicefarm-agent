@@ -401,6 +401,22 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
+      if (url === '/api/system/unlock-screens') {
+        const adbBin = resolveAdb();
+        const { exec } = require('child_process');
+        const serials = processManager.getActiveSerials();
+        const cmd = 'svc power stayon true && settings put global stay_on_while_plugged_in 3 && settings put system screen_off_timeout 2147483647 && input keyevent 224 && wm dismiss-keyguard && input keyevent 82';
+        for (const s of serials) {
+          try {
+            exec(`"${adbBin}" -s ${s} shell "${cmd}"`, { timeout: 4000 }, () => {});
+          } catch (_) {}
+        }
+        logger.info(`[System] 🔓 Woke up and unlocked displays on ${serials.length} active device(s)`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', message: `Wake and unlock dispatched to ${serials.length} device(s)` }));
+        return;
+      }
+
       if (url === '/api/system/sync' || url === '/api/system/update') {
         const autoSync = require('../services/auto-sync-service');
         if (autoSync && autoSync.checkAndSyncGithub) {

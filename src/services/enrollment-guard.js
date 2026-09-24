@@ -126,6 +126,26 @@ const _inProgress = new Set();
 const _lastUnauthReconnect = new Map();
 const _missingCounts = new Map();
 const _lastAutoHealMap = new Map();
+let _lastPeriodicUnlockTime = 0;
+
+function isDevicePhysicallyOnline(adbBin, serial) {
+  return new Promise((resolve) => {
+    exec(`"${adbBin}" -s ${serial} get-state`, { timeout: 3000 }, (err, stdout) => {
+      if (err) return resolve(false);
+      const state = (stdout || '').trim().toLowerCase();
+      resolve(state === 'device');
+    });
+  });
+}
+
+function unlockAllScreens(adbBin, serials) {
+  const cmd = 'svc power stayon true && settings put global stay_on_while_plugged_in 3 && settings put system screen_off_timeout 2147483647 && input keyevent 224 && wm dismiss-keyguard && input keyevent 82';
+  for (const s of serials) {
+    try {
+      exec(`"${adbBin}" -s ${s} shell "${cmd}"`, { timeout: 5000 }, () => {});
+    } catch (_) {}
+  }
+}
 
 /**
  * Start the recovery polling loop.
@@ -176,6 +196,13 @@ async function runRecoveryCheck(force = false) {
   const activeSerials = new Set(processManager.getActiveSerials());
   const streamService = require('./stream-service');
 
+  // ── Periodic Keep-Alive: ensure all connected phone screens stay awake & unlocked every 60 seconds ──
+  const nowScan = Date.now();
+  if (nowScan - _lastPeriodicUnlockTime >= 60000) {
+    _lastPeriodicUnlockTime = nowScan;
+    unlockAllScreens(adbBin, adbSerials);
+  }
+
   // ── 1. Re-enroll physical USB devices seen by ADB but not actively streaming, or recover failed streams ──
   for (const serial of adbSerials) {
     const session = processManager.getDevice(serial);
@@ -193,6 +220,13 @@ async function runRecoveryCheck(force = false) {
       const now = Date.now();
       const lastHeal = _lastAutoHealMap.get(serial) || 0;
       if (now - lastHeal < 60000) {
+        continue;
+      }
+
+      // Deterministic physical state check — NO GUESSING
+      const isOnline = await isDevicePhysicallyOnline(adbBin, serial);
+      if (!isOnline) {
+        logger.info(`[EnrollmentGuard] Device ${serial} is physically offline on USB bus — preserving session and awaiting device reconnect`);
         continue;
       }
       _lastAutoHealMap.set(serial, now);

@@ -1143,19 +1143,24 @@ class ScrcpyEngine extends EventEmitter {
 
   _startKeepAwakeLoop() {
     if (this._keepAwakeTimer) clearInterval(this._keepAwakeTimer);
-    // Keep Android display permanently awake and prevent sleep/doze mode
-    const applyWakeLock = async () => {
+    // Keep Android display permanently awake, unlocked, and prevent screen-off
+    const applyWakeAndUnlock = async () => {
       if (!this.isRunning) return;
       try {
         await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
         await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
         await this._adb(['shell', 'settings', 'put', 'system', 'screen_off_timeout', '2147483647']).catch(() => {});
         await this._adb(['shell', 'settings', 'put', 'secure', 'lockscreen.disabled', '1']).catch(() => {});
+        // Every minute: wake up display and dismiss lockscreen
+        await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // KEYCODE_WAKEUP
+        await this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});  // Dismiss keyguard
+        await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});   // KEYCODE_MENU
       } catch (_) {}
     };
 
-    applyWakeLock();
-    this._keepAwakeTimer = setInterval(applyWakeLock, 45000);
+    applyWakeAndUnlock();
+    // Run exactly every 60 seconds (1 minute) to ensure devices always stay up and unlocked
+    this._keepAwakeTimer = setInterval(applyWakeAndUnlock, 60000);
   }
 
   _broadcastControlMessage(msgObj) {
@@ -1180,8 +1185,22 @@ class ScrcpyEngine extends EventEmitter {
     }
     this._lastHealTime = now;
     this._healingInProgress = true;
-    this._healAttemptCount++;
 
+    // 0. Verify device is physically reachable on USB bus (DETERMINISTIC - NO GUESSING)
+    try {
+      const stateOut = await this._adb(['get-state']).catch(e => e.message || '');
+      const state = (stateOut || '').trim().toLowerCase();
+      if (state !== 'device') {
+        logger.warn(`[ScrcpyEngine ${this.serial}] ⚡ [AutoHeal Skipped] Device hardware state is '${state || 'disconnected'}' (not 'device') — device is truly offline. Preserving port & waiting for hardware reconnect.`);
+        this._healingInProgress = false;
+        return false;
+      }
+    } catch (_) {
+      this._healingInProgress = false;
+      return false;
+    }
+
+    this._healAttemptCount++;
     logger.warn(`[ScrcpyEngine ${this.serial}] ⚡ [AutoHeal] Initiating in-place stream recovery #${this._healAttemptCount} (${reason}) — preserving stream server & keeping viewers connected...`);
 
     // Notify connected browser clients that stream is auto-healing

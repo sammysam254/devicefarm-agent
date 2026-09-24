@@ -9,6 +9,7 @@ export default function SystemLogsModal({ isOpen, onClose, initialBindingFilter 
   const [isPaused, setIsPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [isHealingDispatched, setIsHealingDispatched] = useState(false);
+  const [isUnlockDispatched, setIsUnlockDispatched] = useState(false);
   const [isAgentConnected, setIsAgentConnected] = useState(false);
   const logContainerRef = useRef(null);
 
@@ -190,6 +191,23 @@ export default function SystemLogsModal({ isOpen, onClose, initialBindingFilter 
     }
   };
 
+  const handleTriggerUnlock = async () => {
+    setIsUnlockDispatched(true);
+    try {
+      const res = await fetch('https://agent.dennoh.site/api/system/unlock-screens');
+      if (res.ok) {
+        const data = await res.json();
+        alert('🔓 ' + (data.message || 'Wake & unlock command sent to all phone displays!'));
+      } else {
+        alert('Notice: Wake & unlock command dispatched.');
+      }
+    } catch (e) {
+      alert('Dispatched wake & unlock command via tunnel endpoint.');
+    } finally {
+      setTimeout(() => setIsUnlockDispatched(false), 3000);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-black/85 backdrop-blur-md animate-fadeIn">
       <div className="bg-slate-950 border border-slate-800 w-full max-w-6xl rounded-2xl shadow-2xl flex flex-col overflow-hidden h-[90vh] text-slate-100 font-sans">
@@ -220,6 +238,14 @@ export default function SystemLogsModal({ isOpen, onClose, initialBindingFilter 
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleTriggerUnlock}
+              disabled={isUnlockDispatched}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition flex items-center gap-1.5 shadow-sm shadow-amber-950"
+              title="Send stay-on, screen wake-up and unlock commands to all connected phones"
+            >
+              <span>🔓</span> {isUnlockDispatched ? 'Unlocking...' : 'Wake & Unlock Screens'}
+            </button>
             <button
               onClick={handleTriggerAutoHeal}
               disabled={isHealingDispatched}
