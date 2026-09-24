@@ -533,6 +533,18 @@
       }
     }
 
+    async function triggerManualAdbReset() {
+      if (!confirm('Run Manual ADB Reset?\n\nThis will terminate background lingering processes and restart the clean ADB daemon.')) return;
+      try {
+        const res = await fetch('/api/system/adb-heal');
+        const data = await res.json();
+        alert('🔄 ' + (data.message || 'Manual ADB reset completed.'));
+        fetchLogs();
+      } catch (e) {
+        alert('Manual ADB command sent.');
+      }
+    }
+
     fetchDevices();
     setInterval(fetchDevices, 3000);
   </script>
@@ -552,8 +564,11 @@
           <button onclick="triggerUnlockScreens()" class="btn-action" style="font-size: 11px; color: #fbbf24; border-color: rgba(245,158,11,0.3);" title="Wake and unlock all phones">
             🔓 Unlock Screens
           </button>
-          <button onclick="triggerAutoHeal()" class="btn-action" style="font-size: 11px; color: #34d399; border-color: rgba(52,211,153,0.3);">
-            ⚡ Auto-Heal Now
+          <button onclick="triggerAutoHeal()" class="btn-action" style="font-size: 11px; color: #34d399; border-color: rgba(52,211,153,0.3);" title="Gentle in-place recovery without restarting ADB daemon">
+            ⚡ In-Place Heal
+          </button>
+          <button onclick="triggerManualAdbReset()" class="btn-action" style="font-size: 11px; color: #f43f5e; border-color: rgba(244,63,94,0.3);" title="Terminate background processes and restart clean ADB daemon">
+            🔄 Manual ADB Reset
           </button>
           <button onclick="closeLogsModal()" class="btn-action" style="padding: 6px 12px;">✕</button>
         </div>
