@@ -653,16 +653,25 @@ function buildPlayerHtml(serial, screenW, screenH) {
     };
 
     ws.onmessage = function(e) {
-      // JSON control messages (stream_reset, etc.)
+      // JSON control messages (stream_reset, stream_healing, etc.)
       if (typeof e.data === 'string' || e.data instanceof ArrayBuffer && e.data.byteLength > 0 && new Uint8Array(e.data)[0] === 0x7B) {
         try {
           const txt = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
           const msg = JSON.parse(txt);
+          if (msg.type === 'stream_healing') {
+            console.log('[Stream] In-place auto-healing in progress:', msg.reason);
+            modeText.textContent = 'HEALING';
+            modeText.style.color = '#38bdf8';
+            return;
+          }
           if (msg.type === 'stream_reset') {
             console.log('[Stream] Server stream reset — reinitialising decoder');
             resetDecoder();
+            initDecoder();
             fbRunning = false;
-            lastFrameReceivedTime = 0;
+            lastFrameReceivedTime = Date.now();
+            modeText.textContent = 'LIVE';
+            modeText.style.color = '';
           }
           return;
         } catch (_) {}
@@ -734,8 +743,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       }
     };
 
+    if (window._wakeInterval) clearInterval(window._wakeInterval);
     // Auto-nudge Android screen compositor if frame updates stall
-    setInterval(function() {
+    window._wakeInterval = setInterval(function() {
       if (wsOk && (lastFrameReceivedTime > 0 && Date.now() - lastFrameReceivedTime > 2500)) {
         send({ type: 'wake' });
       }
@@ -744,6 +754,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     ws.onerror = function() {};
 
     ws.onclose = function() {
+      if (window._wakeInterval) { clearInterval(window._wakeInterval); window._wakeInterval = null; }
       wsOk = false;
       wsFailCount++;
       if (wsFailCount >= 15 && !fbRunning) startFallback();
@@ -1346,8 +1357,17 @@ function isStreamHealthy(serial) {
   if (!entry) return false;
   if (!entry.server || !entry.server.listening) return false;
   if (!entry.engine || !entry.engine.isRunning) return false;
-  if (typeof entry.engine.isHealthy === 'function' && !entry.engine.isHealthy()) return false;
+  if (typeof entry.engine.isHealthy === 'function') {
+    return entry.engine.isHealthy();
+  }
   return true;
+}
+
+async function autoHealStream(serial) {
+  const entry = activeServers.get(serial);
+  if (!entry || !entry.engine) return false;
+  logger.warn(`[StreamService] ⚡ [AutoHeal] Dispatched in-place recovery for ${serial} on port ${entry.engine.videoPort || 'active'}...`);
+  return entry.engine.autoHeal('stream_health_check_requested');
 }
 
 function buildStreamUrl(tunnelDomain, port, serial) {
@@ -1363,4 +1383,4 @@ function killStreamServer(streamProcess) {
   }
 }
 
-module.exports = { startStreamServer, buildStreamUrl, killStreamServer, isStreamHealthy };
+module.exports = { startStreamServer, buildStreamUrl, killStreamServer, isStreamHealthy, autoHealStream };

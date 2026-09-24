@@ -186,23 +186,33 @@ async function runRecoveryCheck(force = false) {
     }
 
     if (session && !isHealthy) {
-      logger.warn(`[EnrollmentGuard] Stream failure detected on device ${serial} (server/engine stopped) — auto-restarting stream...`);
+      _missingCounts.delete(serial);
+      logger.warn(`[EnrollmentGuard] ⚡ [AutoHeal] Stream interruption detected for ${serial} — auto-healing in-place without taking stream offline...`);
       try {
-        processManager.killDeviceProcesses(serial);
-      } catch (_) {}
+        if (typeof streamService.autoHealStream === 'function') {
+          streamService.autoHealStream(serial).catch(err => {
+            logger.warn(`[EnrollmentGuard] Auto-heal notice for ${serial}: ${err.message}`);
+          });
+        }
+      } catch (err) {
+        logger.warn(`[EnrollmentGuard] Auto-heal invocation error for ${serial}: ${err.message}`);
+      }
+      continue; // Session preserved on existing port, do NOT kill device or allocate new port!
     }
 
-    if (_inProgress.has(serial)) continue; // Already being provisioned ✓
+    if (!session) {
+      if (_inProgress.has(serial)) continue; // Already being provisioned ✓
 
-    logger.info(`[EnrollmentGuard] Enrolling/Recovering USB device: ${serial}`);
-    _inProgress.add(serial);
+      logger.info(`[EnrollmentGuard] Enrolling unstreamed USB device: ${serial}`);
+      _inProgress.add(serial);
 
-    try {
-      await _addDeviceCallback({ id: serial, type: 'device' });
-    } catch (err) {
-      logger.warn(`[EnrollmentGuard] Re-enrollment failed for ${serial}: ${err.message}`);
-    } finally {
-      _inProgress.delete(serial);
+      try {
+        await _addDeviceCallback({ id: serial, type: 'device' });
+      } catch (err) {
+        logger.warn(`[EnrollmentGuard] Enrollment failed for ${serial}: ${err.message}`);
+      } finally {
+        _inProgress.delete(serial);
+      }
     }
   }
 

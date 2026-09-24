@@ -256,6 +256,21 @@ async function handleDeviceRemove(device) {
 
 const { ensureAdbVendorKeys } = require('../utils/adb-keys');
 
+const recentReconnects = new Map();
+function safeReconnect(serial, mode = '') {
+  if (!serial) return;
+  const last = recentReconnects.get(serial) || 0;
+  // 60-second cooldown per serial to prevent infinite reconnect loops
+  if (Date.now() - last < 60000) return;
+  recentReconnects.set(serial, Date.now());
+  try {
+    const adbBin = resolveAdb();
+    const { exec } = require('child_process');
+    const cmd = mode ? `"${adbBin}" -s ${serial} reconnect ${mode}` : `"${adbBin}" -s ${serial} reconnect`;
+    exec(cmd, { timeout: 4000 }, () => {});
+  } catch (_) {}
+}
+
 // ─── Tracker ─────────────────────────────────────────────────────────────────
 
 async function startTracking() {
@@ -292,20 +307,6 @@ async function startTracking() {
         } catch (_) {}
         continue;
       }
-const recentReconnects = new Map();
-function safeReconnect(serial, mode = '') {
-  if (!serial) return;
-  const last = recentReconnects.get(serial) || 0;
-  // 60-second cooldown per serial to prevent infinite reconnect loops
-  if (Date.now() - last < 60000) return;
-  recentReconnects.set(serial, Date.now());
-  try {
-    const adbBin = resolveAdb();
-    const { exec } = require('child_process');
-    const cmd = mode ? `"${adbBin}" -s ${serial} reconnect ${mode}` : `"${adbBin}" -s ${serial} reconnect`;
-    exec(cmd, { timeout: 4000 }, () => {});
-  } catch (_) {}
-}
 
       if (d.type === 'device') {
         await handleDeviceAdd(d);

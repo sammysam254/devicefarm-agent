@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Users, RefreshCw, UserX, UserCheck } from 'lucide-react';
+import { Users, RefreshCw, UserX, UserCheck, Activity } from 'lucide-react';
 import CctvWall from '../components/CctvWall';
 import DeviceAllocationSection from '../components/DeviceAllocationSection';
+import SystemLogsModal from '../components/SystemLogsModal';
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
@@ -13,6 +14,7 @@ export default function AdminDashboard() {
   const [blockingId, setBlockingId] = useState(null);
   const [blockReasonModal, setBlockReasonModal] = useState(null);
   const [blockReason, setBlockReason] = useState('');
+  const [logsModalOpen, setLogsModalOpen] = useState(false);
 
   const loadData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -97,9 +99,18 @@ export default function AdminDashboard() {
             Assign device stream links to workers and admins with auto-generated passwords for password-protected access.
           </p>
         </div>
-        <button onClick={loadData} className="btn btn-secondary">
-          <RefreshCw size={16} /> Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button 
+            onClick={() => setLogsModalOpen(true)} 
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}
+          >
+            <Activity size={16} /> Live Event Logger
+          </button>
+          <button onClick={loadData} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Real-time Security CCTV Camera Wall */}
@@ -203,6 +214,12 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Live System Event Logger Modal */}
+      <SystemLogsModal 
+        isOpen={logsModalOpen} 
+        onClose={() => setLogsModalOpen(false)} 
+      />
     </DashboardLayout>
   );
 }

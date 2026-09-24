@@ -370,16 +370,34 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
-      if (url === '/api/system-logs') {
+      if (url === '/api/system-logs' || url === '/api/system/events') {
         const logRelayService = require('../services/log-relay-service');
-        const limit = parseInt(fullUrl.searchParams.get('limit') || '100', 10);
-        const logs = logRelayService.getRecentLogs ? logRelayService.getRecentLogs(limit) : [];
+        const limit = parseInt(fullUrl.searchParams.get('limit') || '300', 10);
+        const categoryFilter = fullUrl.searchParams.get('category');
+        let logs = logRelayService.getRecentLogs ? logRelayService.getRecentLogs(limit) : [];
+        if (categoryFilter && categoryFilter !== 'all') {
+          logs = logs.filter(l => l.category === categoryFilter || l.level === categoryFilter);
+        }
         res.writeHead(200, {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
           'Cache-Control': 'no-cache',
         });
-        res.end(JSON.stringify({ status: 'ok', logs }));
+        res.end(JSON.stringify({ status: 'ok', count: logs.length, logs }));
+        return;
+      }
+
+      if (url === '/api/system/auto-heal') {
+        const targetSerial = fullUrl.searchParams.get('serial');
+        const streamService = require('../services/stream-service');
+        if (targetSerial && streamService.autoHealStream) {
+          streamService.autoHealStream(targetSerial);
+        } else if (streamService.autoHealStream) {
+          const serials = processManager.getActiveSerials();
+          for (const s of serials) streamService.autoHealStream(s);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', message: `Auto-healing initiated for ${targetSerial || 'all active devices'}` }));
         return;
       }
 

@@ -230,6 +230,13 @@ class ScrcpyEngine extends EventEmitter {
     this._screencapActive = false;
     this.enableAudio = false;
     this.audioSocket = null;
+
+    // Intelligent in-place auto-healing & resilience state
+    this._watchdogTimer = null;
+    this._keepAwakeTimer = null;
+    this._healingInProgress = false;
+    this._healAttemptCount = 0;
+    this._lastFrameTime = Date.now();
   }
 
   get isReady() {
@@ -335,15 +342,19 @@ class ScrcpyEngine extends EventEmitter {
       // 5. Connect video and control sockets
       await this._connectSockets();
 
-      logger.info(`[ScrcpyEngine ${this.serial}] High-speed 60FPS Scrcpy H264 engine active`);
+      // 6. Start persistent watchdog and Android display keepawake
+      this._startEngineWatchdog();
+      this._startKeepAwakeLoop();
+
+      logger.info(`[ScrcpyEngine ${this.serial}] High-speed 60FPS Scrcpy H264 engine active (Auto-Healing: ENABLED)`);
 
     } catch (err) {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — freeing phone socket and scheduling auto-recovery`);
+      logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — scheduling auto-healing`);
       try {
         await this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
       } catch (_) {}
-      if (this.isRunning) {
-        setTimeout(() => this._restart(), 2000);
+      if (this.isRunning && !this._healingInProgress) {
+        setTimeout(() => this.autoHeal('initial_start_retry'), 2500);
       }
     }
   }
@@ -477,27 +488,13 @@ class ScrcpyEngine extends EventEmitter {
     this._restartPending = false;
 
     this.serverProc.on('close', (code) => {
-      // Ignore close events triggered by our own stop() call
-      if (!this.isRunning) return;
-      // Ignore if a restart is already queued
-      if (this._restartPending) return;
+      // Ignore close events triggered by our own stop() call or while already auto-healing
+      if (!this.isRunning || this._healingInProgress) return;
 
       const uptime = Date.now() - this._procStartTime;
-      logger.warn(`[ScrcpyEngine ${this.serial}] proc exited (code=${code}, uptime=${uptime}ms)`);
+      logger.warn(`[ScrcpyEngine ${this.serial}] scrcpy proc exited (code=${code}, uptime=${uptime}ms) — auto-healing in-place...`);
 
-      this._cleanup();
-
-      // Only restart if we weren't already in fallback mode
-      if (!this._fallbackActive) {
-        this._restartPending = true;
-        // Back off longer if it died quickly (likely a startup error)
-        const delay = uptime < 3000 ? 4000 : 1500;
-        logger.info(`[ScrcpyEngine ${this.serial}] Restarting in ${delay}ms...`);
-        setTimeout(() => {
-          this._restartPending = false;
-          if (this.isRunning && !this._fallbackActive) this._restart();
-        }, delay);
-      }
+      this.autoHeal('proc_exit_code_' + code);
     });
   }
 
@@ -543,15 +540,25 @@ class ScrcpyEngine extends EventEmitter {
 
   isHealthy() {
     if (!this.isRunning) return false;
-    if (this._restartPending) return true;
-    if (this.serverProc) {
-      if (this.serverProc.killed || this.serverProc.exitCode !== null) return false;
-    }
+    if (this._healingInProgress) return true; // Actively healing in-place, do NOT kill device session
+    if (!this.videoSocket || this.videoSocket.destroyed) return false;
+    if (this.serverProc && (this.serverProc.killed || this.serverProc.exitCode !== null)) return false;
+    // If connected clients and no frames received for > 25 seconds
+    if (this.wsClients.size > 0 && Date.now() - this._lastFrameTime > 25000) return false;
     return true;
   }
 
   stop() {
     this.isRunning = false;
+    this._healingInProgress = false;
+    if (this._watchdogTimer) {
+      clearInterval(this._watchdogTimer);
+      this._watchdogTimer = null;
+    }
+    if (this._keepAwakeTimer) {
+      clearInterval(this._keepAwakeTimer);
+      this._keepAwakeTimer = null;
+    }
     this._screencapActive = false;
     this._fallbackActive = false;
     if (this._fallbackProc) {
@@ -701,30 +708,12 @@ class ScrcpyEngine extends EventEmitter {
   _pipeVideoToClients(socket) {
     let buf = Buffer.alloc(0);
     let headerDone = false;
-    let lastDataTime = Date.now();
+    this._lastFrameTime = Date.now();
     const DEVICE_HEADER_LEN = 77;
     const META = 12; // 8-byte PTS + 4-byte size
 
-    const watchdog = setInterval(() => {
-      // 1. If no video data received for 3s while clients are watching, nudge screen compositor to unfreeze
-      if (this.isRunning && this.wsClients.size > 0 && Date.now() - lastDataTime > 3000) {
-        try {
-          this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {});
-        } catch (_) {}
-      }
-      // 2. If video socket is disconnected, cleanly schedule scrcpy restart instead of falling back to broken 3-minute screenrecord
-      if ((!this.videoSocket || this.videoSocket.destroyed) && !this._restartPending && this.isRunning) {
-        this._restartPending = true;
-        logger.info(`[ScrcpyEngine ${this.serial}] Video socket disconnected — scheduling clean scrcpy reconnection`);
-        setTimeout(() => {
-          this._restartPending = false;
-          if (this.isRunning) this._restart();
-        }, 2000);
-      }
-    }, 2000);
-
     socket.on('data', (chunk) => {
-      lastDataTime = Date.now();
+      this._lastFrameTime = Date.now();
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
 
       // 1. Skip the device-info header exactly once & parse real video stream size
@@ -820,22 +809,19 @@ class ScrcpyEngine extends EventEmitter {
     });
 
     socket.on('close', () => {
-      clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
-      if (this.isRunning && !this._restartPending) {
-        this._restartPending = true;
-        setTimeout(() => {
-          this._restartPending = false;
-          if (this.isRunning) this._restart();
-        }, 1500);
+      if (this.isRunning && !this._healingInProgress) {
+        this.autoHeal('video_socket_closed');
       }
     });
 
     socket.on('error', (e) => {
-      clearInterval(watchdog);
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket error: ${e.message}`);
       this.videoSocket = null;
+      if (this.isRunning && !this._healingInProgress) {
+        this.autoHeal('video_socket_error: ' + e.message);
+      }
     });
   }
 
@@ -1101,34 +1087,169 @@ class ScrcpyEngine extends EventEmitter {
     }
   }
 
-  async _restart() {
-    if (!this.isRunning) return;
-    logger.info(`[ScrcpyEngine ${this.serial}] Restarting...`);
-    // Clear stale keyframe cache so fresh SPS/PPS+IDR are sent after restart
-    this._configPacket   = null;
-    this._keyframeBuffer = null;
-    this._restartPending = false;
-    // Tell connected browsers to reset their decoders before new stream data arrives
-    const resetMsg = Buffer.from(JSON.stringify({ type: 'stream_reset' }));
+  // ── Engine-Level Persistent Watchdog & Keepalive ──────────────────────────
+
+  _startEngineWatchdog() {
+    if (this._watchdogTimer) clearInterval(this._watchdogTimer);
+    this._watchdogTimer = setInterval(async () => {
+      if (!this.isRunning || this._healingInProgress) return;
+
+      const now = Date.now();
+      const stallDuration = now - this._lastFrameTime;
+
+      // 1. If video socket is disconnected or destroyed, auto-heal immediately
+      if (!this.videoSocket || this.videoSocket.destroyed) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Video socket missing or destroyed — auto-healing...`);
+        this.autoHeal('watchdog_video_socket_missing');
+        return;
+      }
+
+      // 2. If scrcpy process died
+      if (this.serverProc && (this.serverProc.killed || this.serverProc.exitCode !== null)) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] scrcpy server process terminated — auto-healing...`);
+        this.autoHeal('watchdog_server_proc_dead');
+        return;
+      }
+
+      // 3. Stalled video pipeline detection
+      // If clients are watching and no frame arrived for > 12s, or idle for > 45s:
+      if (this.wsClients.size > 0 && stallDuration > 12000) {
+        logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Video stall detected (${Math.round(stallDuration / 1000)}s with active viewers) — attempting wake & unfreeze...`);
+        try {
+          await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {});
+          await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});
+        } catch (_) {}
+
+        // If stall continues beyond 18 seconds, perform full in-place auto-heal
+        if (stallDuration > 18000) {
+          logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Stream did not unfreeze — initiating in-place auto-heal...`);
+          this.autoHeal('watchdog_frame_pipeline_stalled');
+          return;
+        }
+      }
+
+      // 4. Control socket auto-reconnection
+      if (!this.controlSocket || this.controlSocket.destroyed) {
+        this._reconnectControl();
+      }
+    }, 2500);
+  }
+
+  _startKeepAwakeLoop() {
+    if (this._keepAwakeTimer) clearInterval(this._keepAwakeTimer);
+    // Keep Android display permanently awake and prevent sleep/doze mode
+    const applyWakeLock = async () => {
+      if (!this.isRunning) return;
+      try {
+        await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
+        await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
+        await this._adb(['shell', 'settings', 'put', 'system', 'screen_off_timeout', '2147483647']).catch(() => {});
+        await this._adb(['shell', 'settings', 'put', 'secure', 'lockscreen.disabled', '1']).catch(() => {});
+      } catch (_) {}
+    };
+
+    applyWakeLock();
+    this._keepAwakeTimer = setInterval(applyWakeLock, 45000);
+  }
+
+  _broadcastControlMessage(msgObj) {
+    const raw = Buffer.from(JSON.stringify(msgObj));
     for (const ws of this.wsClients) {
-      if (ws.readyState === 1) try { ws.send(resetMsg); } catch (_) {}
+      if (ws.readyState === 1) {
+        try { ws.send(raw); } catch (_) {}
+      }
     }
+  }
+
+  // ── Intelligent In-Place Auto-Healing (Never Drops Stream Server or Port) ────
+
+  async autoHeal(reason = 'watchdog') {
+    if (!this.isRunning) return false;
+    if (this._healingInProgress) {
+      return false;
+    }
+    this._healingInProgress = true;
+    this._healAttemptCount++;
+
+    logger.warn(`[ScrcpyEngine ${this.serial}] ⚡ [AutoHeal] Initiating in-place stream recovery #${this._healAttemptCount} (${reason}) — preserving stream server & keeping viewers connected...`);
+
+    // Notify connected browser clients that stream is auto-healing so they don't panic or disconnect
+    this._broadcastControlMessage({ type: 'stream_healing', reason, attempt: this._healAttemptCount });
+
     try {
-      // Force-kill any lingering scrcpy/app_process on device to release localabstract:scrcpy
+      // 1. Gently cleanup local sockets and previous process without affecting wsClients
+      if (this.videoSocket) {
+        try { this.videoSocket.destroy(); } catch (_) {}
+        this.videoSocket = null;
+      }
+      if (this.controlSocket) {
+        try { this.controlSocket.destroy(); } catch (_) {}
+        this.controlSocket = null;
+      }
+      if (this.audioSocket) {
+        try { this.audioSocket.destroy(); } catch (_) {}
+        this.audioSocket = null;
+      }
+      if (this.serverProc) {
+        const p = this.serverProc;
+        this.serverProc = null;
+        try {
+          if (process.platform === 'win32' && p.pid) {
+            const { exec } = require('child_process');
+            exec(`taskkill /F /T /PID ${p.pid}`, () => {});
+          } else if (p.pid) {
+            p.kill('SIGKILL');
+          }
+        } catch (_) {}
+      }
+
+      // 2. Clear remote zombie scrcpy on phone and ensure screen is awake
       try {
         await this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
         await new Promise(r => setTimeout(r, 200));
+        await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
+        await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
+        await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // WAKEUP
+        await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});  // MENU / UNLOCK
       } catch (_) {}
 
+      // 3. Reset ADB port forward
       try { await this._adb(['forward', '--remove', `tcp:${this.videoPort}`]); } catch (_) {}
       await this._adb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
+
+      // 4. Ensure jar is pushed
+      await this._pushServerJar();
+
+      // 5. Spawn fresh scrcpy server
       this._spawnServer();
+
+      // 6. Connect video and control sockets
       await this._connectSockets();
-      logger.info(`[ScrcpyEngine ${this.serial}] Restarted successfully`);
+
+      // 7. Reset keyframe buffer and notify clients to re-init decoders
+      this._configPacket = null;
+      this._keyframeBuffer = null;
+      this._lastFrameTime = Date.now();
+      this._healAttemptCount = 0;
+
+      this._broadcastControlMessage({ type: 'stream_reset' });
+
+      logger.info(`[ScrcpyEngine ${this.serial}] ✅ [AutoHeal] Stream successfully auto-healed on port ${this.videoPort} — 100% online`);
+      this._healingInProgress = false;
+      return true;
     } catch (err) {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Restart failed: ${err.message} — retry in 3s`);
-      if (this.isRunning) setTimeout(() => this._restart(), 3000);
+      logger.error(`[ScrcpyEngine ${this.serial}] ❌ [AutoHeal] Recovery attempt #${this._healAttemptCount} failed: ${err.message} — scheduling automatic retry in 2.5s`);
+      const delay = Math.min(2500 * Math.min(this._healAttemptCount, 3), 8000);
+      setTimeout(() => {
+        this._healingInProgress = false;
+        if (this.isRunning) this.autoHeal('retry_after_failure');
+      }, delay);
+      return false;
     }
+  }
+
+  async _restart() {
+    return this.autoHeal('manual_restart_requested');
   }
 
   _adb(args) {

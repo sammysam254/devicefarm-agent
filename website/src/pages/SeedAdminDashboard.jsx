@@ -260,7 +260,7 @@ export default function SeedAdminDashboard() {
             className="btn btn-secondary"
             style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}
           >
-            <Activity size={16} /> Live System Logs
+            <Activity size={16} /> Live Event Logger
           </button>
           <button onClick={loadData} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <RefreshCw size={16} /> Refresh

@@ -188,9 +188,14 @@
           <div style="font-size: 12px; color: var(--text-dim);">Local Machine Control Center</div>
         </div>
       </div>
-      <div class="agent-status-pill">
-        <span class="pulse-dot"></span>
-        <span>Agent Operational</span>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <button onclick="openLogsModal()" class="btn-action" style="padding: 7px 14px; font-size: 13px; font-weight: 700; background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); color: #38bdf8;">
+          📜 Live Event Logger
+        </button>
+        <div class="agent-status-pill">
+          <span class="pulse-dot"></span>
+          <span>Agent Operational</span>
+        </div>
       </div>
     </header>
 
@@ -429,8 +434,123 @@
       }
     }
 
+    // ── Live Event Logger Logic ─────────────────────────────────────────────
+    let _logsModalActive = false;
+    let _activeLogCategory = 'ALL';
+    let _cachedLogs = [];
+    let _logsPollTimer = null;
+
+    function openLogsModal() {
+      _logsModalActive = true;
+      document.getElementById('logsModal').classList.add('active');
+      fetchLogs();
+      if (!_logsPollTimer) _logsPollTimer = setInterval(fetchLogs, 1500);
+    }
+
+    function closeLogsModal(e) {
+      if (e && e.target && e.target.id !== 'logsModal') return;
+      _logsModalActive = false;
+      document.getElementById('logsModal').classList.remove('active');
+      if (_logsPollTimer) { clearInterval(_logsPollTimer); _logsPollTimer = null; }
+    }
+
+    async function fetchLogs() {
+      if (!_logsModalActive) return;
+      try {
+        const res = await fetch('/api/system-logs?limit=300');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.logs)) {
+            _cachedLogs = data.logs;
+            renderLogsList();
+          }
+        }
+      } catch (_) {}
+    }
+
+    function setLogFilter(cat) {
+      _activeLogCategory = cat;
+      ['btnLogAll', 'btnLogHeal', 'btnLogErr', 'btnLogDev'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.background = 'rgba(255,255,255,0.06)';
+      });
+      const activeEl = document.getElementById('btnLog' + (cat === 'ALL' ? 'All' : cat === 'auto_heal' ? 'Heal' : cat === 'error' ? 'Err' : 'Dev'));
+      if (activeEl) activeEl.style.background = '#38bdf8';
+      renderLogsList();
+    }
+
+    function renderLogsList() {
+      const container = document.getElementById('logsList');
+      if (!container) return;
+
+      const q = (document.getElementById('logsSearch')?.value || '').toLowerCase();
+      const filtered = _cachedLogs.filter(l => {
+        if (_activeLogCategory !== 'ALL' && l.category !== _activeLogCategory) return false;
+        if (q && !(l.message || '').toLowerCase().includes(q) && !(l.bindingCode || '').toLowerCase().includes(q)) return false;
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">No events found matching this filter.</div>';
+        return;
+      }
+
+      container.innerHTML = filtered.map(l => {
+        const isHeal = l.category === 'auto_heal' || (l.message || '').includes('AutoHeal');
+        const isErr = l.category === 'error' || l.level === 'error';
+        const color = isHeal ? '#34d399' : isErr ? '#fb7185' : '#38bdf8';
+        const tag = isHeal ? '⚡ AUTO-HEAL' : isErr ? '🚨 ERROR' : 'ℹ️ ' + (l.level || 'INFO').toUpperCase();
+        return `
+          <div style="display: flex; gap: 10px; padding: 6px 10px; border-radius: 6px; font-size: 12px; font-family: monospace; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); margin-bottom: 4px;">
+            <span style="color: #64748b; white-space: nowrap;">${l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : ''}</span>
+            <span style="padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; color: ${color}; background: rgba(255,255,255,0.06); border: 1px solid ${color}40; white-space: nowrap;">${tag}</span>
+            <span style="color: #e2e8f0; word-break: break-all;">${l.message || ''}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function triggerAutoHeal() {
+      try {
+        await fetch('/api/system/auto-heal');
+        alert('⚡ Auto-healing signal sent! Streams are recovering in-place without taking streams offline.');
+        fetchLogs();
+      } catch (e) {
+        alert('Dispatched auto-heal signal.');
+      }
+    }
+
     fetchDevices();
     setInterval(fetchDevices, 3000);
   </script>
+
+  <!-- Live Event Logger Modal Drawer -->
+  <div id="logsModal" class="modal-backdrop" onclick="closeLogsModal(event)">
+    <div class="modal-content" style="max-width: 900px; height: 85vh;" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 20px;">📜</span>
+          <div>
+            <div style="font-weight: 800; font-size: 15px; color: #fff;">System Event & Auto-Healing Logger</div>
+            <div style="font-size: 11px; color: var(--text-dim);">Live activities, error tracking & stream recoveries</div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button onclick="triggerAutoHeal()" class="btn-action" style="font-size: 11px; color: #34d399; border-color: rgba(52,211,153,0.3);">
+            ⚡ Auto-Heal Now
+          </button>
+          <button onclick="closeLogsModal()" class="btn-action" style="padding: 6px 12px;">✕</button>
+        </div>
+      </div>
+      <div style="padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: rgba(15,23,42,0.6);">
+        <button id="btnLogAll" onclick="setLogFilter('ALL')" class="btn-action" style="padding: 4px 10px; font-size: 11px; background: #38bdf8; color: #000; font-weight: 800;">ALL</button>
+        <button id="btnLogHeal" onclick="setLogFilter('auto_heal')" class="btn-action" style="padding: 4px 10px; font-size: 11px; color: #34d399;">⚡ AUTO-HEAL</button>
+        <button id="btnLogErr" onclick="setLogFilter('error')" class="btn-action" style="padding: 4px 10px; font-size: 11px; color: #fb7185;">🚨 ERRORS</button>
+        <button id="btnLogDev" onclick="setLogFilter('device')" class="btn-action" style="padding: 4px 10px; font-size: 11px; color: #38bdf8;">📱 DEVICES</button>
+        <input id="logsSearch" type="text" placeholder="Search events..." oninput="renderLogsList()" style="margin-left: auto; background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 10px; color: #fff; font-size: 12px; outline: none; width: 220px;" />
+      </div>
+      <div id="logsList" style="flex: 1; overflow-y: auto; padding: 14px; background: #060910;"></div>
+    </div>
+  </div>
 </body>
 </html>
