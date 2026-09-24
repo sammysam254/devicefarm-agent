@@ -510,24 +510,10 @@ function startDashboardServer(port = 7400) {
         
         const keys = ensureAdbVendorKeys();
         
-        // 1. Terminate all lingering / duplicate adb.exe processes to enforce a single ADB server daemon
-        logger.info('[ADB Heal] Reaping all lingering adb.exe processes to enforce single clean daemon...');
-        try {
-          if (process.platform === 'win32') {
-            await new Promise(r => exec('taskkill /F /IM adb.exe >nul 2>&1', { timeout: 4000 }, () => r()));
-          }
-        } catch (_) {}
-        await new Promise(r => setTimeout(r, 1200));
+        // 1. Ensure vendor keys are present on disk
+        logger.info('[ADB Heal] Running non-destructive per-device heal check without stopping daemon...');
 
-        // 2. Start a single fresh ADB server daemon with all vendor host keys loaded
-        await new Promise(r => exec(`"${adbBin}" start-server`, { timeout: 8000 }, () => r()));
-        await new Promise(r => setTimeout(r, 2000));
-
-        // 3. Run reconnect offline and reconnect on all devices
-        await new Promise(r => exec(`"${adbBin}" reconnect offline`, { timeout: 4000 }, () => r()));
-        await new Promise(r => exec(`"${adbBin}" reconnect`, { timeout: 4000 }, () => r()));
-
-        // 4. Check for unauthorized devices and target them directly
+        // 2. Check for unauthorized or offline devices specifically — NEVER kill global ADB server or running streams!
         const checkDevices = () => new Promise(resolve => {
           exec(`"${adbBin}" devices`, { timeout: 5000 }, (err, stdout) => {
             const out = stdout || '';
@@ -545,30 +531,35 @@ function startDashboardServer(port = 7400) {
         });
 
         let devState = await checkDevices();
+
+        // 3. Reconnect ONLY specific offline devices individually
+        for (const s of devState.off) {
+          logger.info(`[ADB Heal] Reconnecting specific offline device: ${s}`);
+          await new Promise(r => exec(`"${adbBin}" -s ${s} reconnect offline`, { timeout: 3000 }, () => r()));
+        }
+
+        // 4. Reconnect ONLY specific unauthorized devices individually
         if (devState.unauth.length > 0) {
           logger.info(`[ADB Heal] Reconnecting ${devState.unauth.length} unauthorized devices: ${devState.unauth.join(', ')}`);
           for (const s of devState.unauth) {
             await new Promise(r => exec(`"${adbBin}" -s ${s} reconnect`, { timeout: 3000 }, () => r()));
           }
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, 1500));
           devState = await checkDevices();
         }
 
-        // If any are still unauthorized, try restarting ADB daemon with the new vendor keys
-        let serverRestarted = false;
-        if (devState.unauth.length > 0) {
-          logger.warn(`[ADB Heal] Devices still unauthorized (${devState.unauth.join(', ')}). Restarting ADB server with full vendor keys...`);
-          try {
-            await new Promise(r => exec(`"${adbBin}" kill-server`, { timeout: 5000 }, () => r()));
-            await new Promise(r => setTimeout(r, 1000));
-            await new Promise(r => exec(`"${adbBin}" start-server`, { timeout: 7000 }, () => r()));
-            serverRestarted = true;
-            await new Promise(r => setTimeout(r, 3000));
-            devState = await checkDevices();
-          } catch (_) {}
+        // 5. In-place stream recovery: check each enrolled device stream, heal only if unhealthy
+        const streamService = require('../services/stream-service');
+        const activeDevices = processManager.getAllDevices();
+        for (const dev of activeDevices) {
+          const serial = dev.id || dev.serial;
+          if (serial && !streamService.isStreamHealthy(serial)) {
+            logger.warn(`[ADB Heal] Stream unhealthy for ${serial} — dispatching in-place auto-heal...`);
+            streamService.autoHealStream(serial).catch(() => {});
+          }
         }
 
-        // 3. Trigger immediate enrollment recovery
+        // 6. Trigger immediate enrollment recovery
         if (enrollmentGuard && enrollmentGuard.runRecoveryCheck) {
           await enrollmentGuard.runRecoveryCheck(true);
         }
@@ -626,11 +617,19 @@ function startDashboardServer(port = 7400) {
             updatedUsb = Array.isArray(parsed) ? parsed : [parsed];
           } catch (_) {}
 
-          // Also trigger ADB reconnect & heal
+          // Also trigger targeted reconnect for any offline devices specifically
           const adbBin = resolveAdb();
           try {
-            await new Promise(r => exec(`"${adbBin}" reconnect offline`, { timeout: 3000 }, () => r()));
-            await new Promise(r => exec(`"${adbBin}" reconnect`, { timeout: 3000 }, () => r()));
+            exec(`"${adbBin}" devices`, { timeout: 4000 }, (e, out) => {
+              if (out) {
+                out.split('\n').slice(1).forEach(l => {
+                  const p = l.trim().split(/\s+/);
+                  if (p.length >= 2 && (p[1] === 'offline' || p[1] === 'unauthorized')) {
+                    exec(`"${adbBin}" -s ${p[0]} reconnect`);
+                  }
+                });
+              }
+            });
           } catch (_) {}
 
           const enrollmentGuard = require('../services/enrollment-guard');

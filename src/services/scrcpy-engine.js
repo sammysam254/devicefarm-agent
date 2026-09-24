@@ -34,6 +34,9 @@ function loadConfig() {
 const _cfg = loadConfig();
 const _isTunnel = !!(_cfg.cloudflareToken || _cfg.cloudflaredToken || _cfg.domain);
 
+// Track devices that do not support Android AudioRecord / scrcpy audio to prevent crash loops
+const _unsupportedAudioSerials = new Set();
+
 
 function hasSpsNal(buf) {
   if (!buf || buf.length < 4) return false;
@@ -228,8 +231,11 @@ class ScrcpyEngine extends EventEmitter {
     this.videoHeight = 0;
     this._jarPushed = false;
     this._screencapActive = false;
-    this.enableAudio = false;
+    this.enableAudio = !_unsupportedAudioSerials.has(serial);
+    this._audioDisabled = _unsupportedAudioSerials.has(serial);
     this.audioSocket = null;
+    this._fallbackActive = false;
+    this._fallbackProc = null;
 
     // Intelligent in-place auto-healing & resilience state
     this._watchdogTimer = null;
@@ -354,7 +360,7 @@ class ScrcpyEngine extends EventEmitter {
     } catch (err) {
       logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — scheduling auto-healing`);
       if (this.isRunning && !this._healingInProgress) {
-        setTimeout(() => this.autoHeal('initial_start_retry'), 2500);
+        setTimeout(() => this.autoHeal('initial_start_retry'), 1200);
       }
     }
   }
@@ -366,22 +372,36 @@ class ScrcpyEngine extends EventEmitter {
       logger.error(`[ScrcpyEngine ${this.serial}] Download from: https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4`);
     }
 
-    const bitRate = _isTunnel ? '3000000' : '4000000';
-    const maxFps  = '60';
-    const maxSize = '1280';
+    let bitRate = _isTunnel ? '3000000' : '4000000';
+    let maxFps  = '60';
+    let maxSize = '1280';
 
-    if (_isTunnel) {
+    if (this._healAttemptCount >= 2) {
+      bitRate = '2000000';
+      maxFps  = '30';
+      maxSize = '1024';
+      logger.info(`[ScrcpyEngine ${this.serial}] Using compatibility profile (1024 max size, 30 fps, 2Mbps)`);
+    } else if (_isTunnel) {
       logger.info(`[ScrcpyEngine ${this.serial}] Tunnel mode active — using ${bitRate} bps / ${maxFps} fps / max_size=${maxSize}`);
     }
+
+    if (_unsupportedAudioSerials.has(this.serial) || this._healAttemptCount >= 1) {
+      this.enableAudio = false;
+      this._audioDisabled = true;
+    }
+    const audioEnabled = Boolean(this.enableAudio && !this._audioDisabled);
 
     const args = [
       '-s', this.serial, 'shell',
       'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
       'app_process', '/', 'com.genymobile.scrcpy.Server', '2.4',
       'tunnel_forward=true',
-      'audio=' + (this.enableAudio ? 'true' : 'false'),
-      'audio_codec=opus',
-      'audio_bit_rate=128000',
+      'audio=' + (audioEnabled ? 'true' : 'false'),
+    ];
+    if (audioEnabled) {
+      args.push('audio_codec=opus', 'audio_bit_rate=128000');
+    }
+    args.push(
       'control=true',
       'cleanup=true',
       'send_dummy_byte=true',
@@ -393,7 +413,7 @@ class ScrcpyEngine extends EventEmitter {
       'send_frame_meta=true',
       'show_touches=false',
       'stay_awake=true',
-    ];
+    );
 
     logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
 
@@ -425,15 +445,18 @@ class ScrcpyEngine extends EventEmitter {
       let resolved = false;
       const done = () => { if (!resolved) { resolved = true; resolve(); } };
 
-      this._audioDisabled = false;
-      this._audioActive = false;
+      if (!this._audioDisabled) {
+        this._audioActive = false;
+      }
 
       this.serverProc.stdout.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.info(`[ScrcpyEngine ${this.serial}] stdout: ${msg}`);
         const lower = msg.toLowerCase();
         if (lower.includes('audio disabled')) {
+          _unsupportedAudioSerials.add(this.serial);
           this._audioDisabled = true;
+          this.enableAudio = false;
           this._audioActive = false;
           logger.warn(`[ScrcpyEngine ${this.serial}] Audio capture disabled by device`);
           done();
@@ -459,7 +482,7 @@ class ScrcpyEngine extends EventEmitter {
             logger.info(`[ScrcpyEngine ${this.serial}] Server-negotiated resolution: ${sw}x${sh}`);
           }
         }
-        if (!this.enableAudio && (msg.includes('Device:') || msg.includes('device:'))) done();
+        if (!audioEnabled && (msg.includes('Device:') || msg.includes('device:'))) done();
         else if (msg.includes('Device:') || msg.includes('device:')) {
           setTimeout(done, 1200); // Allow audio encoder check to run if present
         }
@@ -468,10 +491,19 @@ class ScrcpyEngine extends EventEmitter {
       this.serverProc.stderr.on('data', (d) => {
         const msg = d.toString().trim();
         if (msg) logger.warn(`[ScrcpyEngine ${this.serial}] stderr: ${msg}`);
-        if (msg.toLowerCase().includes('audio disabled')) {
+        const lower = msg.toLowerCase();
+        if (
+          lower.includes('audio disabled') ||
+          lower.includes('aborted') ||
+          lower.includes('audiorecord') ||
+          lower.includes('audio error') ||
+          lower.includes('could not start audio')
+        ) {
+          _unsupportedAudioSerials.add(this.serial);
           this._audioDisabled = true;
+          this.enableAudio = false;
           this._audioActive = false;
-          logger.warn(`[ScrcpyEngine ${this.serial}] Audio capture disabled by device (stderr)`);
+          logger.warn(`[ScrcpyEngine ${this.serial}] Audio capture unsupported on device (stderr: ${msg}) — audio disabled permanently`);
           done();
         }
         if (msg.includes('Address already in use')) {
@@ -499,6 +531,12 @@ class ScrcpyEngine extends EventEmitter {
       const uptime = Date.now() - this._procStartTime;
       logger.warn(`[ScrcpyEngine ${this.serial}] scrcpy proc exited (code=${code}, uptime=${uptime}ms)`);
 
+      if (code === 134 || uptime < 3000) {
+        _unsupportedAudioSerials.add(this.serial);
+        this._audioDisabled = true;
+        this.enableAudio = false;
+      }
+
       this.autoHeal('proc_exit_code_' + code);
     });
   }
@@ -506,13 +544,16 @@ class ScrcpyEngine extends EventEmitter {
   _startScreenrecordFallback() {
     if (this._fallbackActive) return;
     this._fallbackActive = true;
-    logger.info(`[ScrcpyEngine ${this.serial}] Starting hardware screenrecord fallback...`);
+    logger.info(`[ScrcpyEngine ${this.serial}] ⚡ Activating native hardware screenrecord fallback...`);
+
+    const targetW = this.screenWidth || 720;
+    const targetH = this.screenHeight || 1280;
 
     const args = [
       '-s', this.serial, 'exec-out',
       'screenrecord',
       '--output-format=h264',
-      '--size', '720x1280',
+      '--size', `${Math.min(targetW, 1080)}x${Math.min(targetH, 1920)}`,
       '--bit-rate', '2500000',
       '-'
     ];
@@ -525,6 +566,7 @@ class ScrcpyEngine extends EventEmitter {
     this._fallbackProc = proc;
 
     proc.stdout.on('data', (chunk) => {
+      this._lastFrameTime = Date.now();
       this._broadcastVideo(chunk, false);
     });
 
@@ -532,9 +574,11 @@ class ScrcpyEngine extends EventEmitter {
       this._fallbackProc = null;
       if (this.isRunning && this._fallbackActive) {
         setTimeout(() => {
-          this._fallbackActive = false;
-          if (this.isRunning) this._startScreenrecordFallback();
-        }, 1000);
+          if (this.isRunning && this._fallbackActive) {
+            this._fallbackActive = false;
+            this._startScreenrecordFallback();
+          }
+        }, 800);
       }
     });
 
@@ -548,6 +592,10 @@ class ScrcpyEngine extends EventEmitter {
     if (this._healingInProgress) return true; // Actively healing in-place, do NOT kill device session
     // Startup grace period (30s) while scrcpy initializes
     if (this._startTime && Date.now() - this._startTime < 30000) return true;
+    // Fallback mode is healthy if fallback process is active
+    if (this._fallbackActive && this._fallbackProc && this._fallbackProc.exitCode === null) {
+      return true;
+    }
     // If video socket is active and not destroyed, and process has not exited
     if (this.videoSocket && !this.videoSocket.destroyed) {
       if (!this.serverProc || (this.serverProc.exitCode === null && !this.serverProc.killed)) {
@@ -631,7 +679,7 @@ class ScrcpyEngine extends EventEmitter {
     await new Promise(r => setTimeout(r, 150));
 
     // tunnel_forward socket 2 = audio stream (when audio=true and not disabled by device)
-    const audioEligible = this.enableAudio && !this._audioDisabled;
+    const audioEligible = Boolean(this.enableAudio && !this._audioDisabled && !_unsupportedAudioSerials.has(this.serial));
     if (audioEligible) {
       try {
         logger.info(`[ScrcpyEngine ${this.serial}] Connecting audio socket...`);
@@ -1107,6 +1155,11 @@ class ScrcpyEngine extends EventEmitter {
     this._watchdogTimer = setInterval(async () => {
       if (!this.isRunning || this._healingInProgress) return;
 
+      // In hardware screenrecord fallback mode, fallbackProc handles its own lifecycle
+      if (this._fallbackActive) {
+        return;
+      }
+
       // 1. If video socket is disconnected or destroyed, auto-heal
       if (!this.videoSocket || this.videoSocket.destroyed) {
         logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Video socket missing or destroyed — auto-healing...`);
@@ -1173,9 +1226,9 @@ class ScrcpyEngine extends EventEmitter {
     if (!this.isRunning) return false;
     if (this._healingInProgress) return false;
 
-    // Strict 45-second cooldown to completely prevent healing loops
+    // 15-second cooldown to completely prevent healing loops while allowing swift recovery
     const now = Date.now();
-    if (now - this._lastHealTime < 45000) {
+    if (now - this._lastHealTime < 15000) {
       return false;
     }
     this._lastHealTime = now;
@@ -1243,7 +1296,19 @@ class ScrcpyEngine extends EventEmitter {
         } catch (_) {}
       }
 
-      // 2. Ensure screen stays awake and unlocked (NEVER run pkill which restarts system server)
+      // If attempt >= 1, force audio off for this device permanently
+      if (this._healAttemptCount >= 1) {
+        _unsupportedAudioSerials.add(this.serial);
+        this._audioDisabled = true;
+        this.enableAudio = false;
+      }
+
+      // 2. Kill any stray scrcpy server process on device (NEVER killall app_process or zygote!)
+      try {
+        await this._adb(['shell', 'pkill -9 -f com.genymobile.scrcpy 2>/dev/null || true']).catch(() => {});
+      } catch (_) {}
+
+      // 3. Ensure screen stays awake and unlocked
       try {
         await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
         await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
@@ -1251,27 +1316,47 @@ class ScrcpyEngine extends EventEmitter {
         await this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});  // Dismiss keyguard
       } catch (_) {}
 
-      // 3. Reset ADB port forward
+      // 4. Reset ADB port forward
       try { await this._adb(['forward', '--remove', `tcp:${this.videoPort}`]); } catch (_) {}
       await this._adb(['forward', `tcp:${this.videoPort}`, 'localabstract:scrcpy']);
 
-      // 4. Ensure jar is pushed
+      // 5. Ensure jar is pushed
       await this._pushServerJar();
 
       // Reset cached config & keyframe BEFORE spawning new server so fresh stream starts clean
       this._configPacket = null;
       this._keyframeBuffer = null;
 
-      // 5. Spawn fresh scrcpy server
+      // 6. Spawn fresh scrcpy server
       this._spawnServer();
 
-      // 6. Connect video and control sockets
+      // 7. Connect video and control sockets
       await this._connectSockets();
+
+      // Verify video socket is alive
+      if (!this.videoSocket || this.videoSocket.destroyed) {
+        throw new Error('Video socket not connected after spawn');
+      }
+
+      // If fallback was active, cleanly stop it now that scrcpy stream is restored
+      if (this._fallbackProc) {
+        const fp = this._fallbackProc;
+        this._fallbackProc = null;
+        this._fallbackActive = false;
+        try {
+          if (process.platform === 'win32' && fp.pid) {
+            const { exec } = require('child_process');
+            exec(`taskkill /F /T /PID ${fp.pid}`, () => {});
+          } else if (fp.pid) {
+            fp.kill('SIGKILL');
+          }
+        } catch (_) {}
+      }
 
       this._lastFrameTime = Date.now();
       this._healAttemptCount = 0;
 
-      // 7. Notify clients to reset decoder AND immediately dispatch cached keyframe/config packet
+      // 8. Notify clients to reset decoder AND immediately dispatch cached keyframe/config packet
       this._broadcastControlMessage({ type: 'stream_reset' });
       const initialFrame = this._keyframeBuffer || this._configPacket;
       if (initialFrame) {
@@ -1280,17 +1365,24 @@ class ScrcpyEngine extends EventEmitter {
 
       logger.info(`[ScrcpyEngine ${this.serial}] ✅ [AutoHeal] Stream successfully auto-healed on port ${this.videoPort} — 100% online`);
 
-      // Hold healing lock for 4 seconds after successful reconnect to swallow any trailing OS exit events
+      // Hold healing lock for 3 seconds after successful reconnect to swallow any trailing OS exit events
       setTimeout(() => {
         this._healingInProgress = false;
-      }, 4000);
+      }, 3000);
 
       return true;
     } catch (err) {
       logger.error(`[ScrcpyEngine ${this.serial}] ❌ [AutoHeal] Recovery attempt #${this._healAttemptCount} failed: ${err.message}`);
+
+      // Tier 3 Hardware Fallback: If scrcpy fails, immediately engage hardware screenrecord fallback so stream never stays offline!
+      if (this.isRunning && !this._fallbackActive) {
+        logger.info(`[ScrcpyEngine ${this.serial}] ⚡ [AutoHeal Fallback] Activating native hardware screenrecord fallback so stream stays online...`);
+        this._startScreenrecordFallback();
+      }
+
       setTimeout(() => {
         this._healingInProgress = false;
-      }, 10000);
+      }, 5000);
       return false;
     }
   }

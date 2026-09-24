@@ -55,32 +55,17 @@ function listAdbDevices(adbBin) {
   } catch (_) {}
 
   return new Promise((resolve) => {
-    exec(`"${adbBin}" devices`, { timeout: 25000 }, (err, stdout, stderr) => {
+    exec(`"${adbBin}" devices`, { timeout: 10000 }, (err, stdout, stderr) => {
       if (err) {
         _consecutiveAdbFailures++;
-        logger.warn(`[EnrollmentGuard] adb devices poll warning (attempt ${_consecutiveAdbFailures}): ${err.message}`);
-        // If ADB daemon has truly failed/hung across multiple checks, heal it cleanly
-        if (_consecutiveAdbFailures >= 2) {
-          logger.error(`[EnrollmentGuard] ADB daemon failure confirmed (${_consecutiveAdbFailures} consecutive failed polls) — auto-restarting ADB daemon...`);
-          _consecutiveAdbFailures = 0;
-          try {
-            if (process.platform === 'win32') {
-              const { execSync } = require('child_process');
-              try { execSync(`"${adbBin}" kill-server >nul 2>&1`, { timeout: 4000, stdio: 'ignore' }); } catch (_) {}
-              try { execSync(`"${adbBin}" start-server >nul 2>&1`, { timeout: 8000, stdio: 'ignore' }); } catch (_) {}
-              try { execSync(`"${adbBin}" reconnect >nul 2>&1`, { timeout: 4000, stdio: 'ignore' }); } catch (_) {}
-            }
-          } catch (e) {
-            logger.warn('[EnrollmentGuard] ADB daemon restart notice:', e.message);
-          }
-        }
+        logger.warn(`[EnrollmentGuard] adb devices poll warning (attempt ${_consecutiveAdbFailures}): ${err.message} — preserving all active streams without restarting daemon`);
         resolve(null);
         return;
       }
       _consecutiveAdbFailures = 0;
       const lines = (stdout || '').split('\n').slice(1);
       const serials = [];
-      let hasOffline = false;
+      const offlineSerials = [];
       const unauthorizedSerials = [];
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
@@ -88,16 +73,24 @@ function listAdbDevices(adbBin) {
           if (parts[1] === 'device') {
             serials.push(parts[0]);
           } else if (parts[1] === 'offline') {
-            hasOffline = true;
+            offlineSerials.push(parts[0]);
           } else if (parts[1] === 'unauthorized') {
             unauthorizedSerials.push(parts[0]);
           }
         }
       }
-      if (hasOffline) {
-        try {
-          exec(`"${adbBin}" reconnect offline`, { timeout: 4000 }, () => {});
-        } catch (_) {}
+      // Reconnect ONLY specific offline devices individually (NEVER system-wide)
+      if (offlineSerials.length > 0) {
+        const now = Date.now();
+        for (const s of offlineSerials) {
+          const last = _lastUnauthReconnect.get('off_' + s) || 0;
+          if (now - last > 60000) {
+            _lastUnauthReconnect.set('off_' + s, now);
+            try {
+              exec(`"${adbBin}" -s ${s} reconnect offline`, { timeout: 4000 }, () => {});
+            } catch (_) {}
+          }
+        }
       }
       if (unauthorizedSerials.length > 0) {
         const now = Date.now();
