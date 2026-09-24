@@ -280,26 +280,10 @@ async function runRecoveryCheck(force = false) {
       continue;
     }
 
-    // Debounce removal: device must be missing across 8 consecutive scans (~120s)
-    const count = (_missingCounts.get(serial) || 0) + 1;
-    _missingCounts.set(serial, count);
-
-    if (count < 8) {
-      logger.info(`[EnrollmentGuard] Device ${serial} absent from scan (${count}/8) — holding stream alive`);
-      continue;
-    }
-
-    logger.info(`[EnrollmentGuard] Device ${serial} confirmed disconnected after ${count} scans — cleaning up`);
-    _missingCounts.delete(serial);
-    try {
-      if (_removeDeviceCallback) {
-        await _removeDeviceCallback({ id: serial });
-      } else {
-        processManager.killDeviceProcesses(serial);
-      }
-    } catch (err) {
-      logger.warn(`[EnrollmentGuard] Cleanup error for ${serial}: ${err.message}`);
-    }
+    // ZERO-KILL POLICY: Under no circumstances kill or remove physical USB devices.
+    // Holding the session alive preserves its assigned port and keeps the stream endpoint ready.
+    logger.info(`[EnrollmentGuard] Holding physical device session alive for ${serial} — zero-kill policy active`);
+    continue;
   }
 }
 

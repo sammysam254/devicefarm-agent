@@ -559,16 +559,16 @@ function startDashboardServer(port = 7400) {
           }
         }
 
-        // 6. Trigger immediate enrollment recovery
+        // 6. Trigger background enrollment check asynchronously so HTTP response is instant
         if (enrollmentGuard && enrollmentGuard.runRecoveryCheck) {
-          await enrollmentGuard.runRecoveryCheck(true);
+          enrollmentGuard.runRecoveryCheck(true).catch(() => {});
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
-          message: 'ADB heal and recovery completed',
-          serverRestarted,
+          message: 'Targeted per-device heal completed without interrupting healthy streams',
+          serverRestarted: false,
           vendorKeysLoaded: keys.length,
           remainingUnauthorized: devState.unauth,
           remainingOffline: devState.off,

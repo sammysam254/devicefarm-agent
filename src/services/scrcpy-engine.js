@@ -234,8 +234,6 @@ class ScrcpyEngine extends EventEmitter {
     this.enableAudio = !_unsupportedAudioSerials.has(serial);
     this._audioDisabled = _unsupportedAudioSerials.has(serial);
     this.audioSocket = null;
-    this._fallbackActive = false;
-    this._fallbackProc = null;
 
     // Intelligent in-place auto-healing & resilience state
     this._watchdogTimer = null;
@@ -541,61 +539,11 @@ class ScrcpyEngine extends EventEmitter {
     });
   }
 
-  _startScreenrecordFallback() {
-    if (this._fallbackActive) return;
-    this._fallbackActive = true;
-    logger.info(`[ScrcpyEngine ${this.serial}] ⚡ Activating native hardware screenrecord fallback...`);
-
-    const targetW = this.screenWidth || 720;
-    const targetH = this.screenHeight || 1280;
-
-    const args = [
-      '-s', this.serial, 'exec-out',
-      'screenrecord',
-      '--output-format=h264',
-      '--size', `${Math.min(targetW, 1080)}x${Math.min(targetH, 1920)}`,
-      '--bit-rate', '2500000',
-      '-'
-    ];
-
-    const proc = spawn(ADB_BIN, args, {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-
-    this._fallbackProc = proc;
-
-    proc.stdout.on('data', (chunk) => {
-      this._lastFrameTime = Date.now();
-      this._broadcastVideo(chunk, false);
-    });
-
-    proc.on('close', () => {
-      this._fallbackProc = null;
-      if (this.isRunning && this._fallbackActive) {
-        setTimeout(() => {
-          if (this.isRunning && this._fallbackActive) {
-            this._fallbackActive = false;
-            this._startScreenrecordFallback();
-          }
-        }, 800);
-      }
-    });
-
-    proc.on('error', (err) => {
-      logger.warn(`[ScrcpyEngine ${this.serial}] Screenrecord process error: ${err.message}`);
-    });
-  }
-
   isHealthy() {
     if (!this.isRunning) return false;
     if (this._healingInProgress) return true; // Actively healing in-place, do NOT kill device session
     // Startup grace period (30s) while scrcpy initializes
     if (this._startTime && Date.now() - this._startTime < 30000) return true;
-    // Fallback mode is healthy if fallback process is active
-    if (this._fallbackActive && this._fallbackProc && this._fallbackProc.exitCode === null) {
-      return true;
-    }
     // If video socket is active and not destroyed, and process has not exited
     if (this.videoSocket && !this.videoSocket.destroyed) {
       if (!this.serverProc || (this.serverProc.exitCode === null && !this.serverProc.killed)) {
@@ -617,19 +565,6 @@ class ScrcpyEngine extends EventEmitter {
       this._keepAwakeTimer = null;
     }
     this._screencapActive = false;
-    this._fallbackActive = false;
-    if (this._fallbackProc) {
-      const fp = this._fallbackProc;
-      this._fallbackProc = null;
-      try {
-        if (process.platform === 'win32' && fp.pid) {
-          const { exec } = require('child_process');
-          exec(`taskkill /F /T /PID ${fp.pid}`, () => {});
-        } else if (fp.pid) {
-          fp.kill('SIGKILL');
-        }
-      } catch (_) {}
-    }
     this._cleanup();
     this.wsClients.clear();
     this.emit('stopped');
@@ -1155,11 +1090,6 @@ class ScrcpyEngine extends EventEmitter {
     this._watchdogTimer = setInterval(async () => {
       if (!this.isRunning || this._healingInProgress) return;
 
-      // In hardware screenrecord fallback mode, fallbackProc handles its own lifecycle
-      if (this._fallbackActive) {
-        return;
-      }
-
       // 1. If video socket is disconnected or destroyed, auto-heal
       if (!this.videoSocket || this.videoSocket.destroyed) {
         logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Video socket missing or destroyed — auto-healing...`);
@@ -1338,21 +1268,6 @@ class ScrcpyEngine extends EventEmitter {
         throw new Error('Video socket not connected after spawn');
       }
 
-      // If fallback was active, cleanly stop it now that scrcpy stream is restored
-      if (this._fallbackProc) {
-        const fp = this._fallbackProc;
-        this._fallbackProc = null;
-        this._fallbackActive = false;
-        try {
-          if (process.platform === 'win32' && fp.pid) {
-            const { exec } = require('child_process');
-            exec(`taskkill /F /T /PID ${fp.pid}`, () => {});
-          } else if (fp.pid) {
-            fp.kill('SIGKILL');
-          }
-        } catch (_) {}
-      }
-
       this._lastFrameTime = Date.now();
       this._healAttemptCount = 0;
 
@@ -1373,12 +1288,6 @@ class ScrcpyEngine extends EventEmitter {
       return true;
     } catch (err) {
       logger.error(`[ScrcpyEngine ${this.serial}] ❌ [AutoHeal] Recovery attempt #${this._healAttemptCount} failed: ${err.message}`);
-
-      // Tier 3 Hardware Fallback: If scrcpy fails, immediately engage hardware screenrecord fallback so stream never stays offline!
-      if (this.isRunning && !this._fallbackActive) {
-        logger.info(`[ScrcpyEngine ${this.serial}] ⚡ [AutoHeal Fallback] Activating native hardware screenrecord fallback so stream stays online...`);
-        this._startScreenrecordFallback();
-      }
 
       setTimeout(() => {
         this._healingInProgress = false;
