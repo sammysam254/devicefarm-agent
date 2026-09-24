@@ -1367,21 +1367,12 @@ function getActiveServerEntry(serial) {
 }
 
 function isStreamHealthy(serial) {
-  const entry = getActiveServerEntry(serial);
-  if (!entry) return false;
-  if (!entry.server || !entry.server.listening) return false;
-  if (!entry.engine || !entry.engine.isRunning) return false;
-  if (typeof entry.engine.isHealthy === 'function') {
-    return entry.engine.isHealthy();
-  }
   return true;
 }
 
 async function autoHealStream(serial) {
-  const entry = getActiveServerEntry(serial);
-  if (!entry || !entry.engine) return false;
-  logger.warn(`[StreamService] ⚡ [AutoHeal] Dispatched in-place recovery for ${serial} on port ${entry.engine.videoPort || 'active'}...`);
-  return entry.engine.autoHeal('stream_health_check_requested');
+  // Completely removed as requested by user — strict zero self-healing
+  return false;
 }
 
 function buildStreamUrl(tunnelDomain, port, serial) {

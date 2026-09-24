@@ -388,16 +388,8 @@ function startDashboardServer(port = 7400) {
       }
 
       if (url === '/api/system/auto-heal') {
-        const targetSerial = fullUrl.searchParams.get('serial');
-        const streamService = require('../services/stream-service');
-        if (targetSerial && streamService.autoHealStream) {
-          streamService.autoHealStream(targetSerial);
-        } else if (streamService.autoHealStream) {
-          const serials = processManager.getActiveSerials();
-          for (const s of serials) streamService.autoHealStream(s);
-        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', message: `Auto-healing initiated for ${targetSerial || 'all active devices'}` }));
+        res.end(JSON.stringify({ status: 'ok', message: 'Self-healing completely disabled by policy' }));
         return;
       }
 

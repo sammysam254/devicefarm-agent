@@ -196,45 +196,13 @@ async function runRecoveryCheck(force = false) {
     unlockAllScreens(adbBin, adbSerials);
   }
 
-  // ── 1. Re-enroll physical USB devices seen by ADB but not actively streaming, or recover failed streams ──
+  // ── 1. Re-enroll physical USB devices seen by ADB but not currently provisioned (NO SELF-HEALING) ──
   for (const serial of adbSerials) {
     const session = processManager.getDevice(serial);
-    const isHealthy = streamService.isStreamHealthy(serial);
 
-    if (session && isHealthy) {
+    if (session) {
       _missingCounts.delete(serial);
-      continue; // Fully streaming and healthy ✓
-    }
-
-    if (session && !isHealthy) {
-      _missingCounts.delete(serial);
-
-      // Debounce auto-heal: allow at most once per 60 seconds per device
-      const now = Date.now();
-      const lastHeal = _lastAutoHealMap.get(serial) || 0;
-      if (now - lastHeal < 60000) {
-        continue;
-      }
-
-      // Deterministic physical state check — NO GUESSING
-      const isOnline = await isDevicePhysicallyOnline(adbBin, serial);
-      if (!isOnline) {
-        logger.info(`[EnrollmentGuard] Device ${serial} is physically offline on USB bus — preserving session and awaiting device reconnect`);
-        continue;
-      }
-      _lastAutoHealMap.set(serial, now);
-
-      logger.warn(`[EnrollmentGuard] ⚡ [AutoHeal] Stream interruption detected for ${serial} — auto-healing in-place without taking stream offline...`);
-      try {
-        if (typeof streamService.autoHealStream === 'function') {
-          streamService.autoHealStream(serial).catch(err => {
-            logger.warn(`[EnrollmentGuard] Auto-heal notice for ${serial}: ${err.message}`);
-          });
-        }
-      } catch (err) {
-        logger.warn(`[EnrollmentGuard] Auto-heal invocation error for ${serial}: ${err.message}`);
-      }
-      continue; // Session preserved on existing port, do NOT kill device or allocate new port!
+      continue; // Active session preserved — strict NO SELF-HEAL policy
     }
 
     if (!session) {
