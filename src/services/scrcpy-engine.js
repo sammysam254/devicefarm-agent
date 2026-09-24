@@ -236,6 +236,8 @@ class ScrcpyEngine extends EventEmitter {
     this._keepAwakeTimer = null;
     this._healingInProgress = false;
     this._healAttemptCount = 0;
+    this._lastHealTime = Date.now();
+    this._startTime = Date.now();
     this._lastFrameTime = Date.now();
   }
 
@@ -282,6 +284,8 @@ class ScrcpyEngine extends EventEmitter {
     if (this.isRunning) return;
     this.videoPort = videoPort;
     this.isRunning = true;
+    this._startTime = Date.now();
+    this._lastHealTime = Date.now();
 
     try {
       // 0. Force-kill any lingering scrcpy/app_process on device to release localabstract:scrcpy
@@ -398,22 +402,26 @@ class ScrcpyEngine extends EventEmitter {
     logger.info(`[ScrcpyEngine ${this.serial}] Spawning scrcpy server with args: ${args.slice(2).join(' ')}`);
 
     if (this.serverProc) {
-      const p = this.serverProc;
+      const oldProc = this.serverProc;
       this.serverProc = null;
       try {
-        if (process.platform === 'win32' && p.pid) {
+        oldProc.removeAllListeners();
+        if (oldProc.stdout) oldProc.stdout.removeAllListeners();
+        if (oldProc.stderr) oldProc.stderr.removeAllListeners();
+        if (process.platform === 'win32' && oldProc.pid) {
           const { exec } = require('child_process');
-          exec(`taskkill /F /T /PID ${p.pid}`, () => {});
-        } else if (p.pid) {
-          p.kill('SIGKILL');
+          exec(`taskkill /F /T /PID ${oldProc.pid}`, () => {});
+        } else if (oldProc.pid) {
+          oldProc.kill('SIGKILL');
         }
       } catch (_) {}
     }
 
-    this.serverProc = spawn(ADB_BIN, args, {
+    const currentProc = spawn(ADB_BIN, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    this.serverProc = currentProc;
 
     // Return a Promise that resolves when scrcpy prints its "Device:" ready line.
     // This avoids the race condition where we connect sockets before the server is ready.
@@ -487,12 +495,13 @@ class ScrcpyEngine extends EventEmitter {
     this._procStartTime = Date.now();
     this._restartPending = false;
 
-    this.serverProc.on('close', (code) => {
-      // Ignore close events triggered by our own stop() call or while already auto-healing
+    currentProc.on('close', (code) => {
+      // CRITICAL: ignore if this is an old superseded process, or engine stopped, or healing already in progress
+      if (this.serverProc !== currentProc) return;
       if (!this.isRunning || this._healingInProgress) return;
 
       const uptime = Date.now() - this._procStartTime;
-      logger.warn(`[ScrcpyEngine ${this.serial}] scrcpy proc exited (code=${code}, uptime=${uptime}ms) — auto-healing in-place...`);
+      logger.warn(`[ScrcpyEngine ${this.serial}] scrcpy proc exited (code=${code}, uptime=${uptime}ms)`);
 
       this.autoHeal('proc_exit_code_' + code);
     });
@@ -541,11 +550,15 @@ class ScrcpyEngine extends EventEmitter {
   isHealthy() {
     if (!this.isRunning) return false;
     if (this._healingInProgress) return true; // Actively healing in-place, do NOT kill device session
-    if (!this.videoSocket || this.videoSocket.destroyed) return false;
-    if (this.serverProc && (this.serverProc.killed || this.serverProc.exitCode !== null)) return false;
-    // If connected clients and no frames received for > 25 seconds
-    if (this.wsClients.size > 0 && Date.now() - this._lastFrameTime > 25000) return false;
-    return true;
+    // Startup grace period (30s) while scrcpy initializes
+    if (this._startTime && Date.now() - this._startTime < 30000) return true;
+    // If video socket is active and not destroyed, and process has not exited
+    if (this.videoSocket && !this.videoSocket.destroyed) {
+      if (!this.serverProc || (this.serverProc.exitCode === null && !this.serverProc.killed)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   stop() {
@@ -808,7 +821,9 @@ class ScrcpyEngine extends EventEmitter {
       }
     });
 
+    const currentSocket = socket;
     socket.on('close', () => {
+      if (this.videoSocket !== currentSocket) return;
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket closed`);
       this.videoSocket = null;
       if (this.isRunning && !this._healingInProgress) {
@@ -817,6 +832,7 @@ class ScrcpyEngine extends EventEmitter {
     });
 
     socket.on('error', (e) => {
+      if (this.videoSocket !== currentSocket) return;
       logger.warn(`[ScrcpyEngine ${this.serial}] Video socket error: ${e.message}`);
       this.videoSocket = null;
       if (this.isRunning && !this._healingInProgress) {
@@ -1091,13 +1107,11 @@ class ScrcpyEngine extends EventEmitter {
 
   _startEngineWatchdog() {
     if (this._watchdogTimer) clearInterval(this._watchdogTimer);
+    // Relaxed 10-second check to let stream run smoothly without false alarms
     this._watchdogTimer = setInterval(async () => {
       if (!this.isRunning || this._healingInProgress) return;
 
-      const now = Date.now();
-      const stallDuration = now - this._lastFrameTime;
-
-      // 1. If video socket is disconnected or destroyed, auto-heal immediately
+      // 1. If video socket is disconnected or destroyed, auto-heal
       if (!this.videoSocket || this.videoSocket.destroyed) {
         logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Video socket missing or destroyed — auto-healing...`);
         this.autoHeal('watchdog_video_socket_missing');
@@ -1111,28 +1125,20 @@ class ScrcpyEngine extends EventEmitter {
         return;
       }
 
-      // 3. Stalled video pipeline detection
-      // If clients are watching and no frame arrived for > 12s, or idle for > 45s:
-      if (this.wsClients.size > 0 && stallDuration > 12000) {
-        logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Video stall detected (${Math.round(stallDuration / 1000)}s with active viewers) — attempting wake & unfreeze...`);
+      // 3. Gentle nudge if active viewers and idle for > 20s (DO NOT restart scrcpy on static screen)
+      const now = Date.now();
+      const stallDuration = now - this._lastFrameTime;
+      if (this.wsClients.size > 0 && stallDuration > 20000) {
         try {
           await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {});
-          await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});
         } catch (_) {}
-
-        // If stall continues beyond 18 seconds, perform full in-place auto-heal
-        if (stallDuration > 18000) {
-          logger.warn(`[ScrcpyEngine ${this.serial}] [AutoHeal] Stream did not unfreeze — initiating in-place auto-heal...`);
-          this.autoHeal('watchdog_frame_pipeline_stalled');
-          return;
-        }
       }
 
       // 4. Control socket auto-reconnection
       if (!this.controlSocket || this.controlSocket.destroyed) {
         this._reconnectControl();
       }
-    }, 2500);
+    }, 10000);
   }
 
   _startKeepAwakeLoop() {
@@ -1165,35 +1171,55 @@ class ScrcpyEngine extends EventEmitter {
 
   async autoHeal(reason = 'watchdog') {
     if (!this.isRunning) return false;
-    if (this._healingInProgress) {
+    if (this._healingInProgress) return false;
+
+    // Strict 45-second cooldown to completely prevent healing loops
+    const now = Date.now();
+    if (now - this._lastHealTime < 45000) {
       return false;
     }
+    this._lastHealTime = now;
     this._healingInProgress = true;
     this._healAttemptCount++;
 
     logger.warn(`[ScrcpyEngine ${this.serial}] ⚡ [AutoHeal] Initiating in-place stream recovery #${this._healAttemptCount} (${reason}) — preserving stream server & keeping viewers connected...`);
 
-    // Notify connected browser clients that stream is auto-healing so they don't panic or disconnect
+    // Notify connected browser clients that stream is auto-healing
     this._broadcastControlMessage({ type: 'stream_healing', reason, attempt: this._healAttemptCount });
 
     try {
-      // 1. Gently cleanup local sockets and previous process without affecting wsClients
+      // 1. Gently cleanup local sockets and previous process with listener removal to avoid re-triggering close handlers
       if (this.videoSocket) {
-        try { this.videoSocket.destroy(); } catch (_) {}
+        const s = this.videoSocket;
         this.videoSocket = null;
+        try {
+          s.removeAllListeners();
+          s.destroy();
+        } catch (_) {}
       }
       if (this.controlSocket) {
-        try { this.controlSocket.destroy(); } catch (_) {}
+        const cs = this.controlSocket;
         this.controlSocket = null;
+        try {
+          cs.removeAllListeners();
+          cs.destroy();
+        } catch (_) {}
       }
       if (this.audioSocket) {
-        try { this.audioSocket.destroy(); } catch (_) {}
+        const as = this.audioSocket;
         this.audioSocket = null;
+        try {
+          as.removeAllListeners();
+          as.destroy();
+        } catch (_) {}
       }
       if (this.serverProc) {
         const p = this.serverProc;
         this.serverProc = null;
         try {
+          p.removeAllListeners();
+          if (p.stdout) p.stdout.removeAllListeners();
+          if (p.stderr) p.stderr.removeAllListeners();
           if (process.platform === 'win32' && p.pid) {
             const { exec } = require('child_process');
             exec(`taskkill /F /T /PID ${p.pid}`, () => {});
@@ -1235,15 +1261,18 @@ class ScrcpyEngine extends EventEmitter {
       this._broadcastControlMessage({ type: 'stream_reset' });
 
       logger.info(`[ScrcpyEngine ${this.serial}] ✅ [AutoHeal] Stream successfully auto-healed on port ${this.videoPort} — 100% online`);
-      this._healingInProgress = false;
-      return true;
-    } catch (err) {
-      logger.error(`[ScrcpyEngine ${this.serial}] ❌ [AutoHeal] Recovery attempt #${this._healAttemptCount} failed: ${err.message} — scheduling automatic retry in 2.5s`);
-      const delay = Math.min(2500 * Math.min(this._healAttemptCount, 3), 8000);
+
+      // Hold healing lock for 4 seconds after successful reconnect to swallow any trailing OS exit events
       setTimeout(() => {
         this._healingInProgress = false;
-        if (this.isRunning) this.autoHeal('retry_after_failure');
-      }, delay);
+      }, 4000);
+
+      return true;
+    } catch (err) {
+      logger.error(`[ScrcpyEngine ${this.serial}] ❌ [AutoHeal] Recovery attempt #${this._healAttemptCount} failed: ${err.message}`);
+      setTimeout(() => {
+        this._healingInProgress = false;
+      }, 10000);
       return false;
     }
   }

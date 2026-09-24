@@ -1352,8 +1352,27 @@ async function startStreamServer(serial, port) {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
+function getActiveServerEntry(serial) {
+  if (activeServers.has(serial)) {
+    return activeServers.get(serial);
+  }
+  try {
+    const pm = require('../main/process-manager');
+    const dev = pm.getDevice(serial);
+    if (dev) {
+      if (dev.adbSerial && activeServers.has(dev.adbSerial)) {
+        return activeServers.get(dev.adbSerial);
+      }
+      if (dev.hardwareSerial && activeServers.has(dev.hardwareSerial)) {
+        return activeServers.get(dev.hardwareSerial);
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 function isStreamHealthy(serial) {
-  const entry = activeServers.get(serial);
+  const entry = getActiveServerEntry(serial);
   if (!entry) return false;
   if (!entry.server || !entry.server.listening) return false;
   if (!entry.engine || !entry.engine.isRunning) return false;
@@ -1364,7 +1383,7 @@ function isStreamHealthy(serial) {
 }
 
 async function autoHealStream(serial) {
-  const entry = activeServers.get(serial);
+  const entry = getActiveServerEntry(serial);
   if (!entry || !entry.engine) return false;
   logger.warn(`[StreamService] ⚡ [AutoHeal] Dispatched in-place recovery for ${serial} on port ${entry.engine.videoPort || 'active'}...`);
   return entry.engine.autoHeal('stream_health_check_requested');

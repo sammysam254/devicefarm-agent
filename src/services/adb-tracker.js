@@ -49,7 +49,7 @@ let tracker = null;
 const recentRemovals = new Map();
 const DEBOUNCE_MS = 3000;
 const pendingRemovals = new Map();
-const REMOVAL_GRACE_PERIOD_MS = 10000;
+const REMOVAL_GRACE_PERIOD_MS = 60000;
 
 // ─── Device Add ───────────────────────────────────────────────────────────────
 

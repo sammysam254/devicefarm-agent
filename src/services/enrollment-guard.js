@@ -125,6 +125,7 @@ let _intervalTimer = null;
 const _inProgress = new Set();
 const _lastUnauthReconnect = new Map();
 const _missingCounts = new Map();
+const _lastAutoHealMap = new Map();
 
 /**
  * Start the recovery polling loop.
@@ -187,6 +188,15 @@ async function runRecoveryCheck(force = false) {
 
     if (session && !isHealthy) {
       _missingCounts.delete(serial);
+
+      // Debounce auto-heal: allow at most once per 60 seconds per device
+      const now = Date.now();
+      const lastHeal = _lastAutoHealMap.get(serial) || 0;
+      if (now - lastHeal < 60000) {
+        continue;
+      }
+      _lastAutoHealMap.set(serial, now);
+
       logger.warn(`[EnrollmentGuard] ⚡ [AutoHeal] Stream interruption detected for ${serial} — auto-healing in-place without taking stream offline...`);
       try {
         if (typeof streamService.autoHealStream === 'function') {
@@ -243,12 +253,12 @@ async function runRecoveryCheck(force = false) {
       continue;
     }
 
-    // Debounce removal: device must be missing across 4 consecutive scans (~60s)
+    // Debounce removal: device must be missing across 8 consecutive scans (~120s)
     const count = (_missingCounts.get(serial) || 0) + 1;
     _missingCounts.set(serial, count);
 
-    if (count < 4) {
-      logger.info(`[EnrollmentGuard] Device ${serial} absent from scan (${count}/4) — holding stream alive`);
+    if (count < 8) {
+      logger.info(`[EnrollmentGuard] Device ${serial} absent from scan (${count}/8) — holding stream alive`);
       continue;
     }
 
