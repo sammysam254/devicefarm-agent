@@ -179,7 +179,12 @@ function handleControl(type, data, serial, engine) {
   } else if (type === 'expand_notifications' || type === 'notifications') {
     exec(`"${ADB_BIN}" -s ${serial} shell cmd statusbar expand`);
   } else if (type === 'wake' || type === 'refresh') {
-    try { adbInput(serial, 'input keyevent 224'); } catch (_) {}
+    if (ctrlOk()) {
+      engine.sendKeycode(0, 224);
+      setTimeout(() => engine.sendKeycode(1, 224), 50);
+    } else {
+      try { adbInput(serial, 'input keyevent 224'); } catch (_) {}
+    }
   }
 }
 
@@ -576,20 +581,29 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
   }
 
-  function isH264Keyframe(u8) {
-    for (let i = 0; i < Math.min(u8.length - 4, 256); i++) {
+  let cachedSpsPps = null;
+
+  function parseH264Nals(u8) {
+    let hasIdr = false;
+    let hasSps = false;
+    let hasPps = false;
+    let hasSlice = false;
+    const len = u8.length;
+    for (let i = 0; i < len - 4; i++) {
       if (u8[i] === 0 && u8[i+1] === 0) {
         let ntype = -1;
-        if (u8[i+2] === 1 && i + 3 < u8.length) {
+        if (u8[i+2] === 1) {
           ntype = u8[i+3] & 0x1f;
-        } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < u8.length) {
+        } else if (u8[i+2] === 0 && u8[i+3] === 1 && i + 4 < len) {
           ntype = u8[i+4] & 0x1f;
         }
-        // WebCodecs key/config types: NAL 5 (IDR keyframe), NAL 7 (SPS), NAL 8 (PPS)
-        if (ntype === 5 || ntype === 7 || ntype === 8) return true;
+        if (ntype === 5) hasIdr = true;
+        if (ntype === 7) hasSps = true;
+        if (ntype === 8) hasPps = true;
+        if (ntype === 1 || ntype === 5) hasSlice = true;
       }
     }
-    return false;
+    return { hasIdr, hasSps, hasPps, hasSlice };
   }
 
   // ── WebSocket connection ─────────────────────────────────────────────────
@@ -597,29 +611,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   let wsFailCount = 0;
   let wsRetryTimer = null;
   let lastFrameReceivedTime = 0;
-
-  // Fallback watchdog: only fires if WS is connected but no frames arrive for >15s.
-  // 15s gives scrcpy time to start up before we fall back to HTTP screencap.
-  setInterval(function() {
-    if (!wsOk) return;
-    if (lastFrameReceivedTime === 0) return;
-    if (Date.now() - lastFrameReceivedTime > 15000 && !fbRunning) {
-      console.warn('[Watchdog] No frames for 15s — starting HTTP fallback');
-      startFallback();
-    }
-  }, 1000);
-
-  // Separate first-frame watchdog — if WS is open but no frame ever arrives in 12s, fallback
-  let firstFrameTimer = null;
-  function startFirstFrameWatchdog() {
-    if (firstFrameTimer) clearTimeout(firstFrameTimer);
-    firstFrameTimer = setTimeout(function() {
-      if (wsOk && lastFrameReceivedTime === 0 && !fbRunning) {
-        console.warn('[Watchdog] No first frame within 12s — starting HTTP fallback');
-        startFallback();
-      }
-    }, 12000);
-  }
+  let lastWakeSentTime = 0;
 
   function connectWS() {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
@@ -717,47 +709,59 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
       // 3. Raw H264 NAL stream via WebCodecs
       if (!decoderReady || !decoder || decoder.state === 'closed') {
-        if (!initDecoder()) {
-          startFallback();
+        if (!initDecoder()) return;
+      }
+
+      const nals = parseH264Nals(u8);
+
+      // Cache SPS/PPS parameter sets
+      if (nals.hasSps || nals.hasPps) {
+        cachedSpsPps = u8;
+        // If packet contains ONLY parameter sets without slice data, do NOT feed to decoder as a frame
+        if (!nals.hasSlice) {
           return;
         }
       }
 
-      const key = isH264Keyframe(u8);
-      if (key) hasKeyframe = true;
-      if (!hasKeyframe) return; // Wait for initial keyframe/config (SPS/PPS)
+      let chunkData = u8;
+      if (nals.hasIdr) {
+        hasKeyframe = true;
+        // If IDR slice doesn't have SPS/PPS prepended, merge our cached SPS/PPS
+        if (cachedSpsPps && !nals.hasSps) {
+          const merged = new Uint8Array(cachedSpsPps.length + u8.length);
+          merged.set(cachedSpsPps, 0);
+          merged.set(u8, cachedSpsPps.length);
+          chunkData = merged;
+        }
+      }
 
-
+      // If we haven't seen an IDR keyframe yet, ask for one and wait
+      if (!hasKeyframe) {
+        const now = Date.now();
+        if (now - lastWakeSentTime > 2000) {
+          lastWakeSentTime = now;
+          send({ type: 'wake' });
+        }
+        return;
+      }
 
       try {
         const chunk = new EncodedVideoChunk({
-          type: key ? 'key' : 'delta',
+          type: nals.hasIdr ? 'key' : 'delta',
           timestamp: performance.now() * 1000,
-          data: u8
+          data: chunkData
         });
         decoder.decode(chunk);
       } catch (err) {
-        hasKeyframe = false;
         console.warn('[Stream] H264 chunk decode error:', err);
-        send({ type: 'wake' });
       }
     };
-
-    if (window._wakeInterval) clearInterval(window._wakeInterval);
-    // Auto-nudge Android screen compositor if frame updates stall
-    window._wakeInterval = setInterval(function() {
-      if (wsOk && (lastFrameReceivedTime > 0 && Date.now() - lastFrameReceivedTime > 2500)) {
-        send({ type: 'wake' });
-      }
-    }, 2000);
 
     ws.onerror = function() {};
 
     ws.onclose = function() {
-      if (window._wakeInterval) { clearInterval(window._wakeInterval); window._wakeInterval = null; }
       wsOk = false;
       wsFailCount++;
-      if (wsFailCount >= 15 && !fbRunning) startFallback();
       const delay = wsFailCount < 5 ? 500 : 1000;
       wsRetryTimer = setTimeout(connectWS, delay);
     };
@@ -1300,23 +1304,14 @@ async function startStreamServer(serial, port) {
     logger.info(`[StreamServer] WS connected for ${serial}`);
     engine.addClient(ws);
 
-    const licCheckTimer = setInterval(async () => {
-      const currentLic = await licenseService.checkLicenseStatus(bindingCode);
-      if (!currentLic.isActive) {
-        engine.removeClient(ws);
-        ws.close(4003, 'License Revoked');
-        clearInterval(licCheckTimer);
-      }
-    }, 60000);
-
     ws.on('message', (msg) => {
       try {
         const data = JSON.parse(msg.toString());
         handleControl(data.type, data, serial, engine);
       } catch (_) {}
     });
-    ws.on('close', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
-    ws.on('error', () => { engine.removeClient(ws); clearInterval(licCheckTimer); });
+    ws.on('close', () => { engine.removeClient(ws); });
+    ws.on('error', () => { engine.removeClient(ws); });
   });
 
   return new Promise((resolve, reject) => {

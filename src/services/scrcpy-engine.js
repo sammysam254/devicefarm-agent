@@ -52,6 +52,20 @@ function hasSpsNal(buf) {
   return false;
 }
 
+function hasIdrNal(buf) {
+  if (!buf || buf.length < 4) return false;
+  for (let i = 0; i < Math.min(buf.length - 4, 128); i++) {
+    if (buf[i] === 0 && buf[i+1] === 0) {
+      if (buf[i+2] === 1 && i + 3 < buf.length) {
+        if ((buf[i+3] & 0x1f) === 5) return true;
+      } else if (buf[i+2] === 0 && buf[i+3] === 1 && i + 4 < buf.length) {
+        if ((buf[i+4] & 0x1f) === 5) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Extract the encoded frame dimensions directly from an H.264 SPS NAL unit.
  * This is the ground truth — the exact size the scrcpy encoder configured,
@@ -753,9 +767,8 @@ class ScrcpyEngine extends EventEmitter {
         const payload  = buf.subarray(META, META + pktSize);
         buf = buf.subarray(META + pktSize);
 
-        const nalType = payload.length > 4 ? (payload[4] & 0x1f) : -1;
         const isSps = hasSpsNal(payload);
-        const isIdr = nalType === 5;
+        const isIdr = hasIdrNal(payload);
         const isConfig = isSps || (ptsHigh & 0x80000000) !== 0;
         const isKeyframe = isConfig || isIdr || isSps;
 
@@ -783,7 +796,7 @@ class ScrcpyEngine extends EventEmitter {
         }
 
         if (isIdr) {
-          if (this._configPacket) {
+          if (this._configPacket && !hasSpsNal(payload)) {
             this._keyframeBuffer = Buffer.concat([this._configPacket, payload]);
           } else {
             this._keyframeBuffer = Buffer.from(payload);
@@ -1122,23 +1135,16 @@ class ScrcpyEngine extends EventEmitter {
 
   _startKeepAwakeLoop() {
     if (this._keepAwakeTimer) clearInterval(this._keepAwakeTimer);
-    // Keep Android display permanently awake, unlocked, and prevent screen-off
+    // Keep Android display permanently awake and unlocked without causing ADB process storms
     const applyWakeAndUnlock = async () => {
       if (!this.isRunning) return;
       try {
-        await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
-        await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
-        await this._adb(['shell', 'settings', 'put', 'system', 'screen_off_timeout', '2147483647']).catch(() => {});
-        await this._adb(['shell', 'settings', 'put', 'secure', 'lockscreen.disabled', '1']).catch(() => {});
-        // Every minute: wake up display and dismiss lockscreen
-        await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // KEYCODE_WAKEUP
-        await this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});  // Dismiss keyguard
+        await this._adb(['shell', 'input keyevent 224 && wm dismiss-keyguard']).catch(() => {});
       } catch (_) {}
     };
 
-    applyWakeAndUnlock();
-    // Run exactly every 60 seconds (1 minute) to ensure devices always stay up and unlocked
-    this._keepAwakeTimer = setInterval(applyWakeAndUnlock, 60000);
+    // Run every 5 minutes (300,000ms) - initial setup was already completed in start()
+    this._keepAwakeTimer = setInterval(applyWakeAndUnlock, 300000);
   }
 
   _broadcastControlMessage(msgObj) {

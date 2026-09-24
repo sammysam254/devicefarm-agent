@@ -189,9 +189,9 @@ async function runRecoveryCheck(force = false) {
   const activeSerials = new Set(processManager.getActiveSerials());
   const streamService = require('./stream-service');
 
-  // ── Periodic Keep-Alive: ensure all connected phone screens stay awake & unlocked every 60 seconds ──
+  // ── Periodic Keep-Alive: ensure all connected phone screens stay awake & unlocked every 5 minutes ──
   const nowScan = Date.now();
-  if (nowScan - _lastPeriodicUnlockTime >= 60000) {
+  if (nowScan - _lastPeriodicUnlockTime >= 300000) {
     _lastPeriodicUnlockTime = nowScan;
     unlockAllScreens(adbBin, adbSerials);
   }
