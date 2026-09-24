@@ -256,10 +256,10 @@ class ScrcpyEngine extends EventEmitter {
     if (initialPacket && ws.readyState === 1) {
       try { ws.send(initialPacket, { binary: true }); } catch (_) {}
     }
-    // Nudge Android window compositor with WAKEUP (224) and MENU (82) to dismiss lockscreen and produce fresh frames
+    // Nudge Android window compositor with WAKEUP (224) and dismiss-keyguard
     try {
       this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {});
-      this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});
+      this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});
       this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
     } catch (_) {}
   }
@@ -288,10 +288,9 @@ class ScrcpyEngine extends EventEmitter {
     this._lastHealTime = Date.now();
 
     try {
-      // 0. Force-kill any lingering scrcpy/app_process on device to release localabstract:scrcpy
+      // 0. Clean port forward
       try {
-        await this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
-        await new Promise(r => setTimeout(r, 200));
+        await this._adb(['forward', '--remove', `tcp:${this.videoPort}`]).catch(() => {});
       } catch (_) {}
 
       // Wake display, keep screen on, and unlock so hardware H.264 encoder never feeds black frames
@@ -299,7 +298,7 @@ class ScrcpyEngine extends EventEmitter {
         await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
         await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
         await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // KEYCODE_WAKEUP
-        await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});  // KEYCODE_MENU
+        await this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});  // Dismiss keyguard
       } catch (_) {}
 
       // 1. Fetch real screen dimensions
@@ -354,9 +353,6 @@ class ScrcpyEngine extends EventEmitter {
 
     } catch (err) {
       logger.warn(`[ScrcpyEngine ${this.serial}] Scrcpy start failed: ${err.message} — scheduling auto-healing`);
-      try {
-        await this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
-      } catch (_) {}
       if (this.isRunning && !this._healingInProgress) {
         setTimeout(() => this.autoHeal('initial_start_retry'), 2500);
       }
@@ -387,7 +383,7 @@ class ScrcpyEngine extends EventEmitter {
       'audio_codec=opus',
       'audio_bit_rate=128000',
       'control=true',
-      'cleanup=false',
+      'cleanup=true',
       'send_dummy_byte=true',
       'video_source=display',
       `video_bit_rate=${bitRate}`,
@@ -479,8 +475,8 @@ class ScrcpyEngine extends EventEmitter {
           done();
         }
         if (msg.includes('Address already in use')) {
-          logger.warn(`[ScrcpyEngine ${this.serial}] Socket conflict on device — force-killing zombie scrcpy server`);
-          this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
+          logger.warn(`[ScrcpyEngine ${this.serial}] Socket conflict on device — releasing port forward`);
+          this._adb(['forward', '--remove', `tcp:${this.videoPort}`]).catch(() => {});
         }
       });
 
@@ -1154,7 +1150,6 @@ class ScrcpyEngine extends EventEmitter {
         // Every minute: wake up display and dismiss lockscreen
         await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // KEYCODE_WAKEUP
         await this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});  // Dismiss keyguard
-        await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});   // KEYCODE_MENU
       } catch (_) {}
     };
 
@@ -1248,14 +1243,12 @@ class ScrcpyEngine extends EventEmitter {
         } catch (_) {}
       }
 
-      // 2. Clear remote zombie scrcpy on phone and ensure screen is awake
+      // 2. Ensure screen stays awake and unlocked (NEVER run pkill which restarts system server)
       try {
-        await this._adb(['shell', 'pkill', '-9', '-f', 'com.genymobile.scrcpy']).catch(() => {});
-        await new Promise(r => setTimeout(r, 200));
         await this._adb(['shell', 'svc', 'power', 'stayon', 'true']).catch(() => {});
         await this._adb(['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '3']).catch(() => {});
-        await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // WAKEUP
-        await this._adb(['shell', 'input', 'keyevent', '82']).catch(() => {});  // MENU / UNLOCK
+        await this._adb(['shell', 'input', 'keyevent', '224']).catch(() => {}); // KEYCODE_WAKEUP (screen ON)
+        await this._adb(['shell', 'wm', 'dismiss-keyguard']).catch(() => {});  // Dismiss keyguard
       } catch (_) {}
 
       // 3. Reset ADB port forward
@@ -1265,19 +1258,25 @@ class ScrcpyEngine extends EventEmitter {
       // 4. Ensure jar is pushed
       await this._pushServerJar();
 
+      // Reset cached config & keyframe BEFORE spawning new server so fresh stream starts clean
+      this._configPacket = null;
+      this._keyframeBuffer = null;
+
       // 5. Spawn fresh scrcpy server
       this._spawnServer();
 
       // 6. Connect video and control sockets
       await this._connectSockets();
 
-      // 7. Reset keyframe buffer and notify clients to re-init decoders
-      this._configPacket = null;
-      this._keyframeBuffer = null;
       this._lastFrameTime = Date.now();
       this._healAttemptCount = 0;
 
+      // 7. Notify clients to reset decoder AND immediately dispatch cached keyframe/config packet
       this._broadcastControlMessage({ type: 'stream_reset' });
+      const initialFrame = this._keyframeBuffer || this._configPacket;
+      if (initialFrame) {
+        this._broadcastVideo(initialFrame, true);
+      }
 
       logger.info(`[ScrcpyEngine ${this.serial}] ✅ [AutoHeal] Stream successfully auto-healed on port ${this.videoPort} — 100% online`);
 

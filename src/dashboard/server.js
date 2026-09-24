@@ -405,7 +405,7 @@ function startDashboardServer(port = 7400) {
         const adbBin = resolveAdb();
         const { exec } = require('child_process');
         const serials = processManager.getActiveSerials();
-        const cmd = 'svc power stayon true && settings put global stay_on_while_plugged_in 3 && settings put system screen_off_timeout 2147483647 && input keyevent 224 && wm dismiss-keyguard && input keyevent 82';
+        const cmd = 'svc power stayon true && settings put global stay_on_while_plugged_in 3 && settings put system screen_off_timeout 2147483647 && input keyevent 224 && wm dismiss-keyguard';
         for (const s of serials) {
           try {
             exec(`"${adbBin}" -s ${s} shell "${cmd}"`, { timeout: 4000 }, () => {});
