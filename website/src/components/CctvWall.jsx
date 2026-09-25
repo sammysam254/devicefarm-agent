@@ -15,7 +15,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       const { data: dData } = await supabase
         .from('devices')
         .select('*')
-        .order('updated_at', { ascending: false });
+        .order('serial', { ascending: true });
 
       const activeOnlineDevices = (dData || []).filter(d => {
         if (d.is_deleted_from_view) return false;
@@ -209,10 +209,11 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
                   {streamUrl && !isFocused ? (
                     <iframe 
+                      key={`stream-${d.serial}`}
                       src={streamUrl} 
                       style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} 
                       title={d.serial} 
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="origin"
                       allow="autoplay; fullscreen"
                     />
                   ) : isFocused ? (

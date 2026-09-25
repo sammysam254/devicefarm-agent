@@ -1,6 +1,18 @@
 'use strict';
 
-const { app, Tray, Menu, nativeImage, shell, dialog } = require('electron');
+let electronModule = null;
+try {
+  electronModule = require('electron');
+} catch (_) {}
+
+const isElectron = Boolean(electronModule && typeof electronModule !== 'string' && electronModule.app);
+const app = isElectron ? electronModule.app : null;
+const Tray = isElectron ? electronModule.Tray : null;
+const Menu = isElectron ? electronModule.Menu : null;
+const nativeImage = isElectron ? electronModule.nativeImage : null;
+const shell = isElectron ? electronModule.shell : null;
+const dialog = isElectron ? electronModule.dialog : null;
+
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
@@ -18,11 +30,13 @@ const { startDashboardServer, openInChrome, stopDashboardServer, getDashboardUrl
 //  Single Instance Guard
 // ──────────────────────────────────────────────────────────
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  logger.info('[SingleInstance] DeviceFarm Agent is ALREADY running. Preserving active streams.');
-  app.quit();
-  process.exit(0);
+if (app) {
+  const gotLock = app.requestSingleInstanceLock();
+  if (!gotLock) {
+    logger.info('[SingleInstance] DeviceFarm Agent is ALREADY running. Preserving active streams.');
+    app.quit();
+    process.exit(0);
+  }
 }
 
 // ──────────────────────────────────────────────────────────
@@ -235,8 +249,9 @@ async function gracefulShutdown() {
     logger.error('Error during shutdown', { error: err.message });
   }
 
-  logger.info('Shutdown complete. Exiting process.');
-  app.quit();
+  if (app) {
+    app.quit();
+  }
   process.exit(0);
 }
 
@@ -244,9 +259,11 @@ async function gracefulShutdown() {
 //  App Lifecycle Listeners
 // ──────────────────────────────────────────────────────────
 
-app.on('window-all-closed', (e) => {
-  e.preventDefault();
-});
+if (app) {
+  app.on('window-all-closed', (e) => {
+    e.preventDefault();
+  });
+}
 
 process.on('uncaughtException', (err) => {
   if (err && (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ETIMEDOUT' || err.message?.includes('ECONNRESET') || err.message?.includes('EPIPE'))) {
@@ -269,31 +286,32 @@ process.on('SIGTERM', () => {
 });
 
 // ──────────────────────────────────────────────────────────
-//  Main Entry — app.whenReady()
+//  Main Entry — startAgentMain()
 // ──────────────────────────────────────────────────────────
 
-app.whenReady().then(async () => {
+async function startAgentMain() {
   logger.info('====================================');
   logger.info('  DeviceFarm Agent starting...');
   logger.info(`  PID: ${process.pid}`);
   logger.info(`  Platform: ${process.platform}`);
-  logger.info(`  Electron: ${process.versions.electron}`);
+  logger.info(`  Mode: ${isElectron ? 'Electron' : 'Headless Node.js'}`);
   logger.info(`  Node: ${process.versions.node}`);
   logger.info('====================================');
 
   await runStartupChecks();
 
-  // Safely initialize System Tray with resized icon
-  const iconPath = getIconPath();
-  try {
-    const rawImg = nativeImage.createFromPath(iconPath);
-    const trayImg = rawImg.isEmpty() ? rawImg : rawImg.resize({ width: 16, height: 16 });
-    tray = new Tray(trayImg);
-    tray.setToolTip('DeviceFarm Agent — Operational');
-    tray.setContextMenu(buildTrayMenu());
-    logger.info('System tray initialized');
-  } catch (e) {
-    logger.warn('Tray icon init warning:', e.message);
+  if (isElectron && Tray) {
+    const iconPath = getIconPath();
+    try {
+      const rawImg = nativeImage.createFromPath(iconPath);
+      const trayImg = rawImg.isEmpty() ? rawImg : rawImg.resize({ width: 16, height: 16 });
+      tray = new Tray(trayImg);
+      tray.setToolTip('DeviceFarm Agent — Operational');
+      tray.setContextMenu(buildTrayMenu());
+      logger.info('System tray initialized');
+    } catch (e) {
+      logger.warn('Tray icon init warning:', e.message);
+    }
   }
 
   // 1. Immediately start Dashboard Server on port 7400 so local UI and Cloudflare tunnel respond instantly
@@ -312,7 +330,9 @@ app.whenReady().then(async () => {
   adbTracker.startTracking().catch(err => logger.error('ADB tracker error:', err));
   apiClient.startHeartbeat(() => processManager.getActiveSerials());
   autoSync.startAutoSync(30 * 60 * 1000);
-  startTrayRefreshInterval();
+  if (isElectron) {
+    startTrayRefreshInterval();
+  }
 
   // Initialize Real-time System Log Relay for admin monitoring
   try {
@@ -331,7 +351,7 @@ app.whenReady().then(async () => {
 
   // Initialize Wake-on-LAN listener
   try {
-    const supabaseUrl = process.env.SUPABASE_URL || 'https://vrmzfgfxrycbrtqfygit.supabase.co';
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://lazdyihryfvrlczczvxz.supabase.co';
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
     if (supabaseUrl && supabaseKey) {
       wolService.startWolRemoteListener(supabaseUrl, supabaseKey);
@@ -348,6 +368,14 @@ app.whenReady().then(async () => {
     logger.warn('Named tunnel supervisor notice:', e.message);
   }
 
-  setTimeout(() => refreshTrayMenu(), 3000);
+  if (isElectron) {
+    setTimeout(() => refreshTrayMenu(), 3000);
+  }
   logger.info('DeviceFarm Agent is fully operational');
-});
+}
+
+if (isElectron && app) {
+  app.whenReady().then(startAgentMain);
+} else {
+  startAgentMain();
+}

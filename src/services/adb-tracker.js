@@ -297,6 +297,7 @@ async function startTracking() {
   try {
     const devices = await client.listDevices();
     logger.info(`Initial ADB scan: ${devices.length} device(s)`);
+    const validDevices = [];
     for (const d of devices) {
       if (d.id && d.id.includes(':')) {
         logger.info(`[ADB] Disconnecting wireless ADB device ${d.id} — strict USB debugging only`);
@@ -307,9 +308,8 @@ async function startTracking() {
         } catch (_) {}
         continue;
       }
-
       if (d.type === 'device') {
-        await handleDeviceAdd(d);
+        validDevices.push(d);
       } else if (d.type === 'unauthorized') {
         logger.warn(`Device ${d.id} is UNAUTHORIZED — prompting reconnect with host authorization keys...`);
         safeReconnect(d.id);
@@ -319,6 +319,12 @@ async function startTracking() {
       } else {
         logger.info(`Device ${d.id} skipped (type: ${d.type})`);
       }
+    }
+    // Launch stream servers and sync devices concurrently for instant availability
+    if (validDevices.length > 0) {
+      logger.info(`[ADB] Provisioning ${validDevices.length} USB device(s) concurrently...`);
+      await Promise.allSettled(validDevices.map(d => handleDeviceAdd(d)));
+      logger.info(`[ADB] Initial device provisioning complete`);
     }
   } catch (err) {
     logger.error(`Initial ADB scan failed: ${err.message}`);
@@ -404,28 +410,31 @@ function startCloudHeartbeat() {
       }
 
       // Reconcile with Supabase: mark any devices for this binding code that are NOT active as offline
-      try {
-        const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
-        if (client) {
-          const res = await client.get(`/devices?binding_code=eq.${encodeURIComponent(defaultBinding)}&status=eq.online&select=serial`);
-          if (res.data && Array.isArray(res.data)) {
-            for (const row of res.data) {
-              if (row.serial && !activeSerials.has(row.serial)) {
-                logger.info(`[Heartbeat] Device ${row.serial} no longer attached on USB — marking offline in cloud`);
-                await licenseService.markDeviceOffline(row.serial);
+      // ONLY run reconciliation when activeSerials has verified devices to prevent wiping records during startup
+      if (activeSerials.size > 0) {
+        try {
+          const client = licenseService.getSupabaseClient ? licenseService.getSupabaseClient() : null;
+          if (client) {
+            const res = await client.get(`/devices?binding_code=eq.${encodeURIComponent(defaultBinding)}&status=eq.online&select=serial`);
+            if (res.data && Array.isArray(res.data)) {
+              for (const row of res.data) {
+                if (row.serial && !activeSerials.has(row.serial)) {
+                  logger.info(`[Heartbeat] Device ${row.serial} no longer attached on USB — marking offline in cloud`);
+                  await licenseService.markDeviceOffline(row.serial);
+                }
               }
             }
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     } catch (_) {}
   };
 
   // Immediate sync on start
   performSync();
 
-  // Periodic heartbeat every 5 minutes (event-driven syncs handle plug/unplug)
-  cloudHeartbeatTimer = setInterval(performSync, 300000);
+  // Periodic heartbeat every 30 seconds (down from 5 minutes)
+  cloudHeartbeatTimer = setInterval(performSync, 30000);
 }
 
 function stopCloudHeartbeat() {

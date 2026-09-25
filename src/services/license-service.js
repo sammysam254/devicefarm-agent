@@ -221,8 +221,8 @@ async function syncDeviceToCloud(params) {
 
   const syncSignature = `${serial}:${model || ''}:${brand || ''}:${streamUrl || ''}:${localUrl || ''}:${port || ''}:${bindingCode || ''}:${status || ''}`;
   const lastState = lastDeviceSyncState.get(serial);
-  // Skip redundant cloud sync if device state hasn't changed and synced in the last 15 minutes
-  if (lastState && lastState.signature === syncSignature && (Date.now() - lastState.at < 15 * 60 * 1000)) {
+  // Debounce rapid identical cloud sync calls within 3 seconds
+  if (lastState && lastState.signature === syncSignature && (Date.now() - lastState.at < 3000)) {
     return;
   }
 

@@ -39,12 +39,13 @@ function preLaunchCleanup() {
   } catch (_) {}
 }
 
-function getElectronPath() {
+function getLaunchTarget() {
   const localElectron = path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron.exe');
+  const mainScript = path.join(rootDir, 'src', 'main', 'index.js');
   if (fs.existsSync(localElectron)) {
-    return localElectron;
+    return { bin: localElectron, args: [mainScript, '--hidden'] };
   }
-  return 'electron';
+  return { bin: process.execPath, args: [mainScript] };
 }
 
 function startAgent() {
@@ -52,13 +53,10 @@ function startAgent() {
 
   preLaunchCleanup();
 
-  const electronExe = getElectronPath();
-  const mainScript = path.join(rootDir, 'src', 'main', 'index.js');
-
-  const args = [mainScript, '--hidden'];
+  const target = getLaunchTarget();
 
   try {
-    activeChild = spawn(electronExe, args, {
+    activeChild = spawn(target.bin, target.args, {
       cwd: rootDir,
       windowsHide: true,
       stdio: 'ignore',
