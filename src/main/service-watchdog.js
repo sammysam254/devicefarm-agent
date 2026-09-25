@@ -29,22 +29,12 @@ function preLaunchCleanup() {
     if (fs.existsSync(wifiCache)) {
       try { fs.unlinkSync(wifiCache); } catch (_) {}
     }
-
-    // 2. Terminate any orphaned electron instances from prior runs
-    if (process.platform === 'win32') {
-      try {
-        execSync('taskkill /F /IM electron.exe >nul 2>&1', { timeout: 3000, stdio: 'ignore' });
-      } catch (_) {}
-    }
   } catch (_) {}
 }
 
 function getLaunchTarget() {
-  const localElectron = path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron.exe');
   const mainScript = path.join(rootDir, 'src', 'main', 'index.js');
-  if (fs.existsSync(localElectron)) {
-    return { bin: localElectron, args: [mainScript, '--hidden'] };
-  }
+  // Always use Node.js runtime for rock-solid 24/7 headless background execution
   return { bin: process.execPath, args: [mainScript] };
 }
 

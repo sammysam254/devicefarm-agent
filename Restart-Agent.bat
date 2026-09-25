@@ -1,18 +1,31 @@
 @echo off
 :: ════════════════════════════════════════════════════════════════════════════
-:: DeviceFarm Agent — 1-Click Process Reset, Git Pull & Restart Script
+:: DeviceFarm Agent — 1-Click Process Reset, Git Pull & Clean Restart
 :: 
 :: What this script does:
-::   1. Kills all running agent processes (electron, scrcpy, cloudflared, node)
-::   2. Force-clears port 7400 to eliminate any zombie listeners
-::   3. Resets and pulls the latest code from GitHub origin/main
-::   4. Displays the exact Git Commit Hash, Author, Date & Message in use
-::   5. Refreshes ADB server & lists all connected Android phones
-::   6. Launches the background agent service & Cloudflare named tunnel daemon
-::   7. Verifies health of http://localhost:7400 and opens the dashboard
+::   1. Requests Admin elevation so ALL processes (including SYSTEM) can be terminated
+::   2. Terminates all running agent processes (electron, scrcpy, cloudflared, node)
+::   3. Removes old conflicting background task scheduler services
+::   4. Force-clears port 7400 to eliminate any zombie listeners
+::   5. Resets and pulls the latest code from GitHub origin/main
+::   6. Displays the exact Git Commit Hash, Author, Date & Message in use
+::   7. Refreshes ADB server & lists all connected Android phones
+::   8. Launches the 24/7 headless background agent watchdog
+::   9. Verifies health of http://localhost:7400 and opens the dashboard
 :: ════════════════════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
 title DeviceFarm Agent — Clean Restart & Code Sync
+
+:: ── Check for Admin Privileges ──────────────────────────────────────────────
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo  ================================================================
+    echo  [!] Elevating to Administrator to ensure complete process cleanup...
+    echo  ================================================================
+    PowerShell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs"
+    exit /b
+)
 
 set "INSTALL_DIR=%~dp0"
 if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
@@ -31,9 +44,13 @@ if not exist "%PS%" set "PS=%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powersh
 
 :: ── STEP 1: Terminate All Conflicting Processes ─────────────────────────────
 echo [1/5] Terminating previous processes (electron, scrcpy, cloudflared, node, adb)...
+schtasks /delete /tn "DeviceFarm_Agent_BootService" /f >nul 2>&1
+schtasks /delete /tn "DeviceFarm_Agent_LogonService" /f >nul 2>&1
+schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
+
+taskkill /F /IM cloudflared.exe /T >nul 2>&1
 taskkill /F /IM electron.exe /T >nul 2>&1
 taskkill /F /IM scrcpy.exe /T >nul 2>&1
-taskkill /F /IM cloudflared.exe /T >nul 2>&1
 taskkill /F /IM node.exe /T >nul 2>&1
 taskkill /F /IM adb.exe /T >nul 2>&1
 
@@ -89,30 +106,16 @@ echo [*] Connected Devices:
 
 :: ── STEP 5: Launch Agent Service & Cloudflare Tunnel ─────────────────────────
 echo.
-echo [4/5] Launching DeviceFarm Agent Service ^& Cloudflare Tunnel...
+echo [4/5] Launching DeviceFarm Agent Service (Headless Node.js)...
 
 set "NODE=node"
 for /f "delims=" %%I in ('where node 2^>nul') do if not defined NODE set "NODE=%%I"
 if not defined NODE if exist "%ProgramFiles%\nodejs\node.exe" set "NODE=%ProgramFiles%\nodejs\node.exe"
 if not defined NODE if exist "%ProgramFiles(x86)%\nodejs\node.exe" set "NODE=%ProgramFiles(x86)%\nodejs\node.exe"
 
-:: Start agent directly in background
+:: Start agent directly in background via headless service-watchdog
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
     "Start-Process -FilePath '%NODE%' -ArgumentList 'src\main\service-watchdog.js' -WorkingDirectory '%INSTALL_DIR%' -WindowStyle Hidden"
-
-:: Start Cloudflare Named Tunnel daemon
-set "CF_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
-if not exist "%CF_EXE%" set "CF_EXE=C:\cloudflared\cloudflared.exe"
-if not exist "%CF_EXE%" set "CF_EXE=C:\Program Files\cloudflared\cloudflared.exe"
-if not exist "%CF_EXE%" set "CF_EXE=C:\Program Files (x86)\cloudflared\cloudflared.exe"
-
-if exist "%CF_EXE%" (
-    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "Start-Process -FilePath '%CF_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden"
-    echo [OK] Cloudflare tunnel daemon started for agent.dennoh.site.
-) else (
-    echo [WARN] cloudflared.exe not found at %CF_EXE%
-)
 
 :: ── STEP 6: Health Verification ─────────────────────────────────────────────
 echo.

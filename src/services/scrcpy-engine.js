@@ -432,11 +432,8 @@ class ScrcpyEngine extends EventEmitter {
         oldProc.removeAllListeners();
         if (oldProc.stdout) oldProc.stdout.removeAllListeners();
         if (oldProc.stderr) oldProc.stderr.removeAllListeners();
-        if (process.platform === 'win32' && oldProc.pid) {
-          const { exec } = require('child_process');
-          exec(`taskkill /F /T /PID ${oldProc.pid}`, () => {});
-        } else if (oldProc.pid) {
-          oldProc.kill('SIGKILL');
+        if (oldProc.pid) {
+          try { oldProc.kill('SIGTERM'); } catch (_) { try { process.kill(oldProc.pid); } catch (_) {} }
         }
       } catch (_) {}
     }
@@ -591,11 +588,8 @@ class ScrcpyEngine extends EventEmitter {
       const sp = this.serverProc;
       this.serverProc = null;
       try {
-        if (process.platform === 'win32' && sp.pid) {
-          const { exec } = require('child_process');
-          exec(`taskkill /F /T /PID ${sp.pid}`, () => {});
-        } else if (sp.pid) {
-          sp.kill('SIGKILL');
+        if (sp.pid) {
+          try { sp.kill('SIGTERM'); } catch (_) { try { process.kill(sp.pid); } catch (_) {} }
         }
       } catch (_) {}
     }
