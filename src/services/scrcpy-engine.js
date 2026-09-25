@@ -243,6 +243,9 @@ class ScrcpyEngine extends EventEmitter {
     this._keyframeBuffer = null;
     this.videoWidth = 0;
     this.videoHeight = 0;
+    this.serverVideoWidth = 0;
+    this.serverVideoHeight = 0;
+    this.isAndroid15 = false;
     this._jarPushed = false;
     this._screencapActive = false;
     this.enableAudio = !_unsupportedAudioSerials.has(serial);
@@ -475,6 +478,10 @@ class ScrcpyEngine extends EventEmitter {
         if (lower.includes('using video encoder')) {
           setTimeout(done, 250);
         }
+        if (lower.includes('android 15')) {
+          this.isAndroid15 = true;
+          logger.info(`[ScrcpyEngine ${this.serial}] Android 15 detected`);
+        }
         // scrcpy prints "Device: <model> (<WxH>)" once the encoder is initialised.
         // Parse the negotiated resolution so touch events use the exact same dimensions.
         const dimMatch = msg.match(/\((\d+)x(\d+)\)/);
@@ -482,6 +489,8 @@ class ScrcpyEngine extends EventEmitter {
           const sw = parseInt(dimMatch[1], 10);
           const sh = parseInt(dimMatch[2], 10);
           if (sw > 0 && sh > 0) {
+            this.serverVideoWidth  = sw;
+            this.serverVideoHeight = sh;
             this.videoWidth  = sw;
             this.videoHeight = sh;
             logger.info(`[ScrcpyEngine ${this.serial}] Server-negotiated resolution: ${sw}x${sh}`);
@@ -724,6 +733,8 @@ class ScrcpyEngine extends EventEmitter {
           const w = buf.readUInt32BE(69);
           const h = buf.readUInt32BE(73);
           if (w > 0 && h > 0 && w < 10000 && h < 10000) {
+            this.serverVideoWidth = w;
+            this.serverVideoHeight = h;
             this.videoWidth = w;
             this.videoHeight = h;
             logger.info(`[ScrcpyEngine ${this.serial}] Scrcpy stream resolution: ${w}x${h}`);
@@ -968,9 +979,9 @@ class ScrcpyEngine extends EventEmitter {
       return false;
     }
 
-    // Use videoWidth (from SPS NAL, most reliable) → videoWidth from header → screenWidth from wm size → defaults
-    let targetW = this.videoWidth;
-    let targetH = this.videoHeight;
+    // Use server video size (exact unrotated video dimensions negotiated by scrcpy server)
+    let targetW = this.serverVideoWidth || this.videoWidth;
+    let targetH = this.serverVideoHeight || this.videoHeight;
     if (!targetW || !targetH) {
       targetW = this.screenWidth || 1080;
       targetH = this.screenHeight || 2340;
@@ -989,14 +1000,14 @@ class ScrcpyEngine extends EventEmitter {
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
     buf.writeUInt8(action, 1);            // 0=DOWN, 1=UP, 2=MOVE
-    buf.writeBigInt64BE(0n, 2);           // pointerId 0n (finger 0)
+    buf.writeBigInt64BE(-2n, 2);          // pointerId -2n (POINTER_ID_GENERIC_FINGER)
     buf.writeInt32BE(finalX, 10);
     buf.writeInt32BE(finalY, 14);
     buf.writeUInt16BE(targetW, 18);
     buf.writeUInt16BE(targetH, 20);
     buf.writeUInt16BE(action === 1 ? 0 : Math.floor(pressure * 65535), 22);
-    buf.writeInt32BE(action === 0 ? 1 : 0, 24); // action_button = 1 (PRIMARY) on DOWN, 0 on UP/MOVE
-    buf.writeInt32BE(action === 1 ? 0 : 1, 28); // buttons: 1 on DOWN/MOVE, 0 on UP
+    buf.writeInt32BE(0, 24);              // action_button = 0 (STRICT requirement for touch on Android 14/15)
+    buf.writeInt32BE(0, 28);              // buttons = 0 (STRICT requirement: touch events MUST NOT have button state on Android 14/15)
     try {
       this.controlSocket.cork();
       this.controlSocket.write(buf);

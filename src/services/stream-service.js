@@ -52,7 +52,8 @@ async function cachedValidateDevicePin(serial, pin, bindingCode) {
 // ─── ADB Input Shell fallback ────────────────────────────────────────────────
 function adbInput(serial, cmd) {
   try {
-    exec(`"${ADB_BIN}" -s ${serial} shell "${cmd.replace(/"/g, '\\"')}"`, { timeout: 3000 }, () => {});
+    const parts = cmd.split(' ');
+    execFile(ADB_BIN, ['-s', serial, 'shell', ...parts], { timeout: 4000 }, () => {});
   } catch (_) {}
 }
 
@@ -95,53 +96,73 @@ function get(data, key) {
 }
 
 function handleControl(type, data, serial, engine) {
-  const W = parseFloat(get(data, 'width'))  || engine.screenWidth  || 720;
-  const H = parseFloat(get(data, 'height')) || engine.screenHeight || 1600;
+  const W = parseFloat(get(data, 'width'))  || engine.serverVideoWidth || engine.videoWidth || engine.screenWidth  || 720;
+  const H = parseFloat(get(data, 'height')) || engine.serverVideoHeight || engine.videoHeight || engine.screenHeight || 1600;
 
   const realW = engine.screenWidth  || 720;
   const realH = engine.screenHeight || 1600;
 
   const ctrlOk = () => engine.controlSocket && !engine.controlSocket.destroyed;
+  const isTargetW45 = serial === 'W45989YDRW8LIFYT' || engine.isAndroid15;
 
   if (type === 'touch') {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
     const ok = engine.sendTouchEvent(action, x, y, W, H);
-    if (!ok && action === 0) {
+
+    if (isTargetW45) {
+      if (action === 0) {
+        engine._touchDown = { x, y, time: Date.now() };
+      } else if (action === 1 && engine._touchDown) {
+        const dx = Math.abs(x - engine._touchDown.x);
+        const dy = Math.abs(y - engine._touchDown.y);
+        const dt = Date.now() - engine._touchDown.time;
+        engine._touchDown = null;
+        if (dx < 25 && dy < 25 && dt < 600) {
+          const sx = Math.round((x / W) * realW);
+          const sy = Math.round((y / H) * realH);
+          setTimeout(() => {
+            adbInput(serial, `input tap ${sx} ${sy}`);
+          }, 35);
+        }
+      }
+    } else if (!ok && action === 0) {
       const sx = Math.round((x / W) * realW);
       const sy = Math.round((y / H) * realH);
       adbInput(serial, `input tap ${sx} ${sy}`);
     }
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
+    const sx = Math.round((x / W) * realW);
+    const sy = Math.round((y / H) * realH);
     if (ctrlOk()) {
       engine.sendTouchEvent(0, x, y, W, H, 0.4);
       setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 80);
-    } else {
-      const sx = Math.round((x / W) * realW);
-      const sy = Math.round((y / H) * realH);
-      adbInput(serial, `input tap ${sx} ${sy}`);
+    }
+    if (!ctrlOk() || isTargetW45) {
+      setTimeout(() => {
+        adbInput(serial, `input tap ${sx} ${sy}`);
+      }, ctrlOk() ? 100 : 0);
     }
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = Math.min(220, Math.max(70, parseInt(get(data, 'duration'), 10) || 120));
 
+    const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
+    const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
+
     if (!ctrlOk()) {
-      const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
-      const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
       adbInput(serial, `input swipe ${sx1} ${sy1} ${sx2} ${sy2} ${dur}`);
       return;
     }
 
     // Direct touch injection down
     const downOk = engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
-    if (!downOk) {
-      const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
-      const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
+    if (!downOk || isTargetW45) {
       adbInput(serial, `input swipe ${sx1} ${sy1} ${sx2} ${sy2} ${dur}`);
-      return;
+      if (!downOk) return;
     }
 
     // Natural human swipe with 5 distinct steps spaced by 25ms
@@ -163,14 +184,18 @@ function handleControl(type, data, serial, engine) {
     if (ctrlOk()) {
       engine.sendKeycode(0, code);
       setTimeout(() => engine.sendKeycode(1, code), 50);
-    } else {
-      adbInput(serial, `input keyevent ${code}`);
+    }
+    if (!ctrlOk() || isTargetW45) {
+      setTimeout(() => {
+        adbInput(serial, `input keyevent ${code}`);
+      }, ctrlOk() ? 60 : 0);
     }
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
     if (ctrlOk()) {
       engine.sendText(text);
-    } else {
+    }
+    if (!ctrlOk() || isTargetW45) {
       const escaped = text.replace(/(["'`$\\!& |;()<>])/g, '\\$1');
       adbInput(serial, `input text ${escaped}`);
     }
@@ -182,7 +207,8 @@ function handleControl(type, data, serial, engine) {
     if (ctrlOk()) {
       engine.sendKeycode(0, 224);
       setTimeout(() => engine.sendKeycode(1, 224), 50);
-    } else {
+    }
+    if (!ctrlOk() || isTargetW45) {
       try { adbInput(serial, 'input keyevent 224'); } catch (_) {}
     }
   }
