@@ -227,28 +227,7 @@ async function syncDeviceToCloud(params) {
   }
 
   try {
-    let finalStreamUrl = streamUrl || null;
-
-    // Check if an existing rotated stream_url with key= or pin= exists in Supabase for this device
-    try {
-      const exRes = await client.get(`/devices?serial=eq.${encodeURIComponent(serial)}&select=stream_url`);
-      if (exRes.data && Array.isArray(exRes.data) && exRes.data.length > 0 && exRes.data[0].stream_url) {
-        const dbUrl = exRes.data[0].stream_url;
-        if (dbUrl.includes('key=')) {
-          finalStreamUrl = dbUrl;
-          const matchKey = dbUrl.match(/key=([^&]+)/);
-          if (matchKey && matchKey[1]) {
-            ROTATED_STREAM_KEYS.set(serial, matchKey[1]);
-          }
-        }
-        if (dbUrl.includes('pin=')) {
-          const matchPin = dbUrl.match(/pin=([^&]+)/);
-          if (matchPin && matchPin[1]) {
-            ROTATED_STREAM_PINS.set(serial, matchPin[1]);
-          }
-        }
-      }
-    } catch (_) {}
+    const finalStreamUrl = streamUrl || (bindingCode ? `https://agent.dennoh.site/?udid=${encodeURIComponent(serial)}&pin=${encodeURIComponent(bindingCode)}` : null);
 
     // 1. Sync to public.devices table (used by website dashboards)
     const devicesPayload = {

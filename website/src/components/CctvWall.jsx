@@ -178,8 +178,16 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && streamUrl.startsWith('http:')) {
               streamUrl = streamUrl.replace(/^http:/, 'https:');
             }
+            if (streamUrl.includes('key=')) {
+              streamUrl = streamUrl.replace(/[?&]key=[^&]+/, '');
+              if (!streamUrl.includes('?')) streamUrl = streamUrl.replace('&', '?');
+            }
             if (d.serial && !streamUrl.includes('udid=')) {
               streamUrl += (streamUrl.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(d.serial)}`;
+            }
+            const binding = d.binding_code || '94879348';
+            if (!streamUrl.includes('pin=')) {
+              streamUrl += (streamUrl.includes('?') ? '&' : '?') + `pin=${encodeURIComponent(binding)}`;
             }
             if (!streamUrl.includes('muted=')) {
               streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'muted=1';
@@ -307,7 +315,13 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                     let u = focusDevice.stream_url;
                     if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
                     else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
+                    if (u.includes('key=')) {
+                      u = u.replace(/[?&]key=[^&]+/, '');
+                      if (!u.includes('?')) u = u.replace('&', '?');
+                    }
                     if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
+                    const binding = focusDevice.binding_code || '94879348';
+                    if (!u.includes('pin=')) u += (u.includes('?') ? '&' : '?') + `pin=${encodeURIComponent(binding)}`;
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
