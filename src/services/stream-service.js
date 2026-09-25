@@ -103,66 +103,46 @@ function handleControl(type, data, serial, engine) {
   const realH = engine.screenHeight || 1600;
 
   const ctrlOk = () => engine.controlSocket && !engine.controlSocket.destroyed;
-  const isTargetW45 = serial === 'W45989YDRW8LIFYT' || engine.isAndroid15;
 
   if (type === 'touch') {
     const action = parseInt(get(data, 'action'), 10);
     const x = parseFloat(get(data, 'x'));
     const y = parseFloat(get(data, 'y'));
     const ok = engine.sendTouchEvent(action, x, y, W, H);
-
-    if (isTargetW45) {
-      if (action === 0) {
-        engine._touchDown = { x, y, time: Date.now() };
-      } else if (action === 1 && engine._touchDown) {
-        const dx = Math.abs(x - engine._touchDown.x);
-        const dy = Math.abs(y - engine._touchDown.y);
-        const dt = Date.now() - engine._touchDown.time;
-        engine._touchDown = null;
-        if (dx < 25 && dy < 25 && dt < 600) {
-          const sx = Math.round((x / W) * realW);
-          const sy = Math.round((y / H) * realH);
-          setTimeout(() => {
-            adbInput(serial, `input tap ${sx} ${sy}`);
-          }, 35);
-        }
-      }
-    } else if (!ok && action === 0) {
+    if (!ok && action === 0) {
       const sx = Math.round((x / W) * realW);
       const sy = Math.round((y / H) * realH);
       adbInput(serial, `input tap ${sx} ${sy}`);
     }
   } else if (type === 'tap') {
     const x = parseFloat(get(data, 'x')), y = parseFloat(get(data, 'y'));
-    const sx = Math.round((x / W) * realW);
-    const sy = Math.round((y / H) * realH);
     if (ctrlOk()) {
       engine.sendTouchEvent(0, x, y, W, H, 0.4);
       setTimeout(() => engine.sendTouchEvent(1, x, y, W, H, 0), 80);
-    }
-    if (!ctrlOk() || isTargetW45) {
-      setTimeout(() => {
-        adbInput(serial, `input tap ${sx} ${sy}`);
-      }, ctrlOk() ? 100 : 0);
+    } else {
+      const sx = Math.round((x / W) * realW);
+      const sy = Math.round((y / H) * realH);
+      adbInput(serial, `input tap ${sx} ${sy}`);
     }
   } else if (type === 'swipe') {
     const x1 = parseFloat(get(data, 'x1')), y1 = parseFloat(get(data, 'y1'));
     const x2 = parseFloat(get(data, 'x2')), y2 = parseFloat(get(data, 'y2'));
     const dur = Math.min(220, Math.max(70, parseInt(get(data, 'duration'), 10) || 120));
 
-    const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
-    const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
-
     if (!ctrlOk()) {
+      const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
+      const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
       adbInput(serial, `input swipe ${sx1} ${sy1} ${sx2} ${sy2} ${dur}`);
       return;
     }
 
-    // Direct touch injection down
+    // Direct touch injection down via scrcpy
     const downOk = engine.sendTouchEvent(0, x1, y1, W, H, 1.0);
-    if (!downOk || isTargetW45) {
+    if (!downOk) {
+      const sx1 = Math.round((x1 / W) * realW), sy1 = Math.round((y1 / H) * realH);
+      const sx2 = Math.round((x2 / W) * realW), sy2 = Math.round((y2 / H) * realH);
       adbInput(serial, `input swipe ${sx1} ${sy1} ${sx2} ${sy2} ${dur}`);
-      if (!downOk) return;
+      return;
     }
 
     // Natural human swipe with 5 distinct steps spaced by 25ms
@@ -184,18 +164,14 @@ function handleControl(type, data, serial, engine) {
     if (ctrlOk()) {
       engine.sendKeycode(0, code);
       setTimeout(() => engine.sendKeycode(1, code), 50);
-    }
-    if (!ctrlOk() || isTargetW45) {
-      setTimeout(() => {
-        adbInput(serial, `input keyevent ${code}`);
-      }, ctrlOk() ? 60 : 0);
+    } else {
+      adbInput(serial, `input keyevent ${code}`);
     }
   } else if (type === 'text') {
     const text = get(data, 'text') || '';
     if (ctrlOk()) {
       engine.sendText(text);
-    }
-    if (!ctrlOk() || isTargetW45) {
+    } else {
       const escaped = text.replace(/(["'`$\\!& |;()<>])/g, '\\$1');
       adbInput(serial, `input text ${escaped}`);
     }
@@ -207,8 +183,7 @@ function handleControl(type, data, serial, engine) {
     if (ctrlOk()) {
       engine.sendKeycode(0, 224);
       setTimeout(() => engine.sendKeycode(1, 224), 50);
-    }
-    if (!ctrlOk() || isTargetW45) {
+    } else {
       try { adbInput(serial, 'input keyevent 224'); } catch (_) {}
     }
   }
@@ -843,12 +818,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
 
   // ── Pure Direct Human Touch & Motion Interaction ──────────────────────────
   let down = false;
+  let moved = false;
   let activePointerId = null;
   let lastMoveTime = 0;
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     down = true;
+    moved = false;
     activePointerId = e.pointerId;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     initAudio();
@@ -860,6 +837,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
   canvas.addEventListener('pointermove', (e) => {
     if (!down) return;
     e.preventDefault();
+    moved = true;
     const now = performance.now();
     // 120Hz smooth human drag sampling without delay or artificial lag
     if (now - lastMoveTime < 8) return;
@@ -876,8 +854,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
       activePointerId = null;
     }
     const c = coords(e);
-    // Send final MOVE then clean UP — Android VelocityTracker naturally flings and coasts with true physics
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    if (moved) {
+      send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    }
     send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
   }
 
