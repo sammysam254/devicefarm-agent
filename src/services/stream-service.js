@@ -189,24 +189,40 @@ function handleControl(type, data, serial, engine) {
       }, i * intervalMs);
     }
   } else if (type === 'rotate' || type === 'rotate_device') {
-    if (ctrlOk() && typeof engine.rotateDevice === 'function') {
-      engine.rotateDevice();
-    }
-    const nextRot = isLandscape ? 0 : 1;
-    const cmd = `settings put system accelerometer_rotation 0 && settings put system user_rotation ${nextRot}`;
-    execFile(ADB_BIN, ['-s', serial, 'shell', cmd], { timeout: 4000 }, () => {
-      if (nextRot === 0) {
+    const rotScript = 'curr=$(settings get system user_rotation 2>/dev/null || echo 0); if [ "$curr" = "1" ] || [ "$curr" = "3" ]; then target=0; else target=1; fi; settings put system accelerometer_rotation 0; settings put system user_rotation $target; cmd window set-user-rotation lock $target 2>/dev/null || wm set-user-rotation lock $target 2>/dev/null; echo "ROTATED_TO_$target"';
+    execFile(ADB_BIN, ['-s', serial, 'shell', rotScript], { timeout: 5000 }, (err, stdout) => {
+      logger.info(`[StreamServer] Rotate toggled on ${serial}: ${(stdout || '').trim()}`);
+      if ((stdout || '').includes('ROTATED_TO_0')) {
         killKnownRotationApps(serial);
+      }
+      if (ctrlOk() && typeof engine.rotateDevice === 'function') {
+        try { engine.rotateDevice(); } catch (_) {}
       }
     });
   } else if (type === 'reset_portrait' || type === 'force_portrait') {
-    const cmd = 'settings put system accelerometer_rotation 0 && settings put system user_rotation 0';
-    execFile(ADB_BIN, ['-s', serial, 'shell', cmd], { timeout: 4000 }, () => {
+    const portraitScript = 'settings put system accelerometer_rotation 0; settings put system user_rotation 0; cmd window set-user-rotation lock 0 2>/dev/null || wm set-user-rotation lock 0 2>/dev/null';
+    execFile(ADB_BIN, ['-s', serial, 'shell', portraitScript], { timeout: 5000 }, () => {
       killKnownRotationApps(serial);
     });
     if (ctrlOk() && typeof engine.rotateDevice === 'function') {
-      engine.rotateDevice();
+      try { engine.rotateDevice(); } catch (_) {}
     }
+  } else if (type === 'clear_recents' || type === 'close_all') {
+    // 1. Trigger KEYCODE_APP_SWITCH so Android brings up recents
+    if (ctrlOk()) {
+      engine.sendKeycode(0, 187);
+      setTimeout(() => engine.sendKeycode(1, 187), 50);
+    } else {
+      adbInput(serial, 'input keyevent 187');
+    }
+
+    // 2. Kill background tasks and force-stop non-system apps (excluding launcher and keyboards)
+    setTimeout(() => {
+      const clearCmd = 'am kill-all 2>/dev/null; for pkg in $(pm list packages -3 2>/dev/null | cut -d: -f2); do case "$pkg" in *launcher*|*keyboard*|*inputmethod*|*ime*) ;; *) am force-stop "$pkg" 2>/dev/null ;; esac; done; input keyevent 3 2>/dev/null';
+      execFile(ADB_BIN, ['-s', serial, 'shell', clearCmd], { timeout: 8000 }, () => {
+        logger.info(`[StreamServer] Cleared recents and background apps on ${serial}`);
+      });
+    }, 280);
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
     if (ctrlOk()) {
@@ -277,6 +293,10 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .btn-red:hover{background:rgba(248,113,113,.3);border-color:rgba(248,113,113,.6);color:#ef4444}
     .btn-blue{background:rgba(56,189,248,.15);color:#38bdf8;border-color:rgba(56,189,248,.35)}
     .btn-blue:hover{background:rgba(56,189,248,.35);border-color:rgba(56,189,248,.7);color:#e0f2fe}
+    .btn-amber{background:rgba(251,191,36,.14);color:#fbbf24;border-color:rgba(251,191,36,.35)}
+    .btn-amber:hover{background:rgba(251,191,36,.32);border-color:rgba(251,191,36,.7);color:#fef3c7}
+    .btn-cyan{background:rgba(6,182,212,.15);color:#22d3ee;border-color:rgba(6,182,212,.35)}
+    .btn-cyan:hover{background:rgba(6,182,212,.35);border-color:rgba(6,182,212,.7);color:#cffafe}
     
     .vol-slider-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 2px;width:100%}
     .volume-slider-v{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:bt-lr;width:6px;height:75px;background:rgba(255,255,255,.15);border-radius:4px;outline:none;cursor:pointer;accent-color:#22c55e}
@@ -300,7 +320,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <div class="hdr-title" id="hdrTitle">Stream ${serial}</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="rotateScreen()" title="Rotate Screen (Toggle Portrait / Landscape)">&#8635;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="resetPortrait()" title="Fix / Force Portrait (Neutralize Rotation Apps)">&#128241;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="clearRecents()" title="Clear Recents (Close All Apps & Free Memory)">&#129529;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="reconnectStream()" title="Refresh Stream">&#x21BB;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="toggleDebugModal()" title="Stream Diagnostics">&#128030;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="popOutWindow()" title="Pop Out Chrome Window">&#x2197;</button>
@@ -319,13 +341,14 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="key(26)" title="Power">&#9211;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
-    <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="rotateScreen()" title="Rotate Screen (Toggle Orientation)">&#x21BB;</button>
-    <button tabindex="-1" onfocus="this.blur()" class="btn btn-blue" onclick="resetPortrait()" title="Fix / Force Portrait (Stop Rotation Apps)">&#128241;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-cyan" onclick="rotateScreen()" title="Rotate Screen (Toggle Portrait / Landscape)">&#8635;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-blue" onclick="resetPortrait()" title="Force Portrait (Stop Rotation Apps)">&#128241;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(4)" title="Back">&#x25C0;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(3)" title="Home">&#9711;</button>
-    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(187)" title="Recents">&#9633;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(187)" title="Recents / Task Switcher">&#9633;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-amber" onclick="clearRecents()" title="Clear Recents (Close All Apps & Free Memory)">&#129529;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="screenshot()" title="Screenshot">&#128247;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="openText()" title="Send Text / Keyboard">&#9000;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="openUpload()" title="Upload File / APK">&#128228;</button>
@@ -337,6 +360,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
     </div>
   </div>
 </div>
+
+<div id="toast" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,0.92);border:1px solid rgba(56,189,248,0.4);color:#fff;padding:8px 16px;border-radius:100px;font-size:12px;font-weight:700;z-index:99;box-shadow:0 10px 25px rgba(0,0,0,0.6);opacity:0;pointer-events:none;transition:opacity 0.2s ease"></div>
 
 <div class="modal" id="textModal">
   <div class="mbox">
@@ -1045,17 +1070,35 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (iconM) iconM.innerHTML = isSilenced ? SVG_MUTED : SVG_SPEAKER;
   }
 
+  let toastTimer = null;
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.style.opacity = '1';
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 2200);
+  }
+
   function rotateScreen() {
+    showToast('Rotating screen...');
     send({ type: 'rotate', width: canvas.width, height: canvas.height });
     setTimeout(reconnectStream, 400);
   }
 
   function resetPortrait() {
+    showToast('Force restoring vertical portrait...');
     send({ type: 'reset_portrait', width: canvas.width, height: canvas.height });
     setTimeout(reconnectStream, 400);
   }
 
+  function clearRecents() {
+    showToast('🧹 Clearing recent apps & freeing RAM...');
+    send({ type: 'clear_recents' });
+  }
+
   function reconnectStream() {
+    showToast('Reconnecting stream...');
     modeText.textContent = 'RECONNECTING';
     resetDecoder();
     connectWS();

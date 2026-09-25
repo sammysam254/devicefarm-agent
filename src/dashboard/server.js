@@ -1235,9 +1235,48 @@ function startDashboardServer(port = 7400) {
           }
         } catch (_) {}
 
-        await execAdb(realSerial, ['shell', 'settings put system accelerometer_rotation 0; curr=$(settings get system user_rotation 2>/dev/null || echo 0); if [ "$curr" = "0" ]; then settings put system user_rotation 1; else settings put system user_rotation 0; fi']);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        const rotScript = 'curr=$(settings get system user_rotation 2>/dev/null || echo 0); if [ "$curr" = "1" ] || [ "$curr" = "3" ]; then target=0; else target=1; fi; settings put system accelerometer_rotation 0; settings put system user_rotation $target; cmd window set-user-rotation lock $target 2>/dev/null || wm set-user-rotation lock $target 2>/dev/null; echo "ROTATED_TO_$target"';
+        const rotRes = await execAdb(realSerial, ['shell', rotScript]);
+        if ((rotRes.stdout || '').includes('ROTATED_TO_0')) {
+          try {
+            const streamService = require('../services/stream-service');
+            if (typeof streamService.killKnownRotationApps === 'function') {
+              streamService.killKnownRotationApps(realSerial);
+            }
+          } catch (_) {}
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        });
         res.end(JSON.stringify({ status: 'ok', success: true, message: `Rotation toggled on ${realSerial}` }));
+        return;
+      }
+
+      // POST /api/devices/:serial/clear-recents
+      const recentsMatch = url.match(/^\/api\/devices\/([^/]+)\/clear-recents$/);
+      if (recentsMatch && (req.method === 'POST' || req.method === 'GET')) {
+        const rawSerial = decodeURIComponent(recentsMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+
+        // 1. Bring up recents task switcher
+        await execAdb(realSerial, ['shell', 'input', 'keyevent', '187']);
+        await new Promise(r => setTimeout(r, 260));
+
+        // 2. Clear background processes and force-stop non-launcher third party packages
+        const clearCmd = 'am kill-all 2>/dev/null; for pkg in $(pm list packages -3 2>/dev/null | cut -d: -f2); do case "$pkg" in *launcher*|*keyboard*|*inputmethod*|*ime*) ;; *) am force-stop "$pkg" 2>/dev/null ;; esac; done; input keyevent 3 2>/dev/null';
+        await execAdb(realSerial, ['shell', clearCmd]);
+
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        });
+        res.end(JSON.stringify({ status: 'ok', success: true, message: `Recent apps cleared on ${realSerial}` }));
         return;
       }
 

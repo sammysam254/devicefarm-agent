@@ -10,6 +10,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [refreshNonce, setRefreshNonce] = useState(() => Date.now());
   const [deviceNonces, setDeviceNonces] = useState({});
   const [resettingOrientation, setResettingOrientation] = useState({});
+  const [clearingRecents, setClearingRecents] = useState({});
 
   const fetchDevicesAndLockState = useCallback(async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -80,6 +81,21 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       console.warn('Failed to reset rotation on device:', err);
     } finally {
       setResettingOrientation(prev => ({ ...prev, [serial]: false }));
+    }
+  };
+
+  const handleClearRecents = async (serial, e) => {
+    if (e) e.stopPropagation();
+    setClearingRecents(prev => ({ ...prev, [serial]: true }));
+    try {
+      await fetch(`https://agent.dennoh.site/api/devices/${encodeURIComponent(serial)}/clear-recents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (err) {
+      console.warn('Failed to clear recents on device:', err);
+    } finally {
+      setClearingRecents(prev => ({ ...prev, [serial]: false }));
     }
   };
 
@@ -341,6 +357,15 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                     >
                       {isResetting ? '⏳ Resetting...' : '📱 Portrait'}
                     </button>
+                    <button
+                      onClick={(e) => handleClearRecents(d.serial, e)}
+                      disabled={clearingRecents[d.serial]}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '11px', padding: '4px 8px', color: '#fbbf24', borderColor: 'rgba(251, 191, 36, 0.3)' }}
+                      title="Clear all recent tasks and free device memory"
+                    >
+                      {clearingRecents[d.serial] ? '⏳ Clearing...' : '🧹 Recents'}
+                    </button>
                     {(isSuperAdmin || isSeedAdmin) && (
                       <a
                         href={`/dashboard/kiosk?serial=${encodeURIComponent(d.serial)}`}
@@ -411,6 +436,16 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                   title="Force device back to vertical portrait orientation"
                 >
                   <Smartphone size={13} /> {resettingOrientation[focusDevice.serial] ? 'Resetting...' : 'Portrait'}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => handleClearRecents(focusDevice.serial, e)}
+                  disabled={Boolean(clearingRecents[focusDevice.serial])}
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', color: '#fbbf24' }}
+                  title="Clear all recent background tasks and free memory"
+                >
+                  🧹 {clearingRecents[focusDevice.serial] ? 'Clearing...' : 'Clear Recents'}
                 </button>
                 <button 
                   onClick={() => {
