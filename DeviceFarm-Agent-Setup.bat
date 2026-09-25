@@ -163,15 +163,25 @@ echo.
 echo [4/6] Setting up agent files...
 
 if exist "%INSTALL_DIR%\.git" (
-    echo [*] Agent directory exists — updating cleanly to latest version...
-    taskkill /F /IM adb.exe /T >nul 2>&1
+    echo [*] Agent directory exists — terminating prior processes and updating to latest code...
     taskkill /F /IM electron.exe /T >nul 2>&1
+    taskkill /F /IM scrcpy.exe /T >nul 2>&1
     taskkill /F /IM cloudflared.exe /T >nul 2>&1
+    taskkill /F /IM node.exe /T >nul 2>&1
+    taskkill /F /IM adb.exe /T >nul 2>&1
     "%GIT%" -C "%INSTALL_DIR%" fetch origin main
     "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main
     "%GIT%" -C "%INSTALL_DIR%" clean -fd
     if exist "%INSTALL_DIR%\wifi-devices-cache.json" del /F /Q "%INSTALL_DIR%\wifi-devices-cache.json" >nul 2>&1
     echo [OK] Agent updated to latest version from GitHub.
+    echo.
+    echo  ================================================================
+    echo   ACTIVE CODE VERSION:
+    echo  ================================================================
+    "%GIT%" -C "%INSTALL_DIR%" log -n 1
+    echo.
+    echo  ================================================================
+    echo.
 ) else (
     echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
     echo [*] Using shallow clone for faster download...
@@ -181,6 +191,14 @@ if exist "%INSTALL_DIR%\.git" (
         pause & exit /b 1
     )
     echo [OK] Agent cloned successfully.
+    echo.
+    echo  ================================================================
+    echo   ACTIVE CODE VERSION:
+    echo  ================================================================
+    "%GIT%" -C "%INSTALL_DIR%" log -n 1
+    echo.
+    echo  ================================================================
+    echo.
 )
 
 :: Switch working directory to the install dir for all remaining steps
@@ -375,6 +393,9 @@ echo  [OK] DeviceFarm Agent is running continuously in the background!
 echo       Dashboard : http://localhost:7400
 echo       Public    : https://agent.dennoh.site
 echo       Install   : %INSTALL_DIR%
+echo.
+"%GIT%" -C "%INSTALL_DIR%" log -n 1
+echo.
 echo       Status    : Active 24/7 Background Service (Auto-starts on Boot)
 echo  ================================================================
 echo.

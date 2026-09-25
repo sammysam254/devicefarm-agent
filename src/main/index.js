@@ -290,12 +290,19 @@ process.on('SIGTERM', () => {
 // ──────────────────────────────────────────────────────────
 
 async function startAgentMain() {
+  let gitCommit = 'unknown';
+  try {
+    const { execSync } = require('child_process');
+    gitCommit = execSync('git log -n 1 --pretty=format:"%h - %s (%cd)" --date=relative', { timeout: 3000, cwd: path.resolve(__dirname, '../..') }).toString().trim();
+  } catch (_) {}
+
   logger.info('====================================');
   logger.info('  DeviceFarm Agent starting...');
   logger.info(`  PID: ${process.pid}`);
   logger.info(`  Platform: ${process.platform}`);
   logger.info(`  Mode: ${isElectron ? 'Electron' : 'Headless Node.js'}`);
   logger.info(`  Node: ${process.versions.node}`);
+  logger.info(`  Git Commit: ${gitCommit}`);
   logger.info('====================================');
 
   await runStartupChecks();
