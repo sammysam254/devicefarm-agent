@@ -1,14 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, Lock, ExternalLink } from 'lucide-react';
+import { Video, Shield, Maximize2, RefreshCw, X, ArrowLeft, Eye, Play, Trash2, Lock, ExternalLink, Smartphone } from 'lucide-react';
 
 export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cctvLocked, setCctvLocked] = useState(false);
   const [focusDevice, setFocusDevice] = useState(null);
+  const [refreshNonce, setRefreshNonce] = useState(() => Date.now());
+  const [deviceNonces, setDeviceNonces] = useState({});
+  const [resettingOrientation, setResettingOrientation] = useState({});
 
-  const fetchDevicesAndLockState = async (isInitial = false) => {
+  const fetchDevicesAndLockState = useCallback(async (isInitial = false) => {
     if (isInitial) setLoading(true);
     try {
       // 1. Fetch devices with active streams and not deleted from view
@@ -47,6 +50,37 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     } finally {
       if (isInitial) setLoading(false);
     }
+  }, []);
+
+  const handleRefreshAll = () => {
+    const nextNonce = Date.now();
+    setRefreshNonce(nextNonce);
+    setDeviceNonces({});
+    fetchDevicesAndLockState(true);
+  };
+
+  const handleReloadDevice = (serial, e) => {
+    if (e) e.stopPropagation();
+    setDeviceNonces(prev => ({ ...prev, [serial]: Date.now() }));
+  };
+
+  const handleResetOrientation = async (serial, e) => {
+    if (e) e.stopPropagation();
+    setResettingOrientation(prev => ({ ...prev, [serial]: true }));
+    try {
+      await fetch(`https://agent.dennoh.site/api/devices/${encodeURIComponent(serial)}/reset-rotation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      // Allow the scrcpy engine on the agent 600ms to restart and settle, then bust the stream iframe cache
+      setTimeout(() => {
+        handleReloadDevice(serial);
+      }, 700);
+    } catch (err) {
+      console.warn('Failed to reset rotation on device:', err);
+    } finally {
+      setResettingOrientation(prev => ({ ...prev, [serial]: false }));
+    }
   };
 
   useEffect(() => {
@@ -64,11 +98,21 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       }
     }, 300000);
 
+    // Auto-refresh when internet connectivity restores (fixes cached failed 502/network error iframes without manual airplane mode toggle)
+    const handleOnline = () => {
+      console.log('[CctvWall] Network reconnected online — busting iframe stream cache');
+      setRefreshNonce(Date.now());
+      fetchDevicesAndLockState(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+
     return () => {
       supabase.removeChannel(channel);
       clearInterval(interval);
+      window.removeEventListener('online', handleOnline);
     };
-  }, []);
+  }, [fetchDevicesAndLockState]);
 
   const deleteDeviceFromView = async (deviceId) => {
     if (!window.confirm('Are you sure you want to delete this device from view in all dashboards?')) return;
@@ -113,6 +157,33 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     }
   };
 
+  // Build a fully-qualified stream URL with cache busting and credentials
+  const getStreamUrlForDevice = (d, isModal = false) => {
+    let streamUrl = d.stream_url;
+    if (!streamUrl || streamUrl.includes('localhost')) {
+      streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
+    } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && streamUrl.startsWith('http:')) {
+      streamUrl = streamUrl.replace(/^http:/, 'https:');
+    }
+    if (streamUrl.includes('key=')) {
+      streamUrl = streamUrl.replace(/[?&]key=[^&]+/, '');
+      if (!streamUrl.includes('?')) streamUrl = streamUrl.replace('&', '?');
+    }
+    if (d.serial && !streamUrl.includes('udid=')) {
+      streamUrl += (streamUrl.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(d.serial)}`;
+    }
+    const binding = d.binding_code || '94879348';
+    if (!streamUrl.includes('pin=')) {
+      streamUrl += (streamUrl.includes('?') ? '&' : '?') + `pin=${encodeURIComponent(binding)}`;
+    }
+    if (!isModal && !streamUrl.includes('muted=')) {
+      streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'muted=1';
+    }
+    const nonce = deviceNonces[d.serial] || refreshNonce;
+    streamUrl += (streamUrl.includes('?') ? '&' : '?') + `_t=${nonce}`;
+    return streamUrl;
+  };
+
   // If locked by Super Admin and viewer is not Seed Admin override
   if (cctvLocked && !isSeedAdmin && !isSuperAdmin) {
     return (
@@ -152,7 +223,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 {cctvLocked ? '🔒 Admin Monitor: LOCKED' : '🔓 Admin Monitor: ALLOWED'}
               </button>
             )}
-            <button onClick={() => fetchDevicesAndLockState(true)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+            <button onClick={handleRefreshAll} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
               <RefreshCw size={14} /> Refresh Feeds
             </button>
           </div>
@@ -171,29 +242,11 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
           {devices.map(d => {
-            const rawStreamUrl = d.stream_url;
-            let streamUrl = rawStreamUrl;
-            if (!streamUrl || streamUrl.includes('localhost')) {
-              streamUrl = `https://agent.dennoh.site/?udid=${encodeURIComponent(d.serial || '')}`;
-            } else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && streamUrl.startsWith('http:')) {
-              streamUrl = streamUrl.replace(/^http:/, 'https:');
-            }
-            if (streamUrl.includes('key=')) {
-              streamUrl = streamUrl.replace(/[?&]key=[^&]+/, '');
-              if (!streamUrl.includes('?')) streamUrl = streamUrl.replace('&', '?');
-            }
-            if (d.serial && !streamUrl.includes('udid=')) {
-              streamUrl += (streamUrl.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(d.serial)}`;
-            }
-            const binding = d.binding_code || '94879348';
-            if (!streamUrl.includes('pin=')) {
-              streamUrl += (streamUrl.includes('?') ? '&' : '?') + `pin=${encodeURIComponent(binding)}`;
-            }
-            if (!streamUrl.includes('muted=')) {
-              streamUrl += (streamUrl.includes('?') ? '&' : '?') + 'muted=1';
-            }
+            const currentNonce = deviceNonces[d.serial] || refreshNonce;
+            const streamUrl = getStreamUrlForDevice(d, false);
             const isFocused = focusDevice && focusDevice.id === d.id;
             const isStealthOn = d.stealth_root_enabled !== false;
+            const isResetting = Boolean(resettingOrientation[d.serial]);
 
             return (
               <div 
@@ -204,12 +257,33 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
               >
                 {/* Tile Header Bar */}
                 <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.95)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                  <div style={{ fontWeight: 700, fontSize: '12px', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Video size={13} color="var(--primary)" />
-                    {d.brand || ''} {d.model || 'Android'} ({d.serial})
+                  <div style={{ fontWeight: 700, fontSize: '12px', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '65%' }}>
+                    <Video size={13} color="var(--primary)" style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.brand || ''} {d.model || 'Android'} ({d.serial})</span>
                   </div>
-                  <div style={{ fontSize: '10px', fontWeight: 800, color: '#f87171', background: 'rgba(239,68,68,0.2)', padding: '2px 6px', borderRadius: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: '5px', height: '5px', background: '#f87171', borderRadius: '50%' }}></span> LIVE
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={(e) => handleReloadDevice(d.serial, e)}
+                      title="Force reload this device stream without page refresh"
+                      style={{
+                        background: 'rgba(255,255,255,0.08)',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        color: '#94a3b8',
+                        borderRadius: '4px',
+                        padding: '2px 6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        fontSize: '10px'
+                      }}
+                    >
+                      <RefreshCw size={10} /> Reload
+                    </button>
+                    <div style={{ fontSize: '10px', fontWeight: 800, color: '#f87171', background: 'rgba(239,68,68,0.2)', padding: '2px 6px', borderRadius: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '5px', height: '5px', background: '#f87171', borderRadius: '50%' }}></span> LIVE
+                    </div>
                   </div>
                 </div>
 
@@ -217,11 +291,11 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', background: '#000', overflow: 'hidden' }}>
                   {streamUrl && !isFocused ? (
                     <iframe 
-                      key={`stream-${d.serial}`}
+                      key={`stream-${d.serial}-${currentNonce}`}
                       src={streamUrl} 
                       style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} 
                       title={d.serial} 
-                      referrerPolicy="origin"
+                      referrerPolicy="no-referrer"
                       allow="autoplay; fullscreen"
                     />
                   ) : isFocused ? (
@@ -249,7 +323,7 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                 </div>
 
                 {/* Card Footer Quick Action Bar */}
-                <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }} onClick={e => e.stopPropagation()}>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     <button 
                       onClick={() => toggleStealthRoot(d.id, isStealthOn)}
@@ -257,6 +331,15 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                       style={{ fontSize: '11px', padding: '4px 8px', color: isStealthOn ? 'var(--primary)' : 'var(--text-muted)' }}
                     >
                       {isStealthOn ? '🛡️ Stealth: ON' : '⚪ Stealth: OFF'}
+                    </button>
+                    <button
+                      onClick={(e) => handleResetOrientation(d.serial, e)}
+                      disabled={isResetting}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '11px', padding: '4px 8px', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}
+                      title="Kill third-party rotation lock apps and force back to vertical portrait orientation"
+                    >
+                      {isResetting ? '⏳ Resetting...' : '📱 Portrait'}
                     </button>
                     {(isSuperAdmin || isSeedAdmin) && (
                       <a
@@ -304,24 +387,34 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             style={{ maxWidth: '560px', height: '92vh', maxHeight: '860px', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >
             {/* Header */}
-            <div style={{ padding: '14px 20px', background: 'rgba(15, 23, 42, 0.95)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: '14px 20px', background: 'rgba(15, 23, 42, 0.95)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <div>
                 <strong style={{ color: '#fff', fontSize: '15px' }}>📱 {focusDevice.brand || ''} {focusDevice.model || 'Android'}</strong>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Serial: {focusDevice.serial}</div>
               </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={(e) => handleReloadDevice(focusDevice.serial, e)}
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                  title="Reload modal stream"
+                >
+                  <RefreshCw size={13} /> Reload
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => handleResetOrientation(focusDevice.serial, e)}
+                  disabled={Boolean(resettingOrientation[focusDevice.serial])}
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', color: '#38bdf8' }}
+                  title="Force device back to vertical portrait orientation"
+                >
+                  <Smartphone size={13} /> {resettingOrientation[focusDevice.serial] ? 'Resetting...' : 'Portrait'}
+                </button>
                 <button 
                   onClick={() => {
-                    let u = focusDevice.stream_url;
-                    if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                    else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
-                    if (u.includes('key=')) {
-                      u = u.replace(/[?&]key=[^&]+/, '');
-                      if (!u.includes('?')) u = u.replace('&', '?');
-                    }
-                    if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
-                    const binding = focusDevice.binding_code || '94879348';
-                    if (!u.includes('pin=')) u += (u.includes('?') ? '&' : '?') + `pin=${encodeURIComponent(binding)}`;
+                    const u = getStreamUrlForDevice(focusDevice, true);
                     const w = 510, h = 900;
                     const left = Math.max(0, Math.round((window.screen.width - w) / 2));
                     const top = Math.max(0, Math.round((window.screen.height - h) / 2));
@@ -330,10 +423,10 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
                   className="btn btn-primary" 
                   style={{ padding: '6px 14px', fontSize: '12px' }}
                 >
-                  <ExternalLink size={14} /> Pop Out Window
+                  <ExternalLink size={14} /> Pop Out
                 </button>
                 <button onClick={() => setFocusDevice(null)} className="btn btn-danger" style={{ padding: '6px 14px', fontSize: '12px' }}>
-                  <ArrowLeft size={14} /> Back to Admin Monitor
+                  <ArrowLeft size={14} /> Close
                 </button>
               </div>
             </div>
@@ -341,13 +434,8 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
             {/* Interactive Stream Frame */}
             <div style={{ flex: 1, background: '#000', position: 'relative' }}>
               <iframe 
-                src={(() => {
-                  let u = focusDevice.stream_url;
-                  if (!u || u.includes('localhost')) u = `https://agent.dennoh.site/?udid=${encodeURIComponent(focusDevice.serial || '')}`;
-                  else if (typeof window !== 'undefined' && window.location.protocol === 'https:' && u.startsWith('http:')) u = u.replace(/^http:/, 'https:');
-                  if (focusDevice.serial && !u.includes('udid=')) u += (u.includes('?') ? '&' : '?') + `udid=${encodeURIComponent(focusDevice.serial)}`;
-                  return u;
-                })()} 
+                key={`focus-stream-${focusDevice.serial}-${deviceNonces[focusDevice.serial] || refreshNonce}`}
+                src={getStreamUrlForDevice(focusDevice, true)} 
                 style={{ width: '100%', height: '100%', border: 'none' }} 
                 title="Focused Device Stream"
                 referrerPolicy="no-referrer"

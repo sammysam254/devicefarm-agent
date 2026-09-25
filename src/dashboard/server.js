@@ -293,6 +293,10 @@ function startDashboardServer(port = 7400) {
       res.setHeader('X-XSS-Protection', '1; mode=block');
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
       res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'self' https://dennoh.site https://*.dennoh.site http://localhost:*;");
 
       if (req.method === 'OPTIONS') {
@@ -1179,6 +1183,64 @@ function startDashboardServer(port = 7400) {
         return;
       }
 
+      // POST /api/devices/:serial/reset-rotation (or GET for quick browser/curl trigger)
+      const rotResetMatch = url.match(/^\/api\/devices\/([^/]+)\/reset-rotation$/);
+      if (rotResetMatch && (req.method === 'POST' || req.method === 'GET')) {
+        const rawSerial = decodeURIComponent(rotResetMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+        const pkgs = [
+          'org.crape.rotationcontrol',
+          'org.crape.rotationcontrolpro',
+          'com.google.android.apps.rotate',
+          'com.pranavpandey.rotation',
+          'net.andchat.turnme',
+          'com.bubblesoft.android.rotation',
+          'com.symetronapps.rotationcontroldefault',
+          'com.tools.screenrotate',
+          'com.bong.screenrotate',
+          'com.android.rotate',
+          'com.ahapps.autorotate',
+          'com.shofiq.rotationcontrol',
+          'jp.snowlife01.android.rotationcontrolpro',
+          'jp.snowlife01.android.rotationcontrol'
+        ];
+        const killCmd = pkgs.map(p => `am force-stop ${p} 2>/dev/null; pm disable-user --user 0 ${p} 2>/dev/null`).join('; ') +
+          '; settings put system accelerometer_rotation 0; settings put system user_rotation 0; wm dismiss-keyguard';
+        await execAdb(realSerial, ['shell', killCmd]);
+        
+        // Also trigger rotateDevice on running ScrcpyEngine if available
+        try {
+          const streamService = require('../services/stream-service');
+          const entry = streamService.getActiveServerEntry ? streamService.getActiveServerEntry(realSerial) : null;
+          if (entry && entry.engine && typeof entry.engine.rotateDevice === 'function') {
+            entry.engine.rotateDevice();
+          }
+        } catch (_) {}
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', success: true, message: `Orientation reset to portrait and rotation lockers stopped on ${realSerial}` }));
+        return;
+      }
+
+      // POST /api/devices/:serial/rotate
+      const rotMatch = url.match(/^\/api\/devices\/([^/]+)\/rotate$/);
+      if (rotMatch && (req.method === 'POST' || req.method === 'GET')) {
+        const rawSerial = decodeURIComponent(rotMatch[1]);
+        const realSerial = resolveSerialForAdb(rawSerial);
+        try {
+          const streamService = require('../services/stream-service');
+          const entry = streamService.getActiveServerEntry ? streamService.getActiveServerEntry(realSerial) : null;
+          if (entry && entry.engine && typeof entry.engine.rotateDevice === 'function') {
+            entry.engine.rotateDevice();
+          }
+        } catch (_) {}
+
+        await execAdb(realSerial, ['shell', 'settings put system accelerometer_rotation 0; curr=$(settings get system user_rotation 2>/dev/null || echo 0); if [ "$curr" = "0" ]; then settings put system user_rotation 1; else settings put system user_rotation 0; fi']);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', success: true, message: `Rotation toggled on ${realSerial}` }));
+        return;
+      }
+
       // ── Proxy Handling ──────────────────────────────────────────────────
       const actionParam = fullUrl.searchParams.get('action');
       const udidParam = fullUrl.searchParams.get('udid');
@@ -1207,14 +1269,24 @@ function startDashboardServer(port = 7400) {
           proxyReq.on('timeout', () => {
             proxyReq.destroy();
             if (!res.headersSent) {
-              res.writeHead(504, { 'Content-Type': 'text/plain' });
+              res.writeHead(504, {
+                'Content-Type': 'text/plain',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+              });
               res.end('Gateway Timeout — device stream response timed out');
             }
           });
 
           proxyReq.on('error', () => {
             if (!res.headersSent) {
-              res.writeHead(502, { 'Content-Type': 'text/plain' });
+              res.writeHead(502, {
+                'Content-Type': 'text/plain',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+              });
               res.end('Bad Gateway — device stream unavailable');
             } else {
               try { res.destroy(); } catch (_) {}
@@ -1230,7 +1302,12 @@ function startDashboardServer(port = 7400) {
         if (udidParam || remoteParam) {
           const requestedSerial = rawSerial || 'Unknown';
           const currentBinding = bindingService.getOrGenerateBindingCode();
-          res.writeHead(404, { 'Content-Type': 'text/html' });
+          res.writeHead(404, {
+            'Content-Type': 'text/html',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          });
           res.end(`
             <!DOCTYPE html>
             <html lang="en">
@@ -1271,11 +1348,21 @@ function startDashboardServer(port = 7400) {
         // ── Serve Index HTML Page ───────────────────────────────────────────
         fs.readFile(htmlPath, (err, data) => {
           if (err) {
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.writeHead(500, {
+              'Content-Type': 'text/plain',
+              'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+              'Pragma': 'no-cache',
+              'Expires': '0'
+            });
             res.end('Error loading dashboard page');
             return;
           }
-          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.writeHead(200, {
+            'Content-Type': 'text/html',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          });
           res.end(data);
         });
       } catch (handlerErr) {

@@ -89,6 +89,31 @@ function captureOneFrame(serial) {
   });
 }
 
+// ─── Orientation & Rotation App Neutralization ────────────────────────────────
+function killKnownRotationApps(serial) {
+  const pkgs = [
+    'org.crape.rotationcontrol',
+    'org.crape.rotationcontrolpro',
+    'com.google.android.apps.rotate',
+    'com.pranavpandey.rotation',
+    'net.andchat.turnme',
+    'com.bubblesoft.android.rotation',
+    'com.symetronapps.rotationcontroldefault',
+    'com.tools.screenrotate',
+    'com.bong.screenrotate',
+    'com.android.rotate',
+    'com.ahapps.autorotate',
+    'com.shofiq.rotationcontrol',
+    'jp.snowlife01.android.rotationcontrolpro',
+    'jp.snowlife01.android.rotationcontrol'
+  ];
+  const stopCmd = pkgs.map(p => `am force-stop ${p} 2>/dev/null; pm disable-user --user 0 ${p} 2>/dev/null`).join('; ');
+  const fullCmd = `${stopCmd}; settings put system accelerometer_rotation 0; settings put system user_rotation 0; wm dismiss-keyguard`;
+  try {
+    execFile(ADB_BIN, ['-s', serial, 'shell', fullCmd], { timeout: 8000 }, () => {});
+  } catch (_) {}
+}
+
 // ─── Shared control dispatcher ────────────────────────────────────────────────
 
 function get(data, key) {
@@ -96,11 +121,15 @@ function get(data, key) {
 }
 
 function handleControl(type, data, serial, engine) {
-  const W = parseFloat(get(data, 'width'))  || engine.serverVideoWidth || engine.videoWidth || engine.screenWidth  || 720;
-  const H = parseFloat(get(data, 'height')) || engine.serverVideoHeight || engine.videoHeight || engine.screenHeight || 1600;
+  const W = parseFloat(get(data, 'width'))  || engine.videoWidth || engine.serverVideoWidth || engine.screenWidth  || 720;
+  const H = parseFloat(get(data, 'height')) || engine.videoHeight || engine.serverVideoHeight || engine.screenHeight || 1600;
 
-  const realW = engine.screenWidth  || 720;
-  const realH = engine.screenHeight || 1600;
+  // Dynamically resolve real physical screen dimensions to match current orientation
+  const isLandscape = W > H;
+  const maxDim = Math.max(engine.screenWidth || 1080, engine.screenHeight || 2400);
+  const minDim = Math.min(engine.screenWidth || 1080, engine.screenHeight || 2400);
+  const realW = isLandscape ? maxDim : minDim;
+  const realH = isLandscape ? minDim : maxDim;
 
   const ctrlOk = () => engine.controlSocket && !engine.controlSocket.destroyed;
 
@@ -158,6 +187,25 @@ function handleControl(type, data, serial, engine) {
         const action = (i === steps) ? 1 : 2; // UP on final step
         engine.sendTouchEvent(action, currX, currY, W, H, action === 1 ? 0 : 1.0);
       }, i * intervalMs);
+    }
+  } else if (type === 'rotate' || type === 'rotate_device') {
+    if (ctrlOk() && typeof engine.rotateDevice === 'function') {
+      engine.rotateDevice();
+    }
+    const nextRot = isLandscape ? 0 : 1;
+    const cmd = `settings put system accelerometer_rotation 0 && settings put system user_rotation ${nextRot}`;
+    execFile(ADB_BIN, ['-s', serial, 'shell', cmd], { timeout: 4000 }, () => {
+      if (nextRot === 0) {
+        killKnownRotationApps(serial);
+      }
+    });
+  } else if (type === 'reset_portrait' || type === 'force_portrait') {
+    const cmd = 'settings put system accelerometer_rotation 0 && settings put system user_rotation 0';
+    execFile(ADB_BIN, ['-s', serial, 'shell', cmd], { timeout: 4000 }, () => {
+      killKnownRotationApps(serial);
+    });
+    if (ctrlOk() && typeof engine.rotateDevice === 'function') {
+      engine.rotateDevice();
     }
   } else if (type === 'code' || type === 'key') {
     const code = parseInt(get(data, 'code'), 10);
@@ -227,6 +275,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
     .btn:active{transform:scale(.88)}
     .btn-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.3)}
     .btn-red:hover{background:rgba(248,113,113,.3);border-color:rgba(248,113,113,.6);color:#ef4444}
+    .btn-blue{background:rgba(56,189,248,.15);color:#38bdf8;border-color:rgba(56,189,248,.35)}
+    .btn-blue:hover{background:rgba(56,189,248,.35);border-color:rgba(56,189,248,.7);color:#e0f2fe}
     
     .vol-slider-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 2px;width:100%}
     .volume-slider-v{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:bt-lr;width:6px;height:75px;background:rgba(255,255,255,.15);border-radius:4px;outline:none;cursor:pointer;accent-color:#22c55e}
@@ -250,6 +300,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <div class="hdr-title" id="hdrTitle">Stream ${serial}</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
+    <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="resetPortrait()" title="Fix / Force Portrait (Neutralize Rotation Apps)">&#128241;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="reconnectStream()" title="Refresh Stream">&#x21BB;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="toggleDebugModal()" title="Stream Diagnostics">&#128030;</button>
     <button tabindex="-1" onfocus="this.blur()" class="hdr-btn" onclick="popOutWindow()" title="Pop Out Chrome Window">&#x2197;</button>
@@ -268,7 +319,8 @@ function buildPlayerHtml(serial, screenW, screenH) {
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="expandNotifications()" title="Notification Bar (Swipe Down)">&#8942;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="key(26)" title="Power">&#9211;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="reboot()" title="Reboot Device">&#128260;</button>
-    <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="rotateScreen()" title="Rotate Screen">&#x21BB;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-red" onclick="rotateScreen()" title="Rotate Screen (Toggle Orientation)">&#x21BB;</button>
+    <button tabindex="-1" onfocus="this.blur()" class="btn btn-blue" onclick="resetPortrait()" title="Fix / Force Portrait (Stop Rotation Apps)">&#128241;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(24)" title="Volume Up">&#128265;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(25)" title="Volume Down">&#128264;</button>
     <button tabindex="-1" onfocus="this.blur()" class="btn" onclick="key(4)" title="Back">&#x25C0;</button>
@@ -831,7 +883,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     initAudio();
     const c = coords(e);
     lastMoveTime = performance.now();
-    send({ type:'touch', action:0, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    send({ type:'touch', action:0, x:c.x, y:c.y, width:canvas.width, height:canvas.height, pressure:1.0 });
   });
 
   canvas.addEventListener('pointermove', (e) => {
@@ -843,7 +895,7 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (now - lastMoveTime < 8) return;
     lastMoveTime = now;
     const c = coords(e);
-    send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+    send({ type:'touch', action:2, x:c.x, y:c.y, width:canvas.width, height:canvas.height, pressure:1.0 });
   });
 
   function releasePointer(e) {
@@ -855,9 +907,9 @@ function buildPlayerHtml(serial, screenW, screenH) {
     }
     const c = coords(e);
     if (moved) {
-      send({ type:'touch', action:2, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:1.0 });
+      send({ type:'touch', action:2, x:c.x, y:c.y, width:canvas.width, height:canvas.height, pressure:1.0 });
     }
-    send({ type:'touch', action:1, x:c.x, y:c.y, width:nativeW, height:nativeH, pressure:0 });
+    send({ type:'touch', action:1, x:c.x, y:c.y, width:canvas.width, height:canvas.height, pressure:0 });
   }
 
   canvas.addEventListener('pointerup', releasePointer);
@@ -877,17 +929,17 @@ function buildPlayerHtml(serial, screenW, screenH) {
     if (!wheelTimer) {
       wheelTimer = setTimeout(() => {
         const d = wheelAccum;
-        const c = lastWheelPos || { x: nativeW / 2, y: nativeH / 2 };
+        const c = lastWheelPos || { x: canvas.width / 2, y: canvas.height / 2 };
         wheelAccum = 0;
         wheelTimer = null;
 
         // Convert mouse wheel ticks into natural, fluid finger scroll strokes
         const scrollDist = Math.max(-550, Math.min(550, -d * 2.2));
         if (Math.abs(scrollDist) > 8) {
-          const y1 = Math.max(120, Math.min(nativeH - 120, c.y));
-          const y2 = Math.max(30, Math.min(nativeH - 30, y1 + scrollDist));
+          const y1 = Math.max(120, Math.min(canvas.height - 120, c.y));
+          const y2 = Math.max(30, Math.min(canvas.height - 30, y1 + scrollDist));
           const strokeDur = Math.max(50, Math.min(130, Math.round(Math.abs(scrollDist) * 0.25)));
-          send({ type:'swipe', x1:c.x, y1:y1, x2:c.x, y2:y2, duration:strokeDur });
+          send({ type:'swipe', x1:c.x, y1:y1, x2:c.x, y2:y2, width:canvas.width, height:canvas.height, duration:strokeDur });
         }
       }, 35);
     }
@@ -994,8 +1046,13 @@ function buildPlayerHtml(serial, screenW, screenH) {
   }
 
   function rotateScreen() {
-    send({ type: 'code', code: 275 });
-    setTimeout(reconnectStream, 300);
+    send({ type: 'rotate', width: canvas.width, height: canvas.height });
+    setTimeout(reconnectStream, 400);
+  }
+
+  function resetPortrait() {
+    send({ type: 'reset_portrait', width: canvas.width, height: canvas.height });
+    setTimeout(reconnectStream, 400);
   }
 
   function reconnectStream() {
@@ -1047,7 +1104,10 @@ async function startStreamServer(serial, port) {
   // ── HTTP handler ──────────────────────────────────────────────────────────
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer-when-downgrade');
     res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), interest-cohort=()');

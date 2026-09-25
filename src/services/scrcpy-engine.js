@@ -784,8 +784,11 @@ class ScrcpyEngine extends EventEmitter {
               if (this.videoWidth !== spsW || this.videoHeight !== spsH) {
                 logger.info(`[ScrcpyEngine ${this.serial}] SPS resolution: ${spsW}x${spsH} (previously ${this.videoWidth}x${this.videoHeight})`);
               }
-              this.videoWidth  = spsW;
-              this.videoHeight = spsH;
+              this.videoWidth        = spsW;
+              this.videoHeight       = spsH;
+              this.serverVideoWidth  = spsW;
+              this.serverVideoHeight = spsH;
+              this.isLandscape       = spsW > spsH;
             } else {
               logger.warn(`[ScrcpyEngine ${this.serial}] SPS parse gave invalid dims ${spsW}x${spsH}, keeping ${this.videoWidth}x${this.videoHeight}`);
             }
@@ -979,23 +982,23 @@ class ScrcpyEngine extends EventEmitter {
       return false;
     }
 
-    // Use server video size (exact unrotated video dimensions negotiated by scrcpy server)
-    let targetW = this.serverVideoWidth || this.videoWidth;
-    let targetH = this.serverVideoHeight || this.videoHeight;
-    if (!targetW || !targetH) {
-      targetW = this.screenWidth || 1080;
-      targetH = this.screenHeight || 2340;
+    // Determine target coordinate space (matching current video orientation).
+    // If client supplied width & height, (x, y) is already mapped directly in that coordinate space.
+    const targetW = (width > 10) ? Math.round(width) : (this.videoWidth || this.serverVideoWidth || 720);
+    const targetH = (height > 10) ? Math.round(height) : (this.videoHeight || this.serverVideoHeight || 1600);
+
+    let finalX, finalY;
+    if (width > 10 && height > 10 && (width !== targetW || height !== targetH)) {
+      finalX = Math.round((x / width) * targetW);
+      finalY = Math.round((y / height) * targetH);
+    } else {
+      finalX = Math.round(x);
+      finalY = Math.round(y);
     }
 
-    const srcW = (width  > 10) ? width  : targetW;
-    const srcH = (height > 10) ? height : targetH;
-    
-    const scaledX = Math.round((x / srcW) * targetW);
-    const scaledY = Math.round((y / srcH) * targetH);
-
-    // Clamp to valid range
-    const finalX = Math.max(0, Math.min(targetW - 1, scaledX));
-    const finalY = Math.max(0, Math.min(targetH - 1, scaledY));
+    // Clamp strictly within [0, targetW - 1] and [0, targetH - 1]
+    finalX = Math.max(0, Math.min(targetW - 1, finalX));
+    finalY = Math.max(0, Math.min(targetH - 1, finalY));
 
     const buf = Buffer.allocUnsafe(32);
     buf.writeUInt8(2, 0);                 // INJECT_TOUCH_EVENT
@@ -1016,6 +1019,21 @@ class ScrcpyEngine extends EventEmitter {
     } catch (e) { 
       logger.warn(`[ScrcpyEngine ${this.serial}] touch write failed: ${e.message}`);
       return false; 
+    }
+  }
+
+  /**
+   * Rotate Device screen via scrcpy control message 11 (SC_CONTROL_MSG_TYPE_ROTATE_DEVICE)
+   */
+  rotateDevice() {
+    if (!this.controlSocket || this.controlSocket.destroyed) return false;
+    try {
+      const buf = Buffer.allocUnsafe(1);
+      buf.writeUInt8(11, 0); // SC_CONTROL_MSG_TYPE_ROTATE_DEVICE = 11
+      this.controlSocket.write(buf);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
