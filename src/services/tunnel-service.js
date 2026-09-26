@@ -346,8 +346,9 @@ function startNamedTunnelWatchdog() {
         namedTunnelProc = spawn(binPath, ['tunnel', 'run', '--token', token], {
           windowsHide: true,
           stdio: 'ignore',
-          detached: false,
+          detached: true,
         });
+        namedTunnelProc.unref();
 
         namedTunnelProc.on('error', (e) => {
           logger.warn('[TunnelWatchdog] Tunnel spawn warning:', e.message);

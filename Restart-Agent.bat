@@ -79,6 +79,9 @@ if %errorlevel% neq 0 (
 )
 
 if exist "%INSTALL_DIR%\wifi-devices-cache.json" del /F /Q "%INSTALL_DIR%\wifi-devices-cache.json" >nul 2>&1
+if exist "%INSTALL_DIR%\license_cache.json" del /F /Q "%INSTALL_DIR%\license_cache.json" >nul 2>&1
+if exist "%INSTALL_DIR%\*.tmp" del /F /Q "%INSTALL_DIR%\*.tmp" >nul 2>&1
+echo [OK] Removed all unnecessary cache files (wifi cache, license cache, temp files).
 
 :: ── STEP 3: Clearly Indicate the Code Being Used ─────────────────────────────
 echo.
@@ -106,22 +109,62 @@ echo [*] Connected Devices:
 
 :: ── STEP 5: Launch Agent Service & Cloudflare Tunnel ─────────────────────────
 echo.
-echo [4/5] Launching DeviceFarm Agent Service (Headless Node.js)...
+echo [4/5] Launching DeviceFarm Agent Service & Cloudflare Tunnel...
 
 set "NODE=node"
 for /f "delims=" %%I in ('where node 2^>nul') do if not defined NODE set "NODE=%%I"
 if not defined NODE if exist "%ProgramFiles%\nodejs\node.exe" set "NODE=%ProgramFiles%\nodejs\node.exe"
 if not defined NODE if exist "%ProgramFiles(x86)%\nodejs\node.exe" set "NODE=%ProgramFiles(x86)%\nodejs\node.exe"
 
-:: Start agent directly in background via headless service-watchdog
+:: 5a. Start agent directly in background via headless service-watchdog
+echo [*] Starting Agent Service watchdog (Node.js)...
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
     "Start-Process -FilePath '%NODE%' -ArgumentList 'src\main\service-watchdog.js' -WorkingDirectory '%INSTALL_DIR%' -WindowStyle Hidden"
 
+:: 5b. Locate or download cloudflared binary for agent.dennoh.site
+set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files (x86)\cloudflared\cloudflared.exe"
+
+if not exist "%CLOUDFLARED_EXE%" (
+    echo [*] Cloudflared not found locally. Downloading cloudflared-windows-amd64.exe...
+    if not exist "%INSTALL_DIR%\assets\bin" mkdir "%INSTALL_DIR%\assets\bin" >nul 2>nul
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '%INSTALL_DIR%\assets\bin\cloudflared.exe' -UseBasicParsing"
+    if exist "%INSTALL_DIR%\assets\bin\cloudflared.exe" set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
+)
+
+:: 5c. Start Cloudflare Tunnel daemon for agent.dennoh.site
+if exist "%CLOUDFLARED_EXE%" (
+    echo [*] Starting Cloudflare Tunnel daemon for agent.dennoh.site...
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden"
+    echo [OK] Cloudflare tunnel started in background.
+) else (
+    echo [WARN] Cloudflared binary could not be found or downloaded.
+)
+
+:: 5d. Re-register Windows 24/7 background service so agent survives reboots
+set "TASK_BOOT=DeviceFarm_Agent_BootService"
+set "TASK_LOGON=DeviceFarm_Agent_LogonService"
+set "VBS_LAUNCHER=%INSTALL_DIR%\Start-Agent-Silent.vbs"
+set "STARTUP_ALL=%ProgramData%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "LNK_ALL=%STARTUP_ALL%\DeviceFarm-Agent-Service.lnk"
+
+if exist "%VBS_LAUNCHER%" (
+    schtasks /create /tn "%TASK_BOOT%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONSTART /ru "SYSTEM" /rl HIGHEST /f >nul 2>&1
+    schtasks /create /tn "%TASK_LOGON%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "try { $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_ALL%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%VBS_LAUNCHER%\"'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.WindowStyle = 0; $s.Description = 'DeviceFarm Agent Autonomous Background Service'; $s.Save() } catch {}" >nul 2>&1
+    echo [OK] Windows 24/7 background tasks re-registered for boot and login.
+)
+
 :: ── STEP 6: Health Verification ─────────────────────────────────────────────
 echo.
-echo [5/5] Waiting for Dashboard and stream proxy on http://localhost:7400...
+echo [5/5] Verifying local dashboard (port 7400) and public tunnel (agent.dennoh.site)...
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$ok = $false; for ($i = 0; $i -lt 15; $i++) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($ok) { Write-Host ' [OK] Dashboard Server is LIVE on port 7400!' } else { Write-Host ' [*] Dashboard Server is still initializing in background...' }"
+    "$okLocal = $false; for ($i = 0; $i -lt 15; $i++) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { $okLocal = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($okLocal) { Write-Host ' [OK] Local Dashboard Server is LIVE on port 7400!' } else { Write-Host ' [*] Local Dashboard Server is still initializing...' }; $cfProc = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if ($cfProc) { Write-Host ' [OK] Cloudflare Tunnel daemon is RUNNING (PID:' $cfProc[0].Id ')!' } else { Write-Host ' [WARN] Cloudflare Tunnel process not detected yet' }"
 
 start "" "http://localhost:7400"
 
@@ -131,7 +174,8 @@ echo   DEVICEFARM AGENT IS RUNNING!
 echo  ================================================================
 echo   Local Dashboard : http://localhost:7400
 echo   Public Domain   : https://agent.dennoh.site
-echo   Status          : Operational ^& Syncing to Supabase
+echo   Status          : Operational ^& Cloudflare Tunnel Active
+echo   Background Task : 24/7 Auto-Start on Boot ^& Logon Configured
 echo  ================================================================
 echo.
 pause

@@ -69,10 +69,19 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     if (e) e.stopPropagation();
     setResettingOrientation(prev => ({ ...prev, [serial]: true }));
     try {
-      await fetch(`https://agent.dennoh.site/api/devices/${encodeURIComponent(serial)}/reset-rotation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const targetUrls = [
+        `https://agent.dennoh.site/api/devices/${encodeURIComponent(serial)}/reset-rotation`,
+        `/.netlify/functions/adb?path=${encodeURIComponent(`/devices/${serial}/reset-rotation`)}`,
+      ];
+      for (const url of targetUrls) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          if (res.ok) break;
+        } catch (_) {}
+      }
       // Allow the scrcpy engine on the agent 600ms to restart and settle, then bust the stream iframe cache
       setTimeout(() => {
         handleReloadDevice(serial);
@@ -88,10 +97,19 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
     if (e) e.stopPropagation();
     setClearingRecents(prev => ({ ...prev, [serial]: true }));
     try {
-      await fetch(`https://agent.dennoh.site/api/devices/${encodeURIComponent(serial)}/clear-recents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const targetUrls = [
+        `https://agent.dennoh.site/api/devices/${encodeURIComponent(serial)}/clear-recents`,
+        `/.netlify/functions/adb?path=${encodeURIComponent(`/devices/${serial}/clear-recents`)}`,
+      ];
+      for (const url of targetUrls) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          if (res.ok) break;
+        } catch (_) {}
+      }
     } catch (err) {
       console.warn('Failed to clear recents on device:', err);
     } finally {
@@ -112,21 +130,58 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       if (document.visibilityState === 'visible') {
         fetchDevicesAndLockState(false);
       }
-    }, 300000);
+    }, 60000);
 
-    // Auto-refresh when internet connectivity restores (fixes cached failed 502/network error iframes without manual airplane mode toggle)
+    // Auto-refresh when internet connectivity restores (fixes cached failed 502/network error iframes)
     const handleOnline = () => {
       console.log('[CctvWall] Network reconnected online — busting iframe stream cache');
       setRefreshNonce(Date.now());
       fetchDevicesAndLockState(false);
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchDevicesAndLockState(false);
+      }
+    };
+
+    // Auto-detect when agent restarts or recovers from 502, automatically refreshing stuck iframes
+    let isAgentDown = false;
+    const healthInterval = setInterval(async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 4000);
+        const res = await fetch('https://agent.dennoh.site/api/binding/code', {
+          method: 'GET',
+          cache: 'no-store',
+          signal: ctrl.signal,
+        });
+        clearTimeout(tid);
+        if (res.ok) {
+          if (isAgentDown) {
+            console.log('[CctvWall] DeviceFarm Agent tunnel back online — auto-busting 502 iframe caches');
+            isAgentDown = false;
+            setRefreshNonce(Date.now());
+            fetchDevicesAndLockState(false);
+          }
+        } else {
+          isAgentDown = true;
+        }
+      } catch (_) {
+        isAgentDown = true;
+      }
+    }, 12000);
+
     window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       supabase.removeChannel(channel);
       clearInterval(interval);
+      clearInterval(healthInterval);
       window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [fetchDevicesAndLockState]);
 

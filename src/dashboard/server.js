@@ -287,8 +287,9 @@ function startDashboardServer(port = 7400) {
       try {
       // Enable CORS & Security headers (permitting frame embedding on dennoh.site)
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-farm-auth-key');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Access-Control-Max-Age', '86400');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-XSS-Protection', '1; mode=block');
       res.setHeader('Referrer-Policy', 'no-referrer');
@@ -297,10 +298,15 @@ function startDashboardServer(port = 7400) {
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
       res.setHeader('Surrogate-Control', 'no-store');
-      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'self' https://dennoh.site https://*.dennoh.site http://localhost:*;");
+      res.setHeader('Content-Security-Policy', "default-src 'self' * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src * ws: wss:; frame-ancestors *;");
 
       if (req.method === 'OPTIONS') {
-        res.writeHead(204);
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Max-Age': '86400',
+        });
         res.end();
         return;
       }
@@ -1472,9 +1478,9 @@ function startDashboardServer(port = 7400) {
       }
     });
 
-    server.listen(port, () => {
+    server.listen(port, '0.0.0.0', () => {
       const url = `http://localhost:${port}`;
-      logger.info(`[DashboardServer] Listening at ${url}`);
+      logger.info(`[DashboardServer] Listening at ${url} (0.0.0.0:${port})`);
 
       // Ensure Cloudflare Named Tunnel daemon is continuously running & supervised for agent.dennoh.site
       try {

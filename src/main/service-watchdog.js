@@ -29,6 +29,10 @@ function preLaunchCleanup() {
     if (fs.existsSync(wifiCache)) {
       try { fs.unlinkSync(wifiCache); } catch (_) {}
     }
+    const licCache = path.join(rootDir, 'license_cache.json');
+    if (fs.existsSync(licCache)) {
+      try { fs.unlinkSync(licCache); } catch (_) {}
+    }
   } catch (_) {}
 }
 
@@ -89,6 +93,7 @@ function resolveCloudflaredPath() {
     'C:\\DeviceFarmAgent\\assets\\bin\\cloudflared.exe',
     'C:\\cloudflared\\cloudflared.exe',
     'C:\\Program Files\\cloudflared\\cloudflared.exe',
+    'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe',
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) {
@@ -97,6 +102,21 @@ function resolveCloudflaredPath() {
       } catch (_) {}
     }
   }
+
+  // Auto-download cloudflared if missing
+  const targetBin = path.join(rootDir, 'assets', 'bin', 'cloudflared.exe');
+  try {
+    const binDir = path.dirname(targetBin);
+    if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
+    const PS = process.env.SystemRoot
+      ? `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+      : 'powershell.exe';
+    execSync(`"${PS}" -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '${targetBin}' -UseBasicParsing"`, { timeout: 60000, stdio: 'ignore' });
+    if (fs.existsSync(targetBin) && fs.statSync(targetBin).size > 1000000) {
+      return targetBin;
+    }
+  } catch (_) {}
+
   return null;
 }
 
@@ -115,8 +135,9 @@ function superviseCloudflared() {
       cloudflaredChild = spawn(bin, ['tunnel', 'run', '--token', token], {
         windowsHide: true,
         stdio: 'ignore',
-        detached: false,
+        detached: true,
       });
+      cloudflaredChild.unref();
       cloudflaredChild.on('exit', () => { cloudflaredChild = null; });
       cloudflaredChild.on('error', () => { cloudflaredChild = null; });
     } catch (_) {}
