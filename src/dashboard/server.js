@@ -314,6 +314,23 @@ function startDashboardServer(port = 7400) {
       const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const url = fullUrl.pathname;
 
+      if (url === '/favicon.ico') {
+        const iconCandidates = [
+          path.join(__dirname, '..', '..', 'assets', 'icon.png'),
+          path.join(process.cwd(), 'assets', 'icon.png'),
+        ];
+        for (const p of iconCandidates) {
+          if (fs.existsSync(p)) {
+            res.writeHead(200, { 'Content-Type': 'image/png' });
+            fs.createReadStream(p).pipe(res);
+            return;
+          }
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
       // ── API Routes ────────────────────────────────────────────────────────
       // ── Public endpoint for initial binding code (no auth required) ────
       if (url === '/api/binding/code') {
