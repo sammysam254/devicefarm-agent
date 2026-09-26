@@ -152,9 +152,10 @@ export default function CctvWall({ currentUser, isSuperAdmin, isSeedAdmin }) {
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 4000);
-        const res = await fetch('https://agent.dennoh.site/api/binding/code', {
+        const res = await fetch(`https://agent.dennoh.site/api/binding/code?_t=${Date.now()}`, {
           method: 'GET',
           cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
           signal: ctrl.signal,
         });
         clearTimeout(tid);
