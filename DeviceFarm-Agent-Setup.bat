@@ -436,11 +436,11 @@ if exist "%CLOUDFLARED_EXE%" (
     "%CLOUDFLARED_EXE%" --version
 )
 
-:: 5c. Start Cloudflare Tunnel for agent.dennoh.site (Single Instance Check)
+:: 5c. Start Cloudflare Tunnel for agent.dennoh.site (Host Machine / Device Guard)
 if exist "%CLOUDFLARED_EXE%" (
     echo [*] Checking Cloudflare Tunnel daemon for agent.dennoh.site...
     "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$cf = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if (-not $cf) { $cf = Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden -PassThru; Write-Host ' [OK] Cloudflare tunnel started with PID:' $cf.Id } else { Write-Host ' [OK] Cloudflare tunnel is already active with PID:' $cf[0].Id }"
+        "$devs = & '%ADB_BIN%' devices | Where-Object { $_ -match '\tdevice$' }; $isDevMachine = ($env:COMPUTERNAME -eq 'vertext' -or $env:USERNAME -eq 'sammy'); if ($isDevMachine -and (-not $devs)) { Write-Host ' [SKIP] Development machine detected with 0 attached phones. Skipping Cloudflare tunnel to protect USA production host.' } else { $cf = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if (-not $cf) { $cf = Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden -PassThru; Write-Host ' [OK] Cloudflare tunnel started with PID:' $cf.Id } else { Write-Host ' [OK] Cloudflare tunnel is already active with PID:' $cf[0].Id } }"
 ) else (
     echo [ERROR] Cloudflared binary could not be found or downloaded!
 )
