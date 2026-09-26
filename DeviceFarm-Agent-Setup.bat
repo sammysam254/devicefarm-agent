@@ -64,9 +64,25 @@ if defined CALLER_DIR if exist "%CALLER_DIR%\src\main\index.js" (
 
 set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
 
-:: ── Locate PowerShell ────────────────────────────────────────────────────────
+:: ── Locate Environment & Tools ──────────────────────────────────────────────
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if not exist "%PS%" set "PS=%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+
+set "GIT="
+for /f "delims=" %%I in ('where git 2^>nul') do if not defined GIT set "GIT=%%I"
+if not defined GIT if exist "%ProgramFiles%\Git\cmd\git.exe"          set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+if not defined GIT if exist "%ProgramFiles(x86)%\Git\cmd\git.exe"     set "GIT=%ProgramFiles(x86)%\Git\cmd\git.exe"
+if not defined GIT if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "GIT=%LOCALAPPDATA%\Programs\Git\cmd\git.exe"
+
+set "NODE="
+set "NPM="
+if exist "%ProgramFiles%\nodejs\node.exe"          set "NODE=%ProgramFiles%\nodejs\node.exe"
+if exist "%ProgramFiles%\nodejs\npm.cmd"           set "NPM=%ProgramFiles%\nodejs\npm.cmd"
+if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "NODE=%LOCALAPPDATA%\Programs\nodejs\node.exe"
+if exist "%LOCALAPPDATA%\Programs\nodejs\npm.cmd"  set "NPM=%LOCALAPPDATA%\Programs\nodejs\npm.cmd"
+if not defined NODE for /f "delims=" %%I in ('where node 2^>nul') do if not defined NODE set "NODE=%%I"
+if not defined NPM  for /f "delims=" %%I in ('where npm.cmd 2^>nul') do if not defined NPM  set "NPM=%%I"
+if not defined NPM  for /f "delims=" %%I in ('where npm 2^>nul')     do if not defined NPM  set "NPM=%%I"
 
 echo.
 echo  ================================================================
@@ -75,14 +91,22 @@ echo  ================================================================
 echo   Target Directory : %INSTALL_DIR%
 echo   Source Repository: %REPO_URL%
 echo   Administrator    : Confirmed (Elevated)
+if defined NODE echo   Node.js Binary   : %NODE%
+if defined GIT  echo   Git Binary       : %GIT%
 echo  ================================================================
 echo.
 
 :: ── Determine Execution Mode ────────────────────────────────────────────────
-if /i "%ACTION_FLAG%"=="--restart" goto :clean_restart
-if /i "%ACTION_FLAG%"=="-restart"  goto :clean_restart
-if /i "%ACTION_FLAG%"=="restart"   goto :clean_restart
-if /i "%ACTION_FLAG%"=="/restart"  goto :clean_restart
+set "WANTS_RESTART="
+echo %* | findstr /i "restart" >nul && set "WANTS_RESTART=1"
+if /i "%ACTION_FLAG%"=="--restart" set "WANTS_RESTART=1"
+if /i "%ACTION_FLAG%"=="-restart"  set "WANTS_RESTART=1"
+if /i "%ACTION_FLAG%"=="restart"   set "WANTS_RESTART=1"
+if /i "%ACTION_FLAG%"=="/restart"  set "WANTS_RESTART=1"
+
+if defined WANTS_RESTART (
+    if defined GIT if defined NODE goto :clean_restart
+)
 
 if exist "%INSTALL_DIR%\.git" (
     echo   [1] Clean Restart, Git Pull ^& Cache Reset (Recommended)
@@ -90,7 +114,7 @@ if exist "%INSTALL_DIR%\.git" (
     echo.
     set /p "USER_CHOICE=Select an option [1 or 2] (Press Enter for 1): "
     if "!USER_CHOICE!"=="2" goto :full_install
-    goto :clean_restart
+    if defined GIT if defined NODE goto :clean_restart
 )
 
 :full_install
@@ -288,7 +312,7 @@ if not defined NODE (
 
 :: ── Step 1: Forcefully Terminate Old Processes ───────────────────────────────
 echo.
-echo [1/5] Terminating previous processes (electron, scrcpy, cloudflared, node, adb)...
+echo [1/5] Terminating previous agent processes (cloudflared, scrcpy, agent node, adb)...
 schtasks /delete /tn "DeviceFarm_Agent_BootService" /f >nul 2>&1
 schtasks /delete /tn "DeviceFarm_Agent_LogonService" /f >nul 2>&1
 schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
@@ -296,44 +320,54 @@ schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
 taskkill /F /IM cloudflared.exe /T 2>&1
 taskkill /F /IM electron.exe /T 2>&1
 taskkill /F /IM scrcpy.exe /T 2>&1
-taskkill /F /IM node.exe /T 2>&1
-taskkill /F /IM adb.exe /T 2>&1
+
+echo [*] Terminating any existing DeviceFarm Agent Node processes...
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*devicefarm-agent*' -or $_.CommandLine -like '*DeviceFarmAgent*' -or $_.CommandLine -like '*service-watchdog*' -or $_.CommandLine -like '*src\main\index.js*' } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Write-Host ' [OK] Terminated Agent Node PID:' $_.ProcessId } catch {} }"
 
 echo [*] Releasing port 7400...
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "$conns = Get-NetTCPConnection -LocalPort 7400 -ErrorAction SilentlyContinue; if ($conns) { $conns | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue; Write-Host ' [OK] Terminated PID on port 7400:' $_ } catch {} } } else { Write-Host ' [OK] Port 7400 is already free.' }"
+
+taskkill /F /IM adb.exe /T 2>&1
 
 ping 127.0.0.1 -n 2 >nul 2>&1
 
 :: ── Step 2: Remove All Unnecessary Caches & Flush Network/WiFi Cache ───────────
 echo.
 echo [2/5] Wiping stale caches and flushing network/Wi-Fi socket cache...
-if exist "%INSTALL_DIR%\wifi-devices-cache.json" (
-    del /F /Q "%INSTALL_DIR%\wifi-devices-cache.json"
-    echo  [OK] Deleted: wifi-devices-cache.json
-) else (
-    echo  [*] No wifi-devices-cache.json present
-)
-if exist "%INSTALL_DIR%\license_cache.json" (
-    del /F /Q "%INSTALL_DIR%\license_cache.json"
-    echo  [OK] Deleted: license_cache.json
-) else (
-    echo  [*] No license_cache.json present
-)
-if exist "%INSTALL_DIR%\*.tmp" (
-    del /F /Q "%INSTALL_DIR%\*.tmp"
-    echo  [OK] Deleted: temporary cache files (*.tmp)
+for %%D in ("%INSTALL_DIR%" "C:\cvc\devicefarm-agent" "C:\DeviceFarmAgent" "%TEMP%") do (
+    if exist "%%~D\wifi-devices-cache.json" (
+        del /F /Q "%%~D\wifi-devices-cache.json" 2>&1
+        echo  [OK] Deleted: %%~D\wifi-devices-cache.json
+    )
+    if exist "%%~D\license_cache.json" (
+        del /F /Q "%%~D\license_cache.json" 2>&1
+        echo  [OK] Deleted: %%~D\license_cache.json
+    )
+    if exist "%%~D\*.tmp" (
+        del /F /Q "%%~D\*.tmp" 2>&1
+        echo  [OK] Deleted: %%~D\*.tmp
+    )
 )
 
 echo [*] Flushing Windows DNS resolver cache...
 ipconfig /flushdns
 
+echo [*] Re-registering DNS with network adapter...
+ipconfig /registerdns
+
 echo [*] Purging NetBIOS cache...
-nbtstat -R >nul 2>&1
+nbtstat -R
+nbtstat -RR
 
 echo [*] Resetting IP ARP neighbor cache...
-netsh interface ip delete arpcache >nul 2>&1
-echo [OK] Network and Wi-Fi resolver cache flushed clean.
+netsh interface ip delete arpcache
+arp -d * >nul 2>&1
+
+echo [*] Flushing HTTP server API caches...
+netsh http flush logbuffer >nul 2>&1
+echo [OK] Network, Wi-Fi socket, and resolver caches flushed clean.
 
 :: ── Step 3: Pull Latest Code From GitHub ─────────────────────────────────────
 echo.
@@ -376,10 +410,12 @@ echo.
 :: ── Step 5: Launch Watchdog, Cloudflare Tunnel & Register 24/7 Tasks ─────────
 echo [5/5] Launching DeviceFarm Agent Service ^& Cloudflare Tunnel...
 
+if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs" >nul 2>nul
+
 :: 5a. Start Headless Watchdog
 echo [*] Starting Agent Service watchdog (Node.js)...
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$proc = Start-Process -FilePath '%NODE%' -ArgumentList 'src\main\service-watchdog.js' -WorkingDirectory '%INSTALL_DIR%' -WindowStyle Hidden -PassThru; Write-Host ' [OK] Agent watchdog launched with PID:' $proc.Id"
+    "$proc = Start-Process -FilePath '%NODE%' -ArgumentList 'src\main\service-watchdog.js' -WorkingDirectory '%INSTALL_DIR%' -RedirectStandardOutput '%INSTALL_DIR%\logs\watchdog.log' -RedirectStandardError '%INSTALL_DIR%\logs\watchdog_error.log' -WindowStyle Hidden -PassThru; Write-Host ' [OK] Agent watchdog launched with PID:' $proc.Id"
 
 :: 5b. Locate or Auto-Download Cloudflared Binary
 set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
@@ -400,11 +436,11 @@ if exist "%CLOUDFLARED_EXE%" (
     "%CLOUDFLARED_EXE%" --version
 )
 
-:: 5c. Start Cloudflare Tunnel for agent.dennoh.site
+:: 5c. Start Cloudflare Tunnel for agent.dennoh.site (Single Instance Check)
 if exist "%CLOUDFLARED_EXE%" (
-    echo [*] Starting Cloudflare Tunnel daemon for agent.dennoh.site...
+    echo [*] Checking Cloudflare Tunnel daemon for agent.dennoh.site...
     "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$cf = Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden -PassThru; Write-Host ' [OK] Cloudflare tunnel started with PID:' $cf.Id"
+        "$cf = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if (-not $cf) { $cf = Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden -PassThru; Write-Host ' [OK] Cloudflare tunnel started with PID:' $cf.Id } else { Write-Host ' [OK] Cloudflare tunnel is already active with PID:' $cf[0].Id }"
 ) else (
     echo [ERROR] Cloudflared binary could not be found or downloaded!
 )
@@ -426,9 +462,9 @@ if exist "%VBS_LAUNCHER%" (
 
 :: ── Health Verification ──────────────────────────────────────────────────────
 echo.
-echo [*] Verifying local dashboard (port 7400) and public tunnel status...
+echo [*] Verifying local dashboard (port 7400 dual-stack) and public tunnel status...
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$okLocal = $false; for ($i = 0; $i -lt 15; $i++) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { $okLocal = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($okLocal) { Write-Host ' [OK] Local Dashboard Server is LIVE on port 7400!' } else { Write-Host ' [*] Local Dashboard Server is still initializing...' }; $cfProc = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if ($cfProc) { Write-Host ' [OK] Cloudflare Tunnel daemon is RUNNING (PID:' $cfProc[0].Id ')!' } else { Write-Host ' [WARN] Cloudflare Tunnel process not detected yet' }"
+    "$okIpv4 = $false; $okIpv6 = $false; for ($i = 0; $i -lt 15; $i++) { try { $r4 = Invoke-WebRequest -Uri 'http://127.0.0.1:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r4.StatusCode -eq 200) { $okIpv4 = $true } } catch {}; try { $r6 = Invoke-WebRequest -Uri 'http://[::1]:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r6.StatusCode -eq 200) { $okIpv6 = $true } } catch {}; if ($okIpv4 -and $okIpv6) { break }; Start-Sleep -Seconds 1 }; if ($okIpv4) { Write-Host ' [OK] Local Dashboard Server is LIVE on IPv4 (127.0.0.1:7400)!' } else { Write-Host ' [*] Local Dashboard Server is still initializing on IPv4...' }; if ($okIpv6) { Write-Host ' [OK] Local Dashboard Server is LIVE on IPv6 ([::1]:7400)!' } else { Write-Host ' [*] Local Dashboard Server IPv6 state pending...' }; $cfProc = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if ($cfProc) { Write-Host ' [OK] Cloudflare Tunnel daemon is RUNNING (PID:' $cfProc[0].Id ')!' } else { Write-Host ' [WARN] Cloudflare Tunnel process not detected yet' }; $okPublic = $false; for ($i = 0; $i -lt 10; $i++) { try { $rp = Invoke-WebRequest -Uri 'https://agent.dennoh.site/api/license/status' -UseBasicParsing -TimeoutSec 3; if ($rp.StatusCode -eq 200) { $okPublic = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($okPublic) { Write-Host ' [OK] Public URL https://agent.dennoh.site is LIVE and responding 200 OK!' } else { Write-Host ' [*] Public tunnel route is propagating...' }"
 
 start "" "http://localhost:7400"
 

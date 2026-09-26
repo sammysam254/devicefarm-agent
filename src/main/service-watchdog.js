@@ -24,14 +24,14 @@ function preLaunchCleanup() {
       execSync('git pull --ff-only origin main >nul 2>&1', { timeout: 15000, stdio: 'ignore', cwd: rootDir });
     } catch (_) {}
 
-    // 1. Permanently remove any legacy cache file if created
-    const wifiCache = path.join(rootDir, 'wifi-devices-cache.json');
-    if (fs.existsSync(wifiCache)) {
-      try { fs.unlinkSync(wifiCache); } catch (_) {}
-    }
-    const licCache = path.join(rootDir, 'license_cache.json');
-    if (fs.existsSync(licCache)) {
-      try { fs.unlinkSync(licCache); } catch (_) {}
+    // 1. Permanently remove all legacy cache files in rootDir and fallback directories
+    for (const d of [rootDir, 'C:\\cvc\\devicefarm-agent', 'C:\\DeviceFarmAgent']) {
+      try {
+        const w = path.join(d, 'wifi-devices-cache.json');
+        if (fs.existsSync(w)) fs.unlinkSync(w);
+        const l = path.join(d, 'license_cache.json');
+        if (fs.existsSync(l)) fs.unlinkSync(l);
+      } catch (_) {}
     }
   } catch (_) {}
 }
@@ -123,7 +123,7 @@ function resolveCloudflaredPath() {
 let isStartingCloudflared = false;
 
 function superviseCloudflared() {
-  if (isStopping || isStartingCloudflared) return;
+  if (isStopping || isStartingCloudflared || (cloudflaredChild && cloudflaredChild.exitCode === null)) return;
   isStartingCloudflared = true;
 
   const token = 'eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9';

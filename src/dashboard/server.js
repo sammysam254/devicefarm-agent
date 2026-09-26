@@ -1498,13 +1498,21 @@ function startDashboardServer(port = 7400) {
     server.keepAliveTimeout = 5000;
     server.headersTimeout = 6000;
 
-    server.listen(port, '0.0.0.0', () => {
+    const onListening = () => {
       const url = `http://localhost:${port}`;
-      logger.info(`[DashboardServer] Listening at ${url} (0.0.0.0:${port})`);
+      logger.info(`[DashboardServer] Listening at ${url} (port ${port} dual-stack IPv4/IPv6)`);
       resolve({ port, url });
-    });
+    };
+
+    server.listen(port, onListening);
 
     server.on('error', (err) => {
+      if (!server.listening && err.code !== 'EADDRINUSE') {
+        try {
+          server.listen(port, '0.0.0.0', onListening);
+          return;
+        } catch (_) {}
+      }
       logger.error(`[DashboardServer] Failed to start on port ${port}: ${err.message}`);
       reject(err);
     });
