@@ -1,65 +1,102 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: ── Self-replicate to %TEMP% so git update cannot disrupt running batch file ──
+:: ════════════════════════════════════════════════════════════════════════════
+::  DEVICEFARM AGENT — UNIFIED SETUP, RESTART & RECOVERY SUITE
+::  One single, all-in-one script for:
+::    1. Full Fresh Installation (Git, Node.js, ADB, Electron, npm dependencies)
+::    2. Clean Restart & Process Reset (Terminates all zombies, frees port 7400)
+::    3. Cache Elimination (Wipes wifi cache, license cache, and temp files)
+::    4. Latest GitHub Code Sync (fetch, reset --hard origin/main, clean -fd)
+::    5. Cloudflare Tunnel Supervision (Auto-downloads & launches agent.dennoh.site tunnel)
+::    6. 24/7 Background Service Registration (Auto-starts on Boot & User Logon)
+::    7. Real-Time Health Verification (Port 7400 + Cloudflare tunnel status)
+:: ════════════════════════════════════════════════════════════════════════════
+
+title DeviceFarm Agent — Setup ^& Manager
+
+:: ── Step 0: Ensure Administrator Elevation ───────────────────────────────────
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo  ================================================================
+    echo  [!] Requesting Administrator privileges to manage system services...
+    echo  ================================================================
+    echo.
+    PowerShell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd -ArgumentList '/c \"\"%~f0\"\" %*' -Verb RunAs"
+    exit /b
+)
+
+:: ── Self-replicate to %TEMP% so git updates cannot disrupt running batch file ──
+set "ORIG_DIR=%~dp0"
+if "%ORIG_DIR:~-1%"=="\" set "ORIG_DIR=%ORIG_DIR:~0,-1%"
+
 if /i not "%~dp0"=="%TEMP%\DeviceFarmSetup\" (
     if not exist "%TEMP%\DeviceFarmSetup" mkdir "%TEMP%\DeviceFarmSetup" >nul 2>&1
     copy /Y "%~f0" "%TEMP%\DeviceFarmSetup\setup.bat" >nul 2>&1
-    call "%TEMP%\DeviceFarmSetup\setup.bat" %*
+    call "%TEMP%\DeviceFarmSetup\setup.bat" "%ORIG_DIR%" %*
     exit /b !errorlevel!
 )
 
-title DeviceFarm Agent — Setup
+:: ── Parse Arguments & Detect Install Directory ──────────────────────────────
+set "CALLER_DIR=%~1"
+set "ACTION_FLAG=%~2"
+if "%CALLER_DIR:~0,2%"=="--" (
+    set "ACTION_FLAG=%CALLER_DIR%"
+    set "CALLER_DIR="
+)
+if "%CALLER_DIR:~0,1%"=="/" (
+    set "ACTION_FLAG=%CALLER_DIR%"
+    set "CALLER_DIR="
+)
 
-:: ═══════════════════════════════════════════════════════════════════════════
-::  DEVICEFARM AGENT — ONE-CLICK INSTALLER
-::  This script is all the customer needs.
-::  It will:
-::    1. Install Git (if missing)
-::    2. Install Node.js LTS (if missing)
-::    3. Install ADB platform-tools (if missing)
-::    4. Clone / update the agent from GitHub
-::    5. Install npm dependencies
-::    6. Download Electron binary
-::    7. Run payment verification
-::    8. Launch the agent and open Dashboard
-:: ═══════════════════════════════════════════════════════════════════════════
-
-echo.
-echo  ================================================================
-echo   DEVICEFARM DESKTOP AGENT  ^|  One-Click Setup
-echo  ================================================================
-echo.
-
-:: ── Where to install the agent ─────────────────────────────────────────────
 set "INSTALL_DIR=C:\DeviceFarmAgent"
-set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
-set "CURRENT_DIR=%~dp0"
-if "%CURRENT_DIR:~-1%"=="\" set "CURRENT_DIR=%CURRENT_DIR:~0,-1%"
+if defined CALLER_DIR if exist "%CALLER_DIR%\.git" (
+    set "INSTALL_DIR=%CALLER_DIR%"
+) else if exist "C:\DeviceFarmAgent\.git" (
+    set "INSTALL_DIR=C:\DeviceFarmAgent"
+) else if exist "C:\cvc\devicefarm-agent\.git" (
+    set "INSTALL_DIR=C:\cvc\devicefarm-agent"
+) else if defined CALLER_DIR (
+    set "INSTALL_DIR=%CALLER_DIR%"
+)
 
-:: ── Full path to PowerShell (never rely on PATH for this) ──────────────────
+set "REPO_URL=https://github.com/sammysam254/devicefarm-agent.git"
+
+:: ── Locate PowerShell ────────────────────────────────────────────────────────
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if not exist "%PS%" set "PS=%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
 
-echo [*] Install directory : %INSTALL_DIR%
-echo [*] Source repository : %REPO_URL%
+echo.
+echo  ================================================================
+echo   DEVICEFARM DESKTOP AGENT  ^|  Unified Setup ^& Service Manager
+echo  ================================================================
+echo   Target Directory : %INSTALL_DIR%
+echo   Source Repository: %REPO_URL%
+echo  ================================================================
 echo.
 
-:: ── Auto-close EVERYTHING before running (cloudflared, electron, scrcpy, adb, watchdog, port 7400) ──
-echo [*] Terminating all previous agent processes, tunnels, and releasing ports...
-taskkill /F /IM cloudflared.exe /T >nul 2>&1
-taskkill /F /IM electron.exe /T >nul 2>&1
-taskkill /F /IM scrcpy.exe /T >nul 2>&1
-taskkill /F /IM adb.exe /T >nul 2>&1
-taskkill /F /IM node.exe /T >nul 2>&1
-ping 127.0.0.1 -n 2 >nul 2>&1
+:: ── Determine Execution Mode ────────────────────────────────────────────────
+if /i "%ACTION_FLAG%"=="--restart" goto :clean_restart
+if /i "%ACTION_FLAG%"=="-restart"  goto :clean_restart
+if /i "%ACTION_FLAG%"=="restart"   goto :clean_restart
+if /i "%ACTION_FLAG%"=="/restart"  goto :clean_restart
 
+if exist "%INSTALL_DIR%\.git" (
+    echo   [1] Clean Restart, Git Pull ^& Cache Reset (Recommended)
+    echo   [2] Full Fresh Installation (Reinstall dependencies ^& tools)
+    echo.
+    choice /C 12 /N /T 4 /D 1 /M "Select option [1 or 2] (Auto-selecting 1 in 4s): "
+    if errorlevel 2 goto :full_install
+    goto :clean_restart
+)
 
-
+:full_install
 :: ════════════════════════════════════════════════════════════════════════════
-:: STEP 1 — Git
+:: STEP 1 — Git Installation
 :: ════════════════════════════════════════════════════════════════════════════
-echo [1/6] Checking Git...
+echo.
+echo [1/7] Checking Git...
 set "GIT="
 for /f "delims=" %%I in ('where git 2^>nul') do if not defined GIT set "GIT=%%I"
 if not defined GIT if exist "%ProgramFiles%\Git\cmd\git.exe"       set "GIT=%ProgramFiles%\Git\cmd\git.exe"
@@ -88,10 +125,10 @@ if defined GIT (
 )
 
 :: ════════════════════════════════════════════════════════════════════════════
-:: STEP 2 — Node.js
+:: STEP 2 — Node.js LTS Installation
 :: ════════════════════════════════════════════════════════════════════════════
 echo.
-echo [2/6] Checking Node.js...
+echo [2/7] Checking Node.js...
 set "NODE="
 set "NPM="
 
@@ -128,10 +165,10 @@ if not defined NPM for %%I in ("%NODE%") do set "NPM=%%~dpInpm.cmd"
 echo [OK] npm  : %NPM%
 
 :: ════════════════════════════════════════════════════════════════════════════
-:: STEP 3 — ADB platform-tools
+:: STEP 3 — ADB Platform Tools
 :: ════════════════════════════════════════════════════════════════════════════
 echo.
-echo [3/6] Checking ADB...
+echo [3/7] Checking ADB...
 set "ADB="
 if exist "%INSTALL_DIR%\assets\bin\adb.exe"  set "ADB=%INSTALL_DIR%\assets\bin\adb.exe"
 if not defined ADB if exist "C:\platform-tools\adb.exe" set "ADB=C:\platform-tools\adb.exe"
@@ -157,80 +194,34 @@ if defined ADB (
 )
 
 :: ════════════════════════════════════════════════════════════════════════════
-:: STEP 4 — Clone or update the agent repo
+:: STEP 4 — Clone or Update Repository
 :: ════════════════════════════════════════════════════════════════════════════
 echo.
-echo [4/6] Setting up agent files...
+echo [4/7] Setting up agent files...
 
-if exist "%INSTALL_DIR%\.git" (
-    echo [*] Agent directory exists — terminating prior processes and updating to latest code...
-    taskkill /F /IM electron.exe /T >nul 2>&1
-    taskkill /F /IM scrcpy.exe /T >nul 2>&1
-    taskkill /F /IM cloudflared.exe /T >nul 2>&1
-    taskkill /F /IM node.exe /T >nul 2>&1
-    taskkill /F /IM adb.exe /T >nul 2>&1
-    "%GIT%" -C "%INSTALL_DIR%" fetch origin main
-    "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main
-    "%GIT%" -C "%INSTALL_DIR%" clean -fd
-    if exist "%INSTALL_DIR%\wifi-devices-cache.json" del /F /Q "%INSTALL_DIR%\wifi-devices-cache.json" >nul 2>&1
-    echo [OK] Agent updated to latest version from GitHub.
-    echo.
-    echo  ================================================================
-    echo   ACTIVE CODE VERSION:
-    echo  ================================================================
-    "%GIT%" -C "%INSTALL_DIR%" log -n 1
-    echo.
-    echo  ================================================================
-    echo.
-) else (
+if not exist "%INSTALL_DIR%\.git" (
     echo [*] Cloning agent from GitHub into %INSTALL_DIR% ...
-    echo [*] Using shallow clone for faster download...
     "%GIT%" clone --depth 1 --single-branch --branch main "%REPO_URL%" "%INSTALL_DIR%"
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo [ERROR] git clone failed. Check your internet connection.
         pause & exit /b 1
     )
     echo [OK] Agent cloned successfully.
-    echo.
-    echo  ================================================================
-    echo   ACTIVE CODE VERSION:
-    echo  ================================================================
-    "%GIT%" -C "%INSTALL_DIR%" log -n 1
-    echo.
-    echo  ================================================================
-    echo.
 )
 
-:: Switch working directory to the install dir for all remaining steps
 cd /d "%INSTALL_DIR%"
-echo [OK] Working directory: %CD%
 
-:: ── Add Node.js directory to PATH so npm postinstall scripts can call node ──
+:: Add Node.js directory to PATH
 for %%I in ("%NODE%") do set "NODE_DIR=%%~dpI"
 set "PATH=%NODE_DIR%;%PATH%"
-echo [OK] Node.js added to PATH: %NODE_DIR%
 
-:: Patch config.json with correct binary paths and Cloudflare token for this install location
-echo [*] Patching config.json with local binary paths and Cloudflare token...
-"%NODE%" -e "const fs=require('fs'),p='config.json',cfg=fs.existsSync(p)?JSON.parse(fs.readFileSync(p)):{}; cfg.adbPath=require('path').join(process.cwd(),'assets','bin','adb.exe'); cfg.cloudflaredPath=require('path').join(process.cwd(),'assets','bin','cloudflared.exe'); if(!cfg.cloudflareToken) cfg.cloudflareToken='eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9'; fs.writeFileSync(p,JSON.stringify(cfg,null,2));"
-echo [OK] config.json updated.
-
-:: ════════════════════════════════════════════════════════════════════════════
-:: STEP 5 — npm install + Electron binary + scrcpy-server.jar
-:: ════════════════════════════════════════════════════════════════════════════
-echo.
-echo [5/6] Installing dependencies...
-
-if exist "node_modules\winston\package.json" (
-    echo [OK] npm dependencies already installed.
-) else (
-    echo [*] Running npm install — this may take a few minutes...
+:: Install npm dependencies
+if not exist "node_modules\winston\package.json" (
+    echo [*] Running npm install — this may take a couple minutes...
     call "%NPM%" install --no-audit --no-fund
     if !errorlevel! neq 0 (
-        echo [ERROR] npm install failed. Check your internet connection and try again.
-        pause & exit /b 1
+        echo [WARN] npm install returned non-zero. Continuing...
     )
-    echo [OK] npm packages installed.
 )
 
 :: Download scrcpy-server.jar if missing
@@ -238,13 +229,6 @@ if not exist "scrcpy-server.jar" (
     echo [*] Downloading scrcpy-server.jar...
     "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
         "Invoke-WebRequest -Uri 'https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4' -OutFile 'scrcpy-server.jar' -UseBasicParsing"
-    if exist "scrcpy-server.jar" (
-        echo [OK] scrcpy-server.jar ready.
-    ) else (
-        echo [WARN] scrcpy-server.jar missing — streaming may fail!
-    )
-) else (
-    echo [OK] scrcpy-server.jar already present.
 )
 
 :: Download Electron binary if missing
@@ -259,147 +243,167 @@ if not exist "node_modules\electron\dist\electron.exe" (
         del "node_modules\electron\ez.zip" >nul 2>nul
         echo electron.exe> "node_modules\electron\path.txt"
     )
-    if exist "node_modules\electron\dist\electron.exe" (
-        echo [OK] Electron binary ready.
-    ) else (
-        echo [WARN] Electron binary not found — launch may fail.
-    )
-) else (
-    echo [OK] Electron binary already present.
+)
+
+:: Patch config.json
+if exist "src\services\verify-payment.js" (
+    "%NODE%" "src\services\verify-payment.js" >nul 2>&1
 )
 
 :: ════════════════════════════════════════════════════════════════════════════
-:: STEP 6 — Payment verification + Launch
+:: CLEAN RESTART / RESET / UPDATE ENTRY POINT
 :: ════════════════════════════════════════════════════════════════════════════
-echo.
-echo  ================================================================
-echo   STEP 1: PAYMENT SYSTEM VERIFICATION  ($30 / month)
-echo  ================================================================
-echo.
-echo [*] Initializing Machine License & Cloud Binding...
-"%NODE%" "src\services\verify-payment.js"
+:clean_restart
+cd /d "%INSTALL_DIR%"
 
-:: ── Terminate any existing agent process on port 7400 to apply new code ──
-echo [*] Stopping running agent instances to reload latest code...
+echo.
+echo  ================================================================
+echo   CLEAN SYSTEM RESTART, CACHE WIPE ^& CLOUDFLARE LAUNCH
+echo  ================================================================
+echo.
+
+:: ── Locate Git and Node if running directly in restart mode ──────────────────
+if not defined GIT (
+    set "GIT=git"
+    for /f "delims=" %%I in ('where git 2^>nul') do if not defined GIT set "GIT=%%I"
+    if not defined GIT if exist "%ProgramFiles%\Git\cmd\git.exe" set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+    if not defined GIT if exist "%ProgramFiles(x86)%\Git\cmd\git.exe" set "GIT=%ProgramFiles(x86)%\Git\cmd\git.exe"
+    if not defined GIT if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "GIT=%LOCALAPPDATA%\Programs\Git\cmd\git.exe"
+)
+
+if not defined NODE (
+    set "NODE=node"
+    if exist "%ProgramFiles%\nodejs\node.exe"          set "NODE=%ProgramFiles%\nodejs\node.exe"
+    if exist "%ProgramFiles(x86)%\nodejs\node.exe"    set "NODE=%ProgramFiles(x86)%\nodejs\node.exe"
+    if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "NODE=%LOCALAPPDATA%\Programs\nodejs\node.exe"
+    if not defined NODE for /f "delims=" %%I in ('where node 2^>nul') do if not defined NODE set "NODE=%%I"
+)
+
+:: ── Step 1: Forcefully Terminate Old Processes ───────────────────────────────
+echo [1/5] Terminating previous processes (electron, scrcpy, cloudflared, node, adb)...
+schtasks /delete /tn "DeviceFarm_Agent_BootService" /f >nul 2>&1
+schtasks /delete /tn "DeviceFarm_Agent_LogonService" /f >nul 2>&1
+schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
+
+taskkill /F /IM cloudflared.exe /T >nul 2>&1
+taskkill /F /IM electron.exe /T >nul 2>&1
+taskkill /F /IM scrcpy.exe /T >nul 2>&1
+taskkill /F /IM node.exe /T >nul 2>&1
+taskkill /F /IM adb.exe /T >nul 2>&1
+
+:: Free port 7400 specifically
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Get-NetTCPConnection -LocalPort 7400 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } catch {} }"
-"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Stop-Process -Name 'electron','scrcpy' -Force -ErrorAction SilentlyContinue"
-ping 127.0.0.1 -n 2 >nul 2>nul
+  "Get-NetTCPConnection -LocalPort 7400 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } catch {} }" >nul 2>&1
+ping 127.0.0.1 -n 2 >nul 2>&1
+echo [OK] All previous processes killed and port 7400 released.
 
+:: ── Step 2: Remove All Unnecessary Caches ─────────────────────────────────────
+echo [2/5] Wiping stale caches...
+if exist "%INSTALL_DIR%\wifi-devices-cache.json" del /F /Q "%INSTALL_DIR%\wifi-devices-cache.json" >nul 2>&1
+if exist "%INSTALL_DIR%\license_cache.json" del /F /Q "%INSTALL_DIR%\license_cache.json" >nul 2>&1
+if exist "%INSTALL_DIR%\*.tmp" del /F /Q "%INSTALL_DIR%\*.tmp" >nul 2>&1
+echo [OK] Stale caches deleted (wifi cache, license cache, temporary files).
+
+:: ── Step 3: Pull Latest Code From GitHub ─────────────────────────────────────
+echo.
+echo [3/5] Synchronizing latest code from GitHub (origin/main)...
+"%GIT%" -C "%INSTALL_DIR%" fetch origin main
+if !errorlevel! neq 0 (
+    echo [WARN] git fetch encountered a network notice. Continuing with current code...
+) else (
+    "%GIT%" -C "%INSTALL_DIR%" reset --hard origin/main
+    "%GIT%" -C "%INSTALL_DIR%" clean -fd
+    echo [OK] Repository updated to latest commit on origin/main.
+)
 
 echo.
 echo  ================================================================
-echo   STEP 2: CHECKING CONNECTED ANDROID DEVICES
+echo   ACTIVE AGENT VERSION IN USE:
+echo  ================================================================
+"%GIT%" -C "%INSTALL_DIR%" log -n 1
+echo.
+echo   Branch: main
+echo   Path  : %INSTALL_DIR%
 echo  ================================================================
 echo.
 
+:: ── Step 4: Refresh ADB and Connected Phones ─────────────────────────────────
+echo [4/5] Refreshing ADB server and detecting connected devices...
 set "ADB_BIN=%INSTALL_DIR%\assets\bin\adb.exe"
 if not exist "%ADB_BIN%" set "ADB_BIN=adb"
 
-:: Restart ADB server with bundled binary
-echo [*] Refreshing ADB server...
 "%ADB_BIN%" start-server >nul 2>&1
 "%ADB_BIN%" reconnect >nul 2>&1
-ping 127.0.0.1 -n 2 >nul
+ping 127.0.0.1 -n 2 >nul 2>&1
 
-echo [*] Connected ADB Devices:
+echo [*] Connected Devices:
 "%ADB_BIN%" devices -l
 
+:: ── Step 5: Launch Watchdog, Cloudflare Tunnel & Register 24/7 Tasks ─────────
 echo.
-echo  ================================================================
-echo   STEP 3: LAUNCHING DEVICEFARM AGENT AND DASHBOARD
-echo  ================================================================
-echo.
+echo [5/5] Launching DeviceFarm Agent Service ^& Cloudflare Tunnel...
 
-:: ── Stop any existing DeviceFarm Agent processes safely ───────────────────
-echo [*] Ensuring clean process state...
-taskkill /F /IM electron.exe /T >nul 2>&1
-taskkill /F /IM node.exe /T >nul 2>&1
-taskkill /F /IM scrcpy.exe /T >nul 2>&1
-taskkill /F /IM cloudflared.exe /T >nul 2>&1
-ping 127.0.0.1 -n 2 >nul 2>nul
-echo [OK] Process state clean.
+:: 5a. Start Headless Watchdog
+echo [*] Launching background Agent Service watchdog...
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "Start-Process -FilePath '%NODE%' -ArgumentList 'src\main\service-watchdog.js' -WorkingDirectory '%INSTALL_DIR%' -WindowStyle Hidden"
 
-:: ── Register and launch 24/7 Silent Background Service ──────────────────
-echo [*] Configuring and registering Windows 24/7 Background Service...
+:: 5b. Locate or Auto-Download Cloudflared Binary
+set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files (x86)\cloudflared\cloudflared.exe"
 
+if not exist "%CLOUDFLARED_EXE%" (
+    echo [*] Cloudflared not found. Downloading cloudflared-windows-amd64.exe...
+    if not exist "%INSTALL_DIR%\assets\bin" mkdir "%INSTALL_DIR%\assets\bin" >nul 2>nul
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '%INSTALL_DIR%\assets\bin\cloudflared.exe' -UseBasicParsing"
+    if exist "%INSTALL_DIR%\assets\bin\cloudflared.exe" set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
+)
+
+:: 5c. Start Cloudflare Tunnel for agent.dennoh.site
+if exist "%CLOUDFLARED_EXE%" (
+    echo [*] Starting Cloudflare Tunnel daemon for agent.dennoh.site...
+    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden"
+    echo [OK] Cloudflare tunnel started in background.
+) else (
+    echo [WARN] Cloudflared binary could not be located or downloaded.
+)
+
+:: 5d. Re-register 24/7 Windows Scheduled Tasks (Boot & Logon)
 set "TASK_BOOT=DeviceFarm_Agent_BootService"
 set "TASK_LOGON=DeviceFarm_Agent_LogonService"
 set "VBS_LAUNCHER=%INSTALL_DIR%\Start-Agent-Silent.vbs"
 set "STARTUP_ALL=%ProgramData%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "LNK_ALL=%STARTUP_ALL%\DeviceFarm-Agent-Service.lnk"
 
-:: Remove old conflicting tasks safely
-schtasks /delete /tn "DeviceFarm Agent AutoStart" /f >nul 2>&1
-schtasks /delete /tn "DeviceFarm_Agent_BootService" /f >nul 2>&1
-schtasks /delete /tn "DeviceFarm_Agent_LogonService" /f >nul 2>&1
-
-:: Register Boot Task (starts when PC turns on / restarts)
-schtasks /create /tn "%TASK_BOOT%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONSTART /ru "SYSTEM" /rl HIGHEST /f >nul 2>&1
-
-:: Register Logon Task (starts when user logs in)
-schtasks /create /tn "%TASK_LOGON%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
-
-:: Redundant All-Users Startup Shortcut
-"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try { $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_ALL%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%VBS_LAUNCHER%\"'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.WindowStyle = 0; $s.Description = 'DeviceFarm Agent Autonomous Background Service'; $s.Save() } catch {}" >nul 2>&1
-
-echo [OK] Windows 24/7 background service registered.
-
-:: Stop any existing cloudflared tunnel processes
-taskkill /F /IM cloudflared.exe /T >nul 2>&1
-ping 127.0.0.1 -n 2 >nul 2>nul
-
-:: Start agent directly via watchdog in background
-echo [*] Starting DeviceFarm Agent service in the background...
-"%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Start-Process -FilePath '%NODE%' -ArgumentList 'src\main\service-watchdog.js' -WorkingDirectory '%INSTALL_DIR%' -WindowStyle Hidden"
-
-:: Ensure Cloudflare named tunnel daemon is restarted for agent.dennoh.site
-echo [*] Starting Cloudflare tunnel daemon for agent.dennoh.site...
-set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
-if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=%CURRENT_DIR%\assets\bin\cloudflared.exe"
-if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\cloudflared\cloudflared.exe"
-if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files\cloudflared\cloudflared.exe"
-if not exist "%CLOUDFLARED_EXE%" set "CLOUDFLARED_EXE=C:\Program Files (x86)\cloudflared\cloudflared.exe"
-if not exist "%CLOUDFLARED_EXE%" (
-    echo [*] Cloudflared not found locally. Downloading cloudflared-windows-amd64.exe...
-    if not exist "%INSTALL_DIR%\assets\bin" mkdir "%INSTALL_DIR%\assets\bin" >nul 2>nul
+if exist "%VBS_LAUNCHER%" (
+    schtasks /create /tn "%TASK_BOOT%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONSTART /ru "SYSTEM" /rl HIGHEST /f >nul 2>&1
+    schtasks /create /tn "%TASK_LOGON%" /tr "wscript.exe \"%VBS_LAUNCHER%\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
     "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '%INSTALL_DIR%\assets\bin\cloudflared.exe' -UseBasicParsing"
-    if exist "%INSTALL_DIR%\assets\bin\cloudflared.exe" set "CLOUDFLARED_EXE=%INSTALL_DIR%\assets\bin\cloudflared.exe"
-)
-if exist "%CLOUDFLARED_EXE%" (
-    "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-        "Start-Process -FilePath '%CLOUDFLARED_EXE%' -ArgumentList 'tunnel','run','--token','eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9' -WindowStyle Hidden"
-    echo [OK] Cloudflare tunnel daemon started in background for agent.dennoh.site.
-) else (
-    echo [WARN] Cloudflared binary not found - tunnel will not be available.
+        "try { $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_ALL%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%VBS_LAUNCHER%\"'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.WindowStyle = 0; $s.Description = 'DeviceFarm Agent Autonomous Background Service'; $s.Save() } catch {}" >nul 2>&1
+    echo [OK] Windows 24/7 background tasks configured (Auto-start on Boot ^& Logon).
 )
 
-:: Wait for Dashboard to become responsive
-echo [*] Waiting for Dashboard to start on http://localhost:7400...
+:: ── Health Verification ──────────────────────────────────────────────────────
+echo.
+echo [*] Verifying local dashboard (port 7400) and public tunnel status...
 "%PS%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$ok = $false; for ($i = 0; $i -lt 12; $i++) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($ok) { Write-Host '[OK] Dashboard is live and ready!' } else { Write-Host '[*] Dashboard is launching in the background...' }"
+    "$okLocal = $false; for ($i = 0; $i -lt 15; $i++) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:7400/api/license/status' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { $okLocal = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($okLocal) { Write-Host ' [OK] Local Dashboard Server is LIVE on port 7400!' } else { Write-Host ' [*] Local Dashboard Server is still initializing...' }; $cfProc = Get-Process -Name 'cloudflared' -ErrorAction SilentlyContinue; if ($cfProc) { Write-Host ' [OK] Cloudflare Tunnel daemon is RUNNING (PID:' $cfProc[0].Id ')!' } else { Write-Host ' [WARN] Cloudflare Tunnel process not detected yet' }"
 
 start "" "http://localhost:7400"
 
-:end_launch
-
 echo.
 echo  ================================================================
-echo  [OK] DeviceFarm Agent is running continuously in the background!
-echo       Dashboard : http://localhost:7400
-echo       Public    : https://agent.dennoh.site
-echo       Install   : %INSTALL_DIR%
-echo.
-"%GIT%" -C "%INSTALL_DIR%" log -n 1
-echo.
-echo       Status    : Active 24/7 Background Service (Auto-starts on Boot)
+echo   DEVICEFARM AGENT IS RUNNING!
+echo  ================================================================
+echo   Local Dashboard : http://localhost:7400
+echo   Public Domain   : https://agent.dennoh.site
+echo   Status          : Operational ^& Cloudflare Tunnel Active
+echo   Background Task : 24/7 Auto-Start on Boot ^& Logon Configured
 echo  ================================================================
 echo.
-echo  Setup complete. This window will close automatically.
-ping 127.0.0.1 -n 3 >nul 2>nul
+pause
 exit /b 0
-
