@@ -322,8 +322,13 @@ async function isCloudflaredAvailable() {
 
 let namedTunnelProc = null;
 let namedTunnelStopping = false;
+let isNamedTunnelWatchdogRunning = false;
+let isStartingNamedTunnel = false;
 
 function startNamedTunnelWatchdog() {
+  if (isNamedTunnelWatchdogRunning) return;
+  isNamedTunnelWatchdogRunning = true;
+
   const token = config.cloudflareToken || 'eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9';
   if (!token) return;
 
@@ -335,14 +340,17 @@ function startNamedTunnelWatchdog() {
   const { exec } = require('child_process');
 
   function checkAndLaunch() {
-    if (namedTunnelStopping) return;
-    exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV /NH', (err, stdout) => {
-      if (!err && stdout && stdout.toLowerCase().includes('cloudflared.exe')) {
-        return; // Already active in background
-      }
+    if (namedTunnelStopping || isStartingNamedTunnel) return;
+    isStartingNamedTunnel = true;
 
-      logger.info('[TunnelWatchdog] Cloudflare named tunnel daemon not running — auto-launching for agent.dennoh.site...');
+    exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV /NH', (err, stdout) => {
       try {
+        if (!err && stdout && stdout.toLowerCase().includes('cloudflared.exe')) {
+          isStartingNamedTunnel = false;
+          return; // Already active in background
+        }
+
+        logger.info('[TunnelWatchdog] Cloudflare named tunnel daemon not running — auto-launching for agent.dennoh.site...');
         namedTunnelProc = spawn(binPath, ['tunnel', 'run', '--token', token], {
           windowsHide: true,
           stdio: 'ignore',
@@ -352,14 +360,16 @@ function startNamedTunnelWatchdog() {
 
         namedTunnelProc.on('error', (e) => {
           logger.warn('[TunnelWatchdog] Tunnel spawn warning:', e.message);
+          isStartingNamedTunnel = false;
         });
 
         namedTunnelProc.on('exit', (code) => {
           logger.warn(`[TunnelWatchdog] Tunnel exited (code=${code}) — will auto-recover on next check`);
           namedTunnelProc = null;
+          isStartingNamedTunnel = false;
         });
-      } catch (e) {
-        logger.warn('[TunnelWatchdog] Launch error:', e.message);
+      } finally {
+        setTimeout(() => { isStartingNamedTunnel = false; }, 3000);
       }
     });
   }

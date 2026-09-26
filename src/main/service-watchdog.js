@@ -120,27 +120,45 @@ function resolveCloudflaredPath() {
   return null;
 }
 
+let isStartingCloudflared = false;
+
 function superviseCloudflared() {
-  if (isStopping) return;
+  if (isStopping || isStartingCloudflared) return;
+  isStartingCloudflared = true;
+
   const token = 'eyJhIjoiMjEzYzI3Y2IwOTVjZTBlMTE0ZTNkNWYzZDM3ODJiNWQiLCJ0IjoiMDVkMzUyZjgtZGU5Yi00MzBiLWIxYzUtNDUyNzNlZWQzOTExIiwicyI6Ik1qWmlaak13WVdZdE1UTmpPUzAwTm1NeExUZ3hNR0V0TlRWalpURTFNV1ZsTURNMSJ9';
   const bin = resolveCloudflaredPath();
-  if (!bin) return;
+  if (!bin) {
+    isStartingCloudflared = false;
+    return;
+  }
 
   const { exec } = require('child_process');
   exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV /NH', (err, stdout) => {
-    if (!err && stdout && stdout.toLowerCase().includes('cloudflared.exe')) {
-      return; // Already running in background
-    }
     try {
+      if (!err && stdout && stdout.toLowerCase().includes('cloudflared.exe')) {
+        isStartingCloudflared = false;
+        return; // Already running in background
+      }
       cloudflaredChild = spawn(bin, ['tunnel', 'run', '--token', token], {
         windowsHide: true,
         stdio: 'ignore',
         detached: true,
       });
       cloudflaredChild.unref();
-      cloudflaredChild.on('exit', () => { cloudflaredChild = null; });
-      cloudflaredChild.on('error', () => { cloudflaredChild = null; });
-    } catch (_) {}
+      cloudflaredChild.on('exit', () => {
+        cloudflaredChild = null;
+        isStartingCloudflared = false;
+      });
+      cloudflaredChild.on('error', () => {
+        cloudflaredChild = null;
+        isStartingCloudflared = false;
+      });
+    } catch (_) {
+      isStartingCloudflared = false;
+    } finally {
+      setTimeout(() => { isStartingCloudflared = false; }, 3000);
+    }
   });
 }
 

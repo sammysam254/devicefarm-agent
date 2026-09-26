@@ -50,12 +50,14 @@ if "%CALLER_DIR:~0,1%"=="/" (
 )
 
 set "INSTALL_DIR=C:\DeviceFarmAgent"
-if defined CALLER_DIR if exist "%CALLER_DIR%\.git" (
+if defined CALLER_DIR if exist "%CALLER_DIR%\src\main\index.js" (
     set "INSTALL_DIR=%CALLER_DIR%"
-) else if exist "C:\DeviceFarmAgent\.git" (
-    set "INSTALL_DIR=C:\DeviceFarmAgent"
-) else if exist "C:\cvc\devicefarm-agent\.git" (
+) else if exist "%ORIG_DIR%\src\main\index.js" (
+    set "INSTALL_DIR=%ORIG_DIR%"
+) else if exist "C:\cvc\devicefarm-agent\src\main\index.js" (
     set "INSTALL_DIR=C:\cvc\devicefarm-agent"
+) else if exist "C:\DeviceFarmAgent\src\main\index.js" (
+    set "INSTALL_DIR=C:\DeviceFarmAgent"
 ) else if defined CALLER_DIR (
     set "INSTALL_DIR=%CALLER_DIR%"
 )
@@ -303,9 +305,9 @@ echo [*] Releasing port 7400...
 
 ping 127.0.0.1 -n 2 >nul 2>&1
 
-:: ── Step 2: Remove All Unnecessary Caches ─────────────────────────────────────
+:: ── Step 2: Remove All Unnecessary Caches & Flush Network/WiFi Cache ───────────
 echo.
-echo [2/5] Wiping stale caches...
+echo [2/5] Wiping stale caches and flushing network/Wi-Fi socket cache...
 if exist "%INSTALL_DIR%\wifi-devices-cache.json" (
     del /F /Q "%INSTALL_DIR%\wifi-devices-cache.json"
     echo  [OK] Deleted: wifi-devices-cache.json
@@ -322,6 +324,16 @@ if exist "%INSTALL_DIR%\*.tmp" (
     del /F /Q "%INSTALL_DIR%\*.tmp"
     echo  [OK] Deleted: temporary cache files (*.tmp)
 )
+
+echo [*] Flushing Windows DNS resolver cache...
+ipconfig /flushdns
+
+echo [*] Purging NetBIOS cache...
+nbtstat -R >nul 2>&1
+
+echo [*] Resetting IP ARP neighbor cache...
+netsh interface ip delete arpcache >nul 2>&1
+echo [OK] Network and Wi-Fi resolver cache flushed clean.
 
 :: ── Step 3: Pull Latest Code From GitHub ─────────────────────────────────────
 echo.

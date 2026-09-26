@@ -1495,18 +1495,12 @@ function startDashboardServer(port = 7400) {
       }
     });
 
+    server.keepAliveTimeout = 5000;
+    server.headersTimeout = 6000;
+
     server.listen(port, '0.0.0.0', () => {
       const url = `http://localhost:${port}`;
       logger.info(`[DashboardServer] Listening at ${url} (0.0.0.0:${port})`);
-
-      // Ensure Cloudflare Named Tunnel daemon is continuously running & supervised for agent.dennoh.site
-      try {
-        const tunnelService = require('../services/tunnel-service');
-        if (typeof tunnelService.startNamedTunnelWatchdog === 'function') {
-          tunnelService.startNamedTunnelWatchdog();
-        }
-      } catch (_) {}
-
       resolve({ port, url });
     });
 
