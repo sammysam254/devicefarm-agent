@@ -383,15 +383,15 @@ class ScrcpyEngine extends EventEmitter {
       logger.error(`[ScrcpyEngine ${this.serial}] Download from: https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4`);
     }
 
-    let bitRate = _isTunnel ? '3000000' : '4000000';
-    let maxFps  = '60';
-    let maxSize = '1280';
+    let bitRate = _isTunnel ? '1500000' : '3500000';
+    let maxFps  = _isTunnel ? '30' : '60';
+    let maxSize = _isTunnel ? '960' : '1280';
 
     if (this._healAttemptCount >= 2) {
-      bitRate = '2000000';
-      maxFps  = '30';
-      maxSize = '1024';
-      logger.info(`[ScrcpyEngine ${this.serial}] Using compatibility profile (1024 max size, 30 fps, 2Mbps)`);
+      bitRate = '1200000';
+      maxFps  = '24';
+      maxSize = '800';
+      logger.info(`[ScrcpyEngine ${this.serial}] Using compatibility profile (800 max size, 24 fps, 1.2Mbps)`);
     } else if (_isTunnel) {
       logger.info(`[ScrcpyEngine ${this.serial}] Tunnel mode active — using ${bitRate} bps / ${maxFps} fps / max_size=${maxSize}`);
     }
@@ -888,7 +888,7 @@ class ScrcpyEngine extends EventEmitter {
   }
 
   _broadcastVideo(payload, isKeyframe = false) {
-    const BACKPRESSURE_LIMIT = 1024 * 1024; // 1 MB
+    const BACKPRESSURE_LIMIT = 64 * 1024; // 64 KB (prevents multi-second buffer bloat and lag)
     for (const ws of this.wsClients) {
       if (ws.readyState === 1) {
         if (isKeyframe || ws.bufferedAmount < BACKPRESSURE_LIMIT) {

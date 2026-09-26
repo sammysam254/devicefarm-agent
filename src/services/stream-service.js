@@ -823,6 +823,11 @@ function buildPlayerHtml(serial, screenW, screenH) {
         return;
       }
 
+      // Client latency guard: if browser decoder has > 2 frames queued, drop non-keyframe delta to catch up to real-time
+      if (decoder && decoder.decodeQueueSize > 2 && !nals.hasIdr) {
+        return;
+      }
+
       try {
         const chunk = new EncodedVideoChunk({
           type: nals.hasIdr ? 'key' : 'delta',
